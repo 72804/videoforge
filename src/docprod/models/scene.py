@@ -57,13 +57,6 @@ class Scene(BaseModel):
             raise ValueError("scene id must match scene_<digits>, e.g. scene_0047")
         return value
 
-    @field_validator("narration")
-    @classmethod
-    def _narration_not_empty(cls, value: str) -> str:
-        if not value.strip():
-            raise ValueError("narration must not be empty")
-        return value
-
     @field_validator("visual_intent")
     @classmethod
     def _visual_intent_not_empty(cls, value: str) -> str:
@@ -73,6 +66,9 @@ class Scene(BaseModel):
 
     @model_validator(mode="after")
     def _validate_timing_and_generation(self) -> Scene:
+        is_bridge = bool(self.metadata.get("visual_bridge"))
+        if not self.narration.strip() and not is_bridge:
+            raise ValueError("narration must not be empty")
         if self.start < 0:
             raise ValueError("scene start must be >= 0")
         if self.end <= self.start:

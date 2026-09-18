@@ -8,7 +8,9 @@ from docprod.exceptions import UnsafeProjectIdError
 
 PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 
+NARRATION_FILENAME = "04_narration.json"
 SCENE_PLAN_FILENAME = "05_scenes.json"
+SCENE_PLANNER_STAGE = "scene_planner"
 
 
 def default_repo_root() -> Path:
@@ -74,6 +76,10 @@ class ProjectPaths:
     @property
     def logs_dir(self) -> Path:
         return self.root / "logs"
+
+    @property
+    def narration_json(self) -> Path:
+        return self.stages_dir / NARRATION_FILENAME
 
     @property
     def scene_plan_json(self) -> Path:

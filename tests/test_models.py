@@ -135,3 +135,10 @@ def test_timezone_naive_project_rejected() -> None:
             created_at=datetime.now(),
             updated_at=datetime.now(UTC),
         )
+
+
+def test_empty_narration_rejected_unless_visual_bridge() -> None:
+    with pytest.raises(ValidationError, match="narration"):
+        _scene(narration="")
+    bridge = _scene(narration="", subtitle="", metadata={"visual_bridge": True})
+    assert bridge.metadata["visual_bridge"] is True
