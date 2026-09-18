@@ -16,7 +16,7 @@ from tests.stock.helpers import (
 
 from docprod.exceptions import StockProviderError
 from docprod.models.project import Project
-from docprod.pipeline.search_stock import search_stock, select_stock
+from docprod.pipeline.search_stock import search_stock, select_stock, select_stock_auto
 from docprod.render.ffmpeg import probe_media, run_ffmpeg
 from docprod.render.models import TINY_TEST_PROFILE
 from docprod.render.renderer import render_preview
@@ -144,6 +144,7 @@ def test_select_downloads_hashes_normalizes_and_credits(
     assert probe.pixel_format == "yuv420p"
     assert probe.has_audio is False
     assert abs((probe.fps or 0) - 30) < 0.1
+    assert probe.has_video is True
     credits = load_model(paths.stock_credits_json(), StockCreditsManifest)
     assert credits.sources[0].scene_id == "scene_0001"
     assert credits.sources[0].creator == "Jane Doe"
@@ -201,3 +202,35 @@ def test_cover_crop_has_no_stretch() -> None:
     assert "force_original_aspect_ratio=increase" in filt
     assert "crop=1280:720" in filt
     assert "setsar" not in filt
+
+
+def test_select_auto_fallback_fetches_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = ProjectPaths(root=tmp_path / "proj")
+    payload = _color_mp4(tmp_path / "src.mp4", duration=3.0)
+    racing = video_payload(4568686, slug="car-drifting-on-a-racing-track")
+    transport = FakeTransport(videos=[racing], mp4_bytes=payload)
+    provider = PexelsStockVideoProvider(
+        settings=settings_with_key(monkeypatch), transport=transport
+    )
+    scene = stock_scene(
+        "scene_0014",
+        "Araba istasyon önünde ani fren yaptı.",
+        duration=0.4,
+        category="vehicle",
+    )
+    search_stock(paths, project=_project(), plan=stock_plan(scene), provider=provider)
+    meta = select_stock_auto(
+        paths,
+        project=_project(),
+        plan=stock_plan(scene),
+        scene_id="scene_0014",
+        provider=provider,
+        fallback_video_id="28967169",
+    )
+    assert meta.provider_video_id == "28967169"
+    assert meta.selection_mode == "fallback"
+    assert meta.creator_name == "Jane Doe"
+    credits = load_model(paths.stock_credits_json(), StockCreditsManifest)
+    assert credits.sources[0].provider_video_id == "28967169"

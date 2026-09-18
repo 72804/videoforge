@@ -77,6 +77,7 @@ class StockSourceManifest(BaseModel):
     clip_sha256: str | None = None
     effect_override_reason: str | None = "native_video_motion"
     retrieved_at: str | None = None
+    selection_mode: str | None = None
 
 
 class StockCreditRecord(BaseModel):

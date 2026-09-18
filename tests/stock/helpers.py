@@ -138,6 +138,24 @@ class FakeTransport:
                     "x-ratelimit-reset": "3600",
                 },
             )
+        if "/v1/videos/" in parsed.path and "search" not in parsed.path:
+            video_id = parsed.path.rstrip("/").rsplit("/", 1)[-1]
+            match = next(
+                (item for item in self.videos if str(item.get("id")) == str(video_id)),
+                None,
+            )
+            if match is None:
+                match = video_payload(int(video_id) if video_id.isdigit() else 28967169)
+                match["id"] = int(video_id) if video_id.isdigit() else 28967169
+            return HttpResponse(
+                status=200,
+                body=json.dumps(match).encode("utf-8"),
+                headers={
+                    "x-ratelimit-limit": "200",
+                    "x-ratelimit-remaining": "198",
+                    "x-ratelimit-reset": "3600",
+                },
+            )
         if url.endswith(".mp4"):
             return HttpResponse(status=200, body=self.mp4_bytes, headers={})
         return HttpResponse(status=200, body=self.jpeg, headers={})

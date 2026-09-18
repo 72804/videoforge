@@ -14,6 +14,10 @@ class StockProviderError(RuntimeError):
     """Raised when a stock provider request fails without leaking secrets."""
 
 
+class ZeroPlaceholderError(RuntimeError):
+    """Raised when a scene still resolves to a debug placeholder visual."""
+
+
 class MaxPaidRequestsExceededError(RuntimeError):
     """Raised when a batch would exceed the explicit paid-request cap."""
 

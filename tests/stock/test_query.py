@@ -11,7 +11,7 @@ def test_queries_are_short_visual_english() -> None:
         "İstanbul'daki tren istasyonu akşam saatlerinde neredeyse boştu.",
     )
     queries = generate_stock_queries(scene)
-    assert 2 <= len(queries) <= 4
+    assert 2 <= len(queries) <= 6
     blob = " ".join(queries).lower()
     assert "train station" in blob or "railway" in blob
     assert "istanbul'daki tren istasyonu akşam" not in blob
@@ -39,4 +39,5 @@ def test_car_braking_queries() -> None:
     queries = generate_stock_queries(scene)
     blob = " ".join(queries).lower()
     assert "car" in blob
-    assert "brak" in blob or "stop" in blob
+    assert "station" in blob
+    assert "stop" in blob or "brak" in blob or "arriv" in blob

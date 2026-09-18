@@ -27,7 +27,7 @@ from docprod.stock.models import (
 )
 from docprod.stock.pexels import PexelsStockVideoProvider
 from docprod.stock.query import generate_stock_queries
-from docprod.stock.scoring import choose_rendition, score_candidate
+from docprod.stock.scoring import choose_rendition, pick_auto_candidate, score_candidate
 from docprod.storage.json_store import load_model, save_model
 from docprod.storage.paths import ProjectPaths
 
@@ -70,7 +70,7 @@ def search_stock(
     last_limit = last_remaining = last_reset = None
     paths.stock_candidates_dir.mkdir(parents=True, exist_ok=True)
     for scene in _stock_scenes(plan, scene_id):
-        queries = generate_stock_queries(scene)
+        queries = list(generate_stock_queries(scene))
         unique: dict[str, StockVideoCandidate] = {}
         for query in queries:
             page = client.search(query, per_page=PER_PAGE, locale=locale)
@@ -80,11 +80,9 @@ def search_stock(
             for raw in page.videos:
                 scored = score_candidate(raw, scene, query)
                 _merge_candidate(unique, scored)
-                if len(unique) >= MAX_UNIQUE:
-                    break
-            if len(unique) >= MAX_UNIQUE:
-                break
-        ranked = sorted(unique.values(), key=lambda item: item.score, reverse=True)
+        ranked = sorted(unique.values(), key=lambda item: item.score, reverse=True)[
+            :MAX_UNIQUE
+        ]
         sheet_path = paths.stock_scene_candidates_sheet(scene.id)
         sheet = build_candidate_contact_sheet(ranked, sheet_path, provider=client)
         results.append(
@@ -133,15 +131,42 @@ def search_stock(
 
 def _candidate_for_scene(
     manifest: StockSearchManifest, scene_id: str, video_id: str
-) -> StockVideoCandidate:
+) -> StockVideoCandidate | None:
     for scene in manifest.scenes:
         if scene.scene_id != scene_id:
             continue
         for candidate in scene.candidates:
             if candidate.provider_video_id == video_id:
                 return candidate
-    raise StockProviderError(
-        f"Pexels video {video_id} is not in search candidates for {scene_id}"
+    return None
+
+
+def _remember_candidate(
+    paths: ProjectPaths,
+    scene: Scene,
+    candidate: StockVideoCandidate,
+) -> None:
+    if not paths.stock_candidates_json().is_file():
+        return
+    manifest = load_model(paths.stock_candidates_json(), StockSearchManifest)
+    results = {item.scene_id: item for item in manifest.scenes}
+    current = results.get(scene.id)
+    if current is None:
+        results[scene.id] = SceneStockSearchResult(
+            scene_id=scene.id,
+            narration=scene.narration,
+            queries=[candidate.query],
+            candidates=[candidate],
+        )
+    else:
+        by_id = {item.provider_video_id: item for item in current.candidates}
+        by_id[candidate.provider_video_id] = candidate
+        results[scene.id] = current.model_copy(
+            update={"candidates": list(by_id.values())}
+        )
+    save_model(
+        paths.stock_candidates_json(),
+        manifest.model_copy(update={"scenes": list(results.values())}),
     )
 
 
@@ -153,20 +178,30 @@ def select_stock(
     scene_id: str,
     video_id: str,
     provider: StockVideoProvider | None = None,
+    allow_fetch: bool = True,
+    selection_mode: str | None = "explicit",
 ) -> StockSourceManifest:
-    if not paths.stock_candidates_json().is_file():
-        raise StockProviderError("Run search-stock before select-stock")
-    search = load_model(paths.stock_candidates_json(), StockSearchManifest)
-    candidate = _candidate_for_scene(search, scene_id, video_id)
+    client = provider or PexelsStockVideoProvider()
     scene = next((item for item in plan.scenes if item.id == scene_id), None)
     if scene is None:
         raise StockProviderError(f"Unknown scene {scene_id}")
+    candidate = None
+    if paths.stock_candidates_json().is_file():
+        search = load_model(paths.stock_candidates_json(), StockSearchManifest)
+        candidate = _candidate_for_scene(search, scene_id, video_id)
+    if candidate is None:
+        if not allow_fetch:
+            raise StockProviderError(
+                f"Pexels video {video_id} is not in search candidates for {scene_id}"
+            )
+        fetched = client.fetch_video(video_id, query=f"id:{video_id}")
+        candidate = score_candidate(fetched, scene, fetched.query)
+        _remember_candidate(paths, scene, candidate)
     if candidate.rejected and candidate.reject_reason == "too_short_for_scene":
         raise StockProviderError(f"Candidate {video_id} is too short for {scene_id}")
     rendition = choose_rendition(candidate.video_files)
     if rendition is None:
         raise StockProviderError(f"No suitable MP4 rendition for {video_id}")
-    client = provider or PexelsStockVideoProvider()
     dest_dir = paths.stock_scene_dir(scene_id)
     dest_dir.mkdir(parents=True, exist_ok=True)
     source_path = paths.stock_source_mp4(scene_id)
@@ -211,6 +246,7 @@ def select_stock(
         clip_sha256=clip_sha,
         effect_override_reason="native_video_motion",
         retrieved_at=datetime.now(UTC).isoformat(),
+        selection_mode=selection_mode,
     )
     save_model(paths.stock_source_meta(scene_id), meta)
     rebuild_credits(paths, project.id)
@@ -224,6 +260,7 @@ def select_stock_auto(
     plan: ScenePlan,
     scene_id: str,
     provider: StockVideoProvider | None = None,
+    fallback_video_id: str | None = None,
 ) -> StockSourceManifest:
     if not paths.stock_candidates_json().is_file():
         raise StockProviderError("Run search-stock before select-stock-auto")
@@ -231,6 +268,27 @@ def select_stock_auto(
     scene_result = next((item for item in search.scenes if item.scene_id == scene_id), None)
     if scene_result is None:
         raise StockProviderError(f"No search candidates for {scene_id}")
+    best = pick_auto_candidate(scene_result.candidates)
+    if best is not None:
+        return select_stock(
+            paths,
+            project=project,
+            plan=plan,
+            scene_id=scene_id,
+            video_id=best.provider_video_id,
+            provider=provider,
+            selection_mode="targeted_search",
+        )
+    if fallback_video_id:
+        return select_stock(
+            paths,
+            project=project,
+            plan=plan,
+            scene_id=scene_id,
+            video_id=fallback_video_id,
+            provider=provider,
+            selection_mode="fallback",
+        )
     usable = [item for item in scene_result.candidates if not item.rejected]
     if not usable:
         raise StockProviderError(f"No non-rejected candidates for {scene_id}")
@@ -242,4 +300,5 @@ def select_stock_auto(
         scene_id=scene_id,
         video_id=best.provider_video_id,
         provider=provider,
+        selection_mode="auto_score",
     )

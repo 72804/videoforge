@@ -3,7 +3,7 @@ from __future__ import annotations
 from tests.stock.helpers import stock_scene
 
 from docprod.stock.models import StockVideoCandidate, StockVideoFile
-from docprod.stock.scoring import choose_rendition, score_candidate
+from docprod.stock.scoring import choose_rendition, pick_auto_candidate, score_candidate
 
 
 def _candidate(**kwargs: object) -> StockVideoCandidate:
@@ -64,3 +64,31 @@ def test_choose_rendition_prefers_full_hd_over_4k() -> None:
     assert chosen.width == 1920
     assert chosen.height == 1080
     assert "1080" in chosen.link
+
+
+def test_concept_reject_and_station_preference() -> None:
+    scene = stock_scene("scene_0014", "Araba istasyon önünde ani fren yaptı.", duration=2.0)
+    racing = score_candidate(
+        _candidate(source_page_url="https://www.pexels.com/video/car-drifting-on-a-racing-track-1/"),
+        scene,
+        "car braking street",
+    )
+    assert racing.rejected is True
+    assert racing.reject_reason and "rejected_concept" in racing.reject_reason
+    good = score_candidate(
+        _candidate(
+            source_page_url="https://www.pexels.com/video/car-stopping-outside-train-station-2/"
+        ),
+        scene,
+        "car stopping outside train station",
+    )
+    assert good.rejected is False
+    assert "stop_near_station" in good.score_reasons
+    picked = pick_auto_candidate([racing, good])
+    assert picked is not None
+    assert picked.provider_video_id == "1"
+    racing2 = racing.model_copy(update={"provider_video_id": "9"})
+    good2 = good.model_copy(update={"provider_video_id": "8"})
+    picked = pick_auto_candidate([racing2, good2])
+    assert picked is not None
+    assert picked.provider_video_id == "8"

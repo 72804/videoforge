@@ -43,6 +43,15 @@ _STOP = frozenset(
     }
 )
 
+_VEHICLE_STATION_QUERIES = (
+    "car arriving train station entrance",
+    "car stopping outside train station",
+    "car pulling up railway station",
+    "car braking near station entrance",
+    "taxi arriving train station",
+    "vehicle stopping outside station",
+)
+
 _CATEGORY_QUERIES: dict[str, tuple[str, ...]] = {
     "location_establishing": ("establishing city location",),
     "vehicle": ("car driving city",),
@@ -78,7 +87,7 @@ def _english_phrases(scene: Scene) -> list[str]:
     return phrases
 
 
-def generate_stock_queries(scene: Scene, *, max_queries: int = 4) -> list[str]:
+def generate_stock_queries(scene: Scene, *, max_queries: int = 6) -> list[str]:
     """Short English visual queries. No LLM. Not a full-narration dump."""
     phrases = _english_phrases(scene)
     blob = _fold(f"{scene.narration} {scene.visual_intent}")
@@ -98,17 +107,15 @@ def generate_stock_queries(scene: Scene, *, max_queries: int = 4) -> list[str]:
     )
 
     if vehicle:
-        add("car braking street")
-        add("car stopping in front of station")
-        add("car driving city")
-        add("car sudden stop street")
+        for item in _VEHICLE_STATION_QUERIES:
+            add(item)
     elif motion and station:
         add("man walking train station")
         add("station exit")
         add("commuter using phone station")
         add("person walking railway station")
     elif station:
-        if "empty" in phrases or "boş" in blob:
+        if "empty" in phrases or "bos" in blob or "boş" in blob:
             add("empty train station evening")
         add("train station platform")
         add("railway station")

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from docprod.config import Settings, get_settings, require_pexels_api_key
 from docprod.exceptions import StockProviderError
 from docprod.logging_utils import get_logger
-from docprod.stock import PEXELS_VIDEO_SEARCH_URL
+from docprod.stock import PEXELS_VIDEO_GET_URL, PEXELS_VIDEO_SEARCH_URL
 from docprod.stock.models import StockSearchPage, StockVideoCandidate, StockVideoFile
 
 _LOG = get_logger("stock.pexels")
@@ -173,6 +173,28 @@ class PexelsStockVideoProvider:
             ratelimit_remaining=self.last_ratelimit["remaining"],
             ratelimit_reset=self.last_ratelimit["reset"],
         )
+
+    def fetch_video(self, video_id: str, *, query: str = "") -> StockVideoCandidate:
+        url = f"{PEXELS_VIDEO_GET_URL}/{urllib.parse.quote(str(video_id))}"
+        _LOG.info("Pexels get video id=%s", video_id)
+        response = self._transport.get(url, self._headers())
+        self.last_ratelimit = {
+            "limit": response.headers.get("x-ratelimit-limit"),
+            "remaining": response.headers.get("x-ratelimit-remaining"),
+            "reset": response.headers.get("x-ratelimit-reset"),
+        }
+        if response.status >= 400:
+            raise StockProviderError(_safe_error(response.status))
+        try:
+            payload = json.loads(response.body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise StockProviderError("Pexels returned invalid JSON") from exc
+        if not isinstance(payload, dict):
+            raise StockProviderError("Pexels video payload was not an object")
+        parsed = _parse_video(payload, query or f"id:{video_id}")
+        if parsed is None:
+            raise StockProviderError(f"Pexels video {video_id} could not be parsed")
+        return parsed
 
     def fetch_bytes(self, url: str) -> bytes:
         headers = {"User-Agent": "docprod/0.1", "Accept": "*/*"}

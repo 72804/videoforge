@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from docprod.stock.models import StockSearchPage
+from docprod.stock.models import StockSearchPage, StockVideoCandidate
 
 
 class StockVideoProvider(Protocol):
@@ -20,3 +20,5 @@ class StockVideoProvider(Protocol):
     ) -> StockSearchPage: ...
 
     def fetch_bytes(self, url: str) -> bytes: ...
+
+    def fetch_video(self, video_id: str, *, query: str = "") -> StockVideoCandidate: ...

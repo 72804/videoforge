@@ -19,6 +19,7 @@ from docprod.exceptions import (
     PaidApiNotConfirmedError,
     StockProviderError,
     UnsafeProjectIdError,
+    ZeroPlaceholderError,
 )
 from docprod.logging_utils import configure_logging
 from docprod.media import probe_binary
@@ -619,6 +620,9 @@ def select_stock_cmd(
 def select_stock_auto_cmd(
     project_id: str = typer.Argument(...),
     scene_id: str = typer.Argument(...),
+    fallback_video_id: str | None = typer.Option(
+        None, "--fallback-id", help="Pexels video id if no preferred candidate scores."
+    ),
 ) -> None:
     """Pick the highest-scoring non-rejected candidate. Prefer human select-stock first."""
     from docprod.pipeline.search_stock import select_stock_auto
@@ -633,6 +637,7 @@ def select_stock_auto_cmd(
             project=project,
             plan=plan,
             scene_id=scene_id,
+            fallback_video_id=fallback_video_id,
         )
     except (MissingApiKeyError, StockProviderError) as exc:
         _fail(str(exc))
@@ -714,9 +719,16 @@ def render_preview_cmd(
     force: bool = typer.Option(False, "--force", help="Re-run the preview_render stage"),
     workers: int = typer.Option(2, "--workers", min=1, help="Parallel FFmpeg scene workers"),
     no_cache: bool = typer.Option(False, "--no-cache", help="Re-encode all scene segments"),
+    allow_placeholders: bool = typer.Option(
+        False,
+        "--allow-placeholders",
+        help="Allow debug placeholder cards (tests and incomplete projects).",
+    ),
 ) -> None:
-    """Render a placeholder 720p documentary preview with FFmpeg. No paid APIs."""
+    """Render a 720p documentary preview with FFmpeg. No paid APIs."""
     import time
+
+    from docprod.pipeline.inspect_assets import require_zero_placeholders
 
     project_dir, project = _load_project(project_id)
     if not project_dir.scene_plan_json.is_file():
@@ -725,6 +737,11 @@ def render_preview_cmd(
         plan = load_model(project_dir.scene_plan_json, ScenePlan)
     except Exception as exc:
         _fail(f"Invalid scene plan: {exc}")
+    if not allow_placeholders:
+        try:
+            require_zero_placeholders(project_dir, plan)
+        except ZeroPlaceholderError as exc:
+            _fail(str(exc))
     stats = summarize_scene_plan(plan)
     console.print(
         f"Preview render {project_id}: {stats.scene_count} scenes, "
@@ -849,6 +866,41 @@ def inspect_render_cmd(
             console.print(fb)
     else:
         console.print(table)
+
+
+@app.command("inspect-assets")
+def inspect_assets_cmd(
+    project_id: str = typer.Argument(...),
+) -> None:
+    """List resolved visual sources for every scene. Fails if any placeholder remains."""
+    from docprod.pipeline.inspect_assets import inspect_assets, placeholder_scene_ids
+
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    rows = inspect_assets(project_dir, plan)
+    table = Table(title=f"assets {project_id}")
+    table.add_column("scene")
+    table.add_column("strategy")
+    table.add_column("source")
+    table.add_column("label")
+    table.add_column("provider")
+    table.add_column("path")
+    for row in rows:
+        table.add_row(
+            row.scene_id,
+            row.strategy_requested,
+            row.source_type,
+            row.source_label,
+            row.provider,
+            row.artifact_path,
+        )
+    console.print(table)
+    missing = placeholder_scene_ids(rows)
+    console.print(f"placeholders={len(missing)}")
+    if missing:
+        _fail("Placeholder visuals remain for: " + ", ".join(missing))
 
 
 @app.command("audit-motion")

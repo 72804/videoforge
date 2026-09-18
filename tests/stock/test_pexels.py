@@ -47,3 +47,14 @@ def test_search_endpoint_and_authorization(monkeypatch: pytest.MonkeyPatch) -> N
     assert headers["Authorization"] == TEST_KEY
     assert "orientation=landscape" in url
     assert "size=medium" in url
+
+
+def test_fetch_video_uses_v1_videos_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    transport = FakeTransport()
+    video = PexelsStockVideoProvider(
+        settings=settings_with_key(monkeypatch), transport=transport
+    ).fetch_video("101")
+    url, headers = transport.calls[0]
+    assert url == "https://api.pexels.com/v1/videos/101"
+    assert headers["Authorization"] == TEST_KEY
+    assert video.provider_video_id == "101"

@@ -144,7 +144,9 @@ def test_render_cli_tiny(projects_root: Path, monkeypatch) -> None:
     )
     monkeypatch.setattr("docprod.cli.PreviewRenderProfile", lambda: TINY_TEST_PROFILE)
     _seed_project(projects_root, "cliproj")
-    preview = runner.invoke(app, ["render-preview", "cliproj", "--workers", "1"])
+    preview = runner.invoke(
+        app, ["render-preview", "cliproj", "--workers", "1", "--allow-placeholders"]
+    )
     assert preview.exit_code == 0, preview.output
     inspect = runner.invoke(app, ["inspect-render", "cliproj"])
     assert inspect.exit_code == 0, inspect.output

@@ -3,6 +3,27 @@ from __future__ import annotations
 from docprod.models.scene import Scene
 from docprod.stock.models import StockVideoCandidate, StockVideoFile
 
+PREFERRED_AUTO_REASONS = frozenset(
+    {"stop_near_station", "car_at_terminal", "car_stopping_urban"}
+)
+
+
+def pick_auto_candidate(
+    candidates: list[StockVideoCandidate],
+) -> StockVideoCandidate | None:
+    usable = [item for item in candidates if not item.rejected]
+    if not usable:
+        return None
+    preferred = [
+        item
+        for item in usable
+        if PREFERRED_AUTO_REASONS.intersection(item.score_reasons)
+    ]
+    pool = preferred or []
+    if not pool:
+        return None
+    return max(pool, key=lambda item: item.score)
+
 
 def _aspect(width: int, height: int) -> float:
     if height <= 0:
@@ -33,6 +54,32 @@ def choose_rendition(files: list[StockVideoFile]) -> StockVideoFile | None:
         return (is_1080, is_hd, not_4k, closeness)
 
     return max(usable, key=rank)
+
+
+_REJECT_CONCEPTS = (
+    "racing",
+    "drifting",
+    "drift",
+    "charging-station",
+    "charging station",
+    "ev charger",
+    "tilt-shift",
+    "blurred",
+    "motion-blur",
+    "highway",
+    "motorway",
+    "parked-car",
+)
+_PREFERRED_STOP = ("stopping", "braking", "pulling", "arriving", "arrive", "slowing")
+_PREFERRED_PLACE = (
+    "train-station",
+    "train station",
+    "railway",
+    "station",
+    "terminal",
+    "entrance",
+    "taxi",
+)
 
 
 def score_candidate(
@@ -81,7 +128,7 @@ def score_candidate(
             candidate.preview_image_url or "",
             str(candidate.extra.get("title") or ""),
         ]
-    ).lower()
+    ).lower().replace("_", "-")
     overlap = 0
     for token in query.lower().split():
         if len(token) > 2 and token in haystack.replace("-", " "):
@@ -92,7 +139,27 @@ def score_candidate(
     if "animat" in haystack or "cartoon" in haystack:
         score -= 20
         reasons.append("animation_penalty")
-    rejected = candidate.duration < needed + 0.25 or not landscape or candidate.width < 1280
+    concept_reject = next((term for term in _REJECT_CONCEPTS if term in haystack), None)
+    if concept_reject:
+        score -= 45
+        reasons.append(f"concept_reject:{concept_reject}")
+    stop_hit = any(term in haystack for term in _PREFERRED_STOP)
+    place_hit = any(term in haystack for term in _PREFERRED_PLACE)
+    if stop_hit and place_hit:
+        score += 25
+        reasons.append("stop_near_station")
+    elif place_hit and ("car" in haystack or "taxi" in haystack or "vehicle" in haystack):
+        score += 15
+        reasons.append("car_at_terminal")
+    elif stop_hit and ("car" in haystack or "taxi" in haystack or "vehicle" in haystack):
+        score += 10
+        reasons.append("car_stopping_urban")
+    rejected = (
+        candidate.duration < needed + 0.25
+        or not landscape
+        or candidate.width < 1280
+        or concept_reject is not None
+    )
     reason = None
     if candidate.duration < needed + 0.25:
         reason = "too_short_for_scene"
@@ -100,6 +167,8 @@ def score_candidate(
         reason = "not_landscape"
     elif candidate.width < 1280:
         reason = "below_720p"
+    elif concept_reject is not None:
+        reason = f"rejected_concept:{concept_reject}"
     return candidate.model_copy(
         update={
             "score": round(score, 3),
