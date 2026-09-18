@@ -18,6 +18,7 @@ IMAGE_REVIEW_FILENAME = "image.review.json"
 IMAGE_BATCH_MANIFEST_FILENAME = "image_batch_manifest.json"
 CONTACT_SHEET_FILENAME = "contact_sheet.jpg"
 CONTACT_SHEET_REPAIRS_FILENAME = "contact_sheet_repairs.jpg"
+GRAPHICS_CONTACT_SHEET_FILENAME = "graphics_contact_sheet.jpg"
 
 
 def default_repo_root() -> Path:
@@ -142,6 +143,41 @@ class ProjectPaths:
     def image_batch_manifest(self) -> Path:
         return self.visuals_dir / IMAGE_BATCH_MANIFEST_FILENAME
 
+    @property
+    def graphics_dir(self) -> Path:
+        return self.artifacts_dir / "graphics"
+
+    def scene_graphics_dir(self, scene_id: str) -> Path:
+        return self.graphics_dir / scene_id
+
+    def scene_graphic_png(self, scene_id: str) -> Path:
+        return self.scene_graphics_dir(scene_id) / "graphic.png"
+
+    def scene_graphic_meta(self, scene_id: str) -> Path:
+        return self.scene_graphics_dir(scene_id) / "graphic.meta.json"
+
+    def scene_map_base(self, scene_id: str) -> Path:
+        return self.scene_graphics_dir(scene_id) / "map_base.png"
+
+    def scene_map_bg(self, scene_id: str) -> Path:
+        return self.scene_graphics_dir(scene_id) / "map_bg.png"
+
+    def scene_map_route(self, scene_id: str) -> Path:
+        return self.scene_graphics_dir(scene_id) / "map_route.png"
+
+    def scene_map_mask(self, scene_id: str) -> Path:
+        return self.scene_graphics_dir(scene_id) / "map_mask.png"
+
+    def scene_map_ring(self, scene_id: str) -> Path:
+        return self.scene_graphics_dir(scene_id) / "map_ring.png"
+
+    def scene_map_meta(self, scene_id: str) -> Path:
+        return self.scene_graphics_dir(scene_id) / "map.meta.json"
+
+    @property
+    def graphics_contact_sheet(self) -> Path:
+        return self.graphics_dir / GRAPHICS_CONTACT_SHEET_FILENAME
+
     def scene_image_history_dir(self, scene_id: str) -> Path:
         return self.scene_visuals_dir(scene_id) / "history"
 
@@ -156,6 +192,7 @@ class ProjectPaths:
             self.stages_dir,
             self.audio_dir,
             self.visuals_dir,
+            self.graphics_dir,
             self.subtitles_dir,
             self.render_dir,
             self.logs_dir,

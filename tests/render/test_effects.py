@@ -54,6 +54,15 @@ def test_fallback_mapping_recorded() -> None:
     assert native is VisualEffect.slow_push_in
 
 
+def test_photo_table_and_map_route_are_native() -> None:
+    rendered, fallback = resolve_effect(VisualEffect.photo_table)
+    assert fallback is False
+    assert rendered is VisualEffect.photo_table
+    mapped, map_fb = resolve_effect(VisualEffect.map_route)
+    assert map_fb is False
+    assert mapped is VisualEffect.map_route
+
+
 def _poses(effect: VisualEffect, *, frames: int = 105, fps: int = 30, width=1280, height=720):
     params = effect_params(
         effect,

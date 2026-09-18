@@ -17,10 +17,10 @@ EFFECT_IMPLEMENTATION: dict[VisualEffect, VisualEffect] = {
     VisualEffect.cctv_treatment: VisualEffect.cctv_treatment,
     VisualEffect.police_light_flicker: VisualEffect.police_light_flicker,
     VisualEffect.parallax_2_5d: VisualEffect.slow_push_in,
-    VisualEffect.photo_table: VisualEffect.slow_push_in,
-    VisualEffect.evidence_board: VisualEffect.slow_push_in,
-    VisualEffect.newspaper_reveal: VisualEffect.slow_push_in,
-    VisualEffect.map_route: VisualEffect.pan_left,
+    VisualEffect.photo_table: VisualEffect.photo_table,
+    VisualEffect.evidence_board: VisualEffect.evidence_board,
+    VisualEffect.newspaper_reveal: VisualEffect.newspaper_reveal,
+    VisualEffect.map_route: VisualEffect.map_route,
     VisualEffect.silhouette_reveal: VisualEffect.slow_push_in,
     VisualEffect.circle_highlight: VisualEffect.slow_push_in,
     VisualEffect.arrow_annotation: VisualEffect.slow_push_in,
@@ -126,6 +126,19 @@ def effect_params(
         x_oscs = (Oscillator(amp=1.6, freq=0.22, phase=rng.random()),)
         y_oscs = (Oscillator(amp=1.2, freq=0.18, phase=rng.random()),)
         flicker = True
+    elif rendered is VisualEffect.photo_table:
+        scale_start, scale_end = 1.03, 1.08
+        pan_x0, pan_x1 = 0.48, 0.54
+        pan_y0, pan_y1 = 0.58, 0.46
+    elif rendered is VisualEffect.newspaper_reveal:
+        scale_start, scale_end = 1.16, 1.05
+        pan_y0, pan_y1 = 0.42, 0.52
+    elif rendered is VisualEffect.evidence_board:
+        scale_start = scale_end = 1.12
+        pan_x0, pan_x1 = 0.32, 0.68
+        pan_y0, pan_y1 = 0.46, 0.54
+    elif rendered is VisualEffect.map_route:
+        scale_start, scale_end = 1.00, 1.035
     return EffectParams(
         requested=requested,
         rendered=rendered,

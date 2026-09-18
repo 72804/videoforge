@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
-from docprod.models.enums import AssetStrategy, TransitionType
+from docprod.models.enums import AssetStrategy, TransitionType, VisualEffect
 from docprod.models.project import Project
 from docprod.models.scene import Scene, ScenePlan
 from docprod.render.effects import (
@@ -33,7 +33,12 @@ from docprod.render.models import (
 )
 from docprod.render.placeholders import placeholder_filter
 from docprod.render.stats import duration_ok, frame_count_for_span, probe_looks_valid
-from docprod.render.still import resolve_scene_still, still_fit_filter, still_pixel_normalize_filter
+from docprod.render.still import (
+    resolve_scene_still,
+    resolve_scene_visual,
+    still_fit_filter,
+    still_pixel_normalize_filter,
+)
 from docprod.render.subtitles import write_captions
 from docprod.storage.hashing import content_hash, file_sha256
 from docprod.storage.json_store import atomic_write_text, load_model, save_model
@@ -123,8 +128,8 @@ def _render_one_segment(
     trans_rendered, trans_fallback = _transition_rendered(scene.transition)
     frames = frame_count_for_span(scene.start, scene.end, profile.fps)
     duration = frames / profile.fps
-    still = resolve_scene_still(paths, scene)
-    still_sha = still[1] if still else None
+    visual = resolve_scene_visual(paths, scene)
+    still_sha = visual.sha256 if visual else None
     input_hash = segment_input_hash(
         scene,
         project=project,
@@ -165,21 +170,23 @@ def _render_one_segment(
         frame_count=frames,
         oversample=oversample,
     )
-    if still is None:
+    if visual is None:
         source_asset = "placeholder"
-        strategy_rendered = "placeholder" if scene.asset_strategy in {
-            AssetStrategy.ai_image,
-            AssetStrategy.ai_image_to_video,
-        } else scene.asset_strategy.value
+        strategy_rendered = (
+            "placeholder"
+            if scene.asset_strategy
+            in {
+                AssetStrategy.ai_image,
+                AssetStrategy.ai_image_to_video,
+            }
+            else scene.asset_strategy.value
+        )
     else:
-        source_asset = "generated_still"
-        if scene.asset_strategy is AssetStrategy.ai_image_to_video:
-            strategy_rendered = "ai_image_keyframe_preview"
-        else:
-            strategy_rendered = "ai_image"
+        source_asset = visual.kind
+        strategy_rendered = visual.strategy_rendered
     tmp = mp4.with_suffix(".tmp.mp4")
     try:
-        if still is None:
+        if visual is None:
             base = placeholder_filter(
                 strategy=scene.asset_strategy,
                 scene_id=scene.id,
@@ -214,50 +221,119 @@ def _render_one_segment(
             )
             summary = "lavfi-placeholder+perspective-cubic,libx264,no-audio"
         else:
-            image_path, _digest = still
-            try:
-                probe = probe_media(image_path)
-                src_w = probe.width or canvas_w
-                src_h = probe.height or canvas_h
-            except FFmpegError:
-                src_w, src_h = canvas_w, canvas_h
-            fit = still_fit_filter(src_w, src_h, canvas_w, canvas_h)
-            vf = fit if motion == "null" else f"{fit},{motion}"
-            vf = f"{vf},{still_pixel_normalize_filter()}"
-            run_ffmpeg(
-                [
-                    "-loop",
-                    "1",
-                    "-framerate",
-                    str(profile.fps),
-                    "-i",
-                    str(image_path),
-                    "-frames:v",
-                    str(frames),
-                    "-an",
-                    "-vf",
-                    vf,
-                    "-c:v",
-                    profile.video_codec,
-                    "-pix_fmt",
-                    "yuv420p",
-                    "-color_range",
-                    "tv",
-                    "-colorspace",
-                    "bt709",
-                    "-color_primaries",
-                    "bt709",
-                    "-color_trc",
-                    "bt709",
-                    "-preset",
-                    profile.preset,
-                    "-crf",
-                    str(profile.crf),
-                    str(tmp),
-                ],
-                timeout=180,
+            map_layers = (
+                visual.kind == "local_map"
+                and scene.effect is VisualEffect.map_route
+                and visual.map_bg is not None
+                and visual.map_route is not None
+                and visual.map_mask is not None
+                and visual.map_ring is not None
+                and visual.dest is not None
+                and visual.map_bg.is_file()
+                and visual.map_route.is_file()
+                and visual.map_mask.is_file()
+                and visual.map_ring.is_file()
             )
-            summary = "still-image-cover+perspective-cubic,libx264,yuv420p,no-audio"
+            if map_layers:
+                from PIL import Image
+
+                from docprod.graphics.map import composite_map_frame
+                from docprod.render.effects import motion_progress
+
+                try:
+                    probe = probe_media(visual.map_bg)
+                    src_w = probe.width or canvas_w
+                    src_h = probe.height or canvas_h
+                except FFmpegError:
+                    src_w, src_h = canvas_w, canvas_h
+                fit = still_fit_filter(src_w, src_h, canvas_w, canvas_h)
+                motion_part = "" if motion == "null" else f",{motion}"
+                frame_dir = paths.preview_segments_dir / f".{scene.id}_mapframes"
+                frame_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    background = Image.open(visual.map_bg)
+                    overlay = Image.open(visual.map_route)
+                    mask = Image.open(visual.map_mask)
+                    for index in range(frames):
+                        progress = motion_progress(index, frames)
+                        frame = composite_map_frame(
+                            background, overlay, mask, progress=progress
+                        )
+                        frame.save(frame_dir / f"frame_{index:04d}.png")
+                    vf = f"{fit}{motion_part},{still_pixel_normalize_filter()}"
+                    run_ffmpeg(
+                        [
+                            "-framerate",
+                            str(profile.fps),
+                            "-i",
+                            str(frame_dir / "frame_%04d.png"),
+                            "-frames:v",
+                            str(frames),
+                            "-an",
+                            "-vf",
+                            vf,
+                            "-c:v",
+                            profile.video_codec,
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-preset",
+                            profile.preset,
+                            "-crf",
+                            str(profile.crf),
+                            str(tmp),
+                        ],
+                        timeout=180,
+                    )
+                finally:
+                    import shutil
+
+                    shutil.rmtree(frame_dir, ignore_errors=True)
+                summary = "map-route-frames+perspective-cubic,libx264,yuv420p,no-audio"
+            else:
+                image_path = visual.path
+                try:
+                    probe = probe_media(image_path)
+                    src_w = probe.width or canvas_w
+                    src_h = probe.height or canvas_h
+                except FFmpegError:
+                    src_w, src_h = canvas_w, canvas_h
+                fit = still_fit_filter(src_w, src_h, canvas_w, canvas_h)
+                vf = fit if motion == "null" else f"{fit},{motion}"
+                vf = f"{vf},{still_pixel_normalize_filter()}"
+                run_ffmpeg(
+                    [
+                        "-loop",
+                        "1",
+                        "-framerate",
+                        str(profile.fps),
+                        "-i",
+                        str(image_path),
+                        "-frames:v",
+                        str(frames),
+                        "-an",
+                        "-vf",
+                        vf,
+                        "-c:v",
+                        profile.video_codec,
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-color_range",
+                        "tv",
+                        "-colorspace",
+                        "bt709",
+                        "-color_primaries",
+                        "bt709",
+                        "-color_trc",
+                        "bt709",
+                        "-preset",
+                        profile.preset,
+                        "-crf",
+                        str(profile.crf),
+                        str(tmp),
+                    ],
+                    timeout=180,
+                )
+                summary = "still-image-cover+perspective-cubic,libx264,yuv420p,no-audio"
         tmp.replace(mp4)
     finally:
         tmp.unlink(missing_ok=True)

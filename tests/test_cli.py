@@ -126,6 +126,13 @@ def test_generate_image_help_is_single_scene() -> None:
     assert "--confirm-paid" in result.output
 
 
+def test_generate_graphics_help_is_local() -> None:
+    result = runner.invoke(app, ["generate-graphics", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--force" in result.output
+    assert "confirm-paid" not in result.output
+
+
 def test_generate_images_help_has_safety_caps() -> None:
     result = runner.invoke(app, ["generate-images", "--help"])
     assert result.exit_code == 0, result.output

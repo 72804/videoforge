@@ -508,6 +508,72 @@ def generate_images_cmd(
         console.print(f"Contact sheet {sheet}")
 
 
+@app.command("generate-graphics")
+def generate_graphics_cmd(
+    project_id: str = typer.Argument(...),
+    force: bool = typer.Option(False, "--force", help="Regenerate even when cached."),
+) -> None:
+    """Render local document/newspaper/map graphics. No paid APIs."""
+    from docprod.graphics.renderer import execute_generate_graphics
+    from docprod.render.contact_sheet import build_contact_sheet
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    manifests = execute_generate_graphics(
+        project_dir,
+        plan=plan,
+        seed=project.random_seed,
+        force=force,
+        progress=lambda message: console.print(message),
+    )
+    entries: list[tuple[str, str, Path]] = []
+    for item in manifests:
+        output = Path(item.output_path)
+        if not output.is_file():
+            output = (project_dir.root / item.output_path).resolve()
+        entries.append((item.scene_id, item.graphic_type, output))
+    sheet = build_contact_sheet(
+        project_dir,
+        entries,
+        columns=2,
+        output=project_dir.graphics_contact_sheet,
+    )
+    hits = sum(1 for item in manifests if item.cache_hit)
+    console.print(f"graphics={len(manifests)} cache_hits={hits}")
+    if sheet:
+        console.print(f"Graphics contact sheet {sheet}")
+
+
+@app.command("render-graphic")
+def render_graphic_cmd(
+    project_id: str = typer.Argument(...),
+    scene_id: str = typer.Argument(...),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Generate one local documentary graphic for debugging."""
+    from docprod.graphics.renderer import execute_generate_graphics
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    if not any(scene.id == scene_id for scene in plan.scenes):
+        _fail(f"Unknown scene id {scene_id!r}")
+    manifests = execute_generate_graphics(
+        project_dir,
+        plan=plan,
+        seed=project.random_seed,
+        force=force,
+        scene_id=scene_id,
+        progress=lambda message: console.print(message),
+    )
+    if not manifests:
+        _fail(f"Scene {scene_id} does not use a local graphic strategy")
+    console.print(f"Wrote {manifests[0].output_path} sha256={manifests[0].output_sha256}")
+
+
 @app.command("approve-image")
 def approve_image_cmd(
     project_id: str = typer.Argument(...),
@@ -664,6 +730,19 @@ def inspect_render_cmd(
         table.add_row("final_sha256", manifest.final_output_sha256 or "")
         table.add_row("font", manifest.font_path or "")
         console.print(table)
+        sources = Table(title="visual sources")
+        sources.add_column("scene")
+        sources.add_column("strategy")
+        sources.add_column("source")
+        sources.add_column("rendered")
+        for item in manifest.segments:
+            sources.add_row(
+                item.scene_id,
+                item.strategy.value if hasattr(item.strategy, "value") else str(item.strategy),
+                item.source_asset or "",
+                item.strategy_rendered or "",
+            )
+        console.print(sources)
         fallbacks = [s for s in manifest.segments if s.fallback_used]
         if fallbacks:
             fb = Table(title="effect fallbacks")
