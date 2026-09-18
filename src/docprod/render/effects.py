@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 from docprod.models.enums import VisualEffect
 
-# Requested effect -> implemented preview effect. Identity means native impl.
 EFFECT_IMPLEMENTATION: dict[VisualEffect, VisualEffect] = {
     VisualEffect.none: VisualEffect.none,
     VisualEffect.slow_push_in: VisualEffect.slow_push_in,
@@ -28,9 +27,18 @@ EFFECT_IMPLEMENTATION: dict[VisualEffect, VisualEffect] = {
     VisualEffect.location_date_card: VisualEffect.none,
 }
 
-# Output-resolution zoom range. Applied on an oversampled canvas via zoompan.
 PUSH_IN_SCALE = (1.00, 1.05)
 PULL_OUT_SCALE = (1.05, 1.00)
+PAN_SCALE = 1.08
+HANDHELD_SCALE = 1.02
+SURVEILLANCE_SCALE = (1.04, 1.14)
+
+
+@dataclass(frozen=True)
+class Oscillator:
+    amp: float
+    freq: float
+    phase: float
 
 
 @dataclass(frozen=True)
@@ -44,22 +52,25 @@ class EffectParams:
     pan_x1: float
     pan_y0: float
     pan_y1: float
-    handheld_amp: float
-    handheld_freq: float
-    handheld_phase: float
+    x_oscs: tuple[Oscillator, ...]
+    y_oscs: tuple[Oscillator, ...]
     flicker: bool
     desaturate: bool
 
 
 @dataclass(frozen=True)
-class MotionSample:
+class CameraPose:
+    """Floating-point camera state for one frame. Independent of FFmpeg."""
+
     frame_index: int
     progress: float
     scale: float
-    pan_x: float
-    pan_y: float
-    offset_x: float
-    offset_y: float
+    center_x: float
+    center_y: float
+    left: float
+    top: float
+    right: float
+    bottom: float
 
 
 def resolve_effect(requested: VisualEffect) -> tuple[VisualEffect, bool]:
@@ -79,7 +90,8 @@ def effect_params(
     pan_x0, pan_x1 = 0.5, 0.5
     pan_y0, pan_y1 = 0.5, 0.5
     scale_start, scale_end = 1.0, 1.0
-    amp, freq, phase = 0.0, 0.0, 0.0
+    x_oscs: tuple[Oscillator, ...] = ()
+    y_oscs: tuple[Oscillator, ...] = ()
     flicker = False
     desaturate = False
     if rendered is VisualEffect.slow_push_in:
@@ -87,28 +99,32 @@ def effect_params(
     elif rendered is VisualEffect.slow_pull_out:
         scale_start, scale_end = PULL_OUT_SCALE
     elif rendered is VisualEffect.pan_left:
-        scale_start = scale_end = 1.08
+        scale_start = scale_end = PAN_SCALE
         pan_x0, pan_x1 = 0.85, 0.15
     elif rendered is VisualEffect.pan_right:
-        scale_start = scale_end = 1.08
+        scale_start = scale_end = PAN_SCALE
         pan_x0, pan_x1 = 0.15, 0.85
     elif rendered is VisualEffect.documentary_handheld:
-        scale_start = scale_end = 1.05
-        amp = 6.0
-        freq = 0.28
-        phase = rng.random()
+        scale_start = scale_end = HANDHELD_SCALE
+        x_oscs = (
+            Oscillator(amp=3.2, freq=0.23, phase=rng.random()),
+            Oscillator(amp=1.1, freq=0.47, phase=rng.random()),
+        )
+        y_oscs = (
+            Oscillator(amp=2.4, freq=0.19, phase=rng.random()),
+            Oscillator(amp=0.8, freq=0.41, phase=rng.random()),
+        )
     elif rendered is VisualEffect.surveillance_zoom:
-        scale_start, scale_end = 1.04, 1.14
+        scale_start, scale_end = SURVEILLANCE_SCALE
         pan_x0 = pan_x1 = 0.42 + rng.random() * 0.16
         pan_y0 = pan_y1 = 0.42 + rng.random() * 0.16
     elif rendered is VisualEffect.cctv_treatment:
         scale_start, scale_end = 1.04, 1.12
         desaturate = True
     elif rendered is VisualEffect.police_light_flicker:
-        scale_start = scale_end = 1.04
-        amp = 3.0
-        freq = 0.22
-        phase = rng.random()
+        scale_start = scale_end = HANDHELD_SCALE
+        x_oscs = (Oscillator(amp=1.6, freq=0.22, phase=rng.random()),)
+        y_oscs = (Oscillator(amp=1.2, freq=0.18, phase=rng.random()),)
         flicker = True
     return EffectParams(
         requested=requested,
@@ -120,19 +136,60 @@ def effect_params(
         pan_x1=pan_x1,
         pan_y0=pan_y0,
         pan_y1=pan_y1,
-        handheld_amp=amp,
-        handheld_freq=freq,
-        handheld_phase=phase,
+        x_oscs=x_oscs,
+        y_oscs=y_oscs,
         flicker=flicker,
         desaturate=desaturate,
     )
 
 
 def motion_progress(frame_index: int, frame_count: int) -> float:
-    """Normalized linear progress p in [0, 1] for camera moves."""
     if frame_count <= 1:
         return 0.0
     return frame_index / (frame_count - 1)
+
+
+def _osc_sum(oscs: tuple[Oscillator, ...], t: float) -> float:
+    total = 0.0
+    for osc in oscs:
+        total += osc.amp * math.sin(2 * math.pi * (t * osc.freq + osc.phase))
+    return total
+
+
+def sample_camera(
+    params: EffectParams,
+    *,
+    frame_index: int,
+    frame_count: int,
+    fps: int,
+    width: int,
+    height: int,
+) -> CameraPose:
+    progress = motion_progress(frame_index, frame_count)
+    scale = params.scale_start + (params.scale_end - params.scale_start) * progress
+    scale = max(scale, 1.0)
+    pan_x = params.pan_x0 + (params.pan_x1 - params.pan_x0) * progress
+    pan_y = params.pan_y0 + (params.pan_y1 - params.pan_y0) * progress
+    t = frame_index / max(fps, 1)
+    sample_w = width / scale
+    sample_h = height / scale
+    center_x = sample_w / 2 + pan_x * (width - sample_w) + _osc_sum(params.x_oscs, t)
+    center_y = sample_h / 2 + pan_y * (height - sample_h) + _osc_sum(params.y_oscs, t)
+    half_w = sample_w / 2
+    half_h = sample_h / 2
+    center_x = min(max(center_x, half_w), width - half_w)
+    center_y = min(max(center_y, half_h), height - half_h)
+    return CameraPose(
+        frame_index=frame_index,
+        progress=progress,
+        scale=scale,
+        center_x=center_x,
+        center_y=center_y,
+        left=center_x - half_w,
+        top=center_y - half_h,
+        right=center_x + half_w,
+        bottom=center_y + half_h,
+    )
 
 
 def sample_motion(
@@ -141,24 +198,16 @@ def sample_motion(
     frame_index: int,
     frame_count: int,
     fps: int,
-) -> MotionSample:
-    """Deterministic per-frame camera state. Independent of FFmpeg."""
-    progress = motion_progress(frame_index, frame_count)
-    scale = params.scale_start + (params.scale_end - params.scale_start) * progress
-    pan_x = params.pan_x0 + (params.pan_x1 - params.pan_x0) * progress
-    pan_y = params.pan_y0 + (params.pan_y1 - params.pan_y0) * progress
-    t = frame_index / max(fps, 1)
-    angle = 2 * math.pi * (t * params.handheld_freq + params.handheld_phase)
-    offset_x = params.handheld_amp * math.sin(angle)
-    offset_y = params.handheld_amp * math.cos(angle)
-    return MotionSample(
+    width: int = 1280,
+    height: int = 720,
+) -> CameraPose:
+    return sample_camera(
+        params,
         frame_index=frame_index,
-        progress=progress,
-        scale=scale,
-        pan_x=pan_x,
-        pan_y=pan_y,
-        offset_x=offset_x,
-        offset_y=offset_y,
+        frame_count=frame_count,
+        fps=fps,
+        width=width,
+        height=height,
     )
 
 
@@ -167,7 +216,8 @@ def camera_motion_needed(params: EffectParams) -> bool:
         abs(params.scale_end - params.scale_start) > 1e-9
         or abs(params.pan_x1 - params.pan_x0) > 1e-9
         or abs(params.pan_y1 - params.pan_y0) > 1e-9
-        or params.handheld_amp > 0
+        or any(osc.amp for osc in params.x_oscs)
+        or any(osc.amp for osc in params.y_oscs)
     )
 
 
@@ -183,8 +233,19 @@ def oversampled_size(width: int, height: int, factor: int) -> tuple[int, int]:
 
 
 def legacy_integer_scale_width(scale: float, output_width: int) -> int:
-    """Old even-pixel scale width. Kept to document the staircase defect."""
     return max(output_width, int(output_width * scale / 2) * 2)
+
+
+def _osc_expr(oscs: tuple[Oscillator, ...], *, fps: int, oversample: int) -> str:
+    if not oscs:
+        return "0"
+    parts: list[str] = []
+    for osc in oscs:
+        amp = osc.amp * oversample
+        parts.append(
+            f"({amp}*sin(2*PI*((in-1)/{max(fps, 1)}*{osc.freq}+{osc.phase})))"
+        )
+    return "+".join(parts)
 
 
 def motion_filter(
@@ -195,42 +256,41 @@ def motion_filter(
     height: int,
     fps: int,
     frame_count: int,
-    oversample: int = 4,
+    oversample: int = 1,
 ) -> str:
-    """Oversampled zoompan + Lanczos downsample. `width`/`height` are OUTPUT pixels."""
-    del duration  # progress is frame-linear, not wall-clock eased
+    """Fractional perspective camera. `width`/`height` are OUTPUT pixels."""
+    del duration
     filters: list[str] = []
     canvas_w, canvas_h = oversampled_size(width, height, oversample)
     if camera_motion_needed(params):
         denom = max(1, frame_count - 1)
-        p_expr = f"min(1\\,on/{denom})"
+        p_expr = f"min(1\\,max(0\\,(in-1)/{denom}))"
         z0 = params.scale_start
         z1 = params.scale_end
         z_expr = f"({z0}+({z1}-{z0})*{p_expr})"
-        amp = params.handheld_amp * oversample
-        hx = (
-            f"+{amp}*sin(2*PI*(on/{max(fps, 1)}*{params.handheld_freq}"
-            f"+{params.handheld_phase}))"
-            if amp
-            else ""
+        hx = _osc_expr(params.x_oscs, fps=fps, oversample=oversample)
+        hy = _osc_expr(params.y_oscs, fps=fps, oversample=oversample)
+        cx = (
+            f"(W/({z_expr}))/2+"
+            f"({params.pan_x0}+({params.pan_x1}-{params.pan_x0})*{p_expr})"
+            f"*(W-W/({z_expr}))+({hx})"
         )
-        hy = (
-            f"+{amp}*cos(2*PI*(on/{max(fps, 1)}*{params.handheld_freq}"
-            f"+{params.handheld_phase}))"
-            if amp
-            else ""
+        cy = (
+            f"(H/({z_expr}))/2+"
+            f"({params.pan_y0}+({params.pan_y1}-{params.pan_y0})*{p_expr})"
+            f"*(H-H/({z_expr}))+({hy})"
         )
-        x_expr = (
-            f"(iw-iw/zoom)*({params.pan_x0}+({params.pan_x1}-{params.pan_x0})*{p_expr}){hx}"
-        )
-        y_expr = (
-            f"(ih-ih/zoom)*({params.pan_y0}+({params.pan_y1}-{params.pan_y0})*{p_expr}){hy}"
-        )
-        x_clamped = f"max(0\\,min((iw-iw/zoom)\\,{x_expr}))"
-        y_clamped = f"max(0\\,min((ih-ih/zoom)\\,{y_expr}))"
+        left = f"({cx})-(W/(2*({z_expr})))"
+        right = f"({cx})+(W/(2*({z_expr})))"
+        top = f"({cy})-(H/(2*({z_expr})))"
+        bottom = f"({cy})+(H/(2*({z_expr})))"
         filters.append(
-            f"zoompan=z='{z_expr}':x='{x_clamped}':y='{y_clamped}':"
-            f"d=1:s={canvas_w}x{canvas_h}:fps={fps}"
+            f"perspective="
+            f"x0='{left}':y0='{top}':"
+            f"x1='{right}':y1='{top}':"
+            f"x2='{left}':y2='{bottom}':"
+            f"x3='{right}':y3='{bottom}':"
+            f"interpolation=cubic:sense=source:eval=frame"
         )
     if canvas_w != width or canvas_h != height:
         filters.append(f"scale={width}:{height}:flags=lanczos")

@@ -138,6 +138,15 @@ def require_subtitles_filter() -> None:
         )
 
 
+def require_perspective_filter() -> None:
+    if not ffmpeg_has_filter("perspective"):
+        raise FFmpegError(
+            "This FFmpeg build has no 'perspective' filter. "
+            "Cannot apply subpixel camera motion. Install Homebrew ffmpeg-full "
+            "or set DOCPROD_FFMPEG to that binary."
+        )
+
+
 def run_ffmpeg(args: list[str], *, timeout: int = 120) -> None:
     command = [ffmpeg_path(), "-hide_banner", "-loglevel", "error", "-y", *args]
     completed = subprocess.run(

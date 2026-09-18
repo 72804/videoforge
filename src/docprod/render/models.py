@@ -23,7 +23,7 @@ class PreviewRenderProfile(BaseModel):
     audio_sample_rate: int = 48000
     burn_subtitles: bool = True
     segment_workers: int = 2
-    motion_oversample_factor: int = 4
+    motion_oversample_factor: int = 1
 
     @field_validator("name", "renderer_version", "video_codec", "preset")
     @classmethod

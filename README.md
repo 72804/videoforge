@@ -45,6 +45,7 @@ uv run docprod plan-scenes demo
 uv run docprod inspect-scenes demo
 uv run docprod render-preview demo --workers 2
 uv run docprod inspect-render demo
+uv run docprod audit-motion demo
 uv run docprod render-scene demo scene_0004
 uv run docprod status demo
 ```

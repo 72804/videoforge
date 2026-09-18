@@ -22,6 +22,7 @@ from docprod.render.ffmpeg import (
     ffmpeg_version_line,
     ffprobe_version_line,
     probe_media,
+    require_perspective_filter,
     require_subtitles_filter,
     run_ffmpeg,
 )
@@ -204,7 +205,7 @@ def _render_one_segment(
         transition_rendered=trans_rendered,
         transition_fallback=trans_fallback,
         cache_hit=False,
-        ffmpeg_command_summary="lavfi-placeholder+zoompan-oversample,libx264,no-audio",
+        ffmpeg_command_summary="lavfi-placeholder+perspective-cubic,libx264,no-audio",
         output_sha256=file_sha256(mp4),
     )
     save_model(meta_path, record)
@@ -229,6 +230,7 @@ def render_preview(
     use_cache: bool = True,
     progress: ProgressFn | None = None,
 ) -> PreviewRenderResult:
+    require_perspective_filter()
     if profile.burn_subtitles:
         require_subtitles_filter()
     font = discover_font()

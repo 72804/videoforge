@@ -18,7 +18,7 @@ def test_render_profile_validation() -> None:
         PreviewRenderProfile(motion_oversample_factor=0)
     ok = PreviewRenderProfile()
     assert ok.width == 1280 and ok.height == 720
-    assert ok.motion_oversample_factor == 4
+    assert ok.motion_oversample_factor == 1
     assert ok.renderer_version == RENDERER_VERSION
 
 

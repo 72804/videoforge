@@ -479,6 +479,60 @@ def inspect_render_cmd(
         console.print(table)
 
 
+@app.command("audit-motion")
+def audit_motion_cmd(
+    project_id: str = typer.Argument(...),
+) -> None:
+    """Audit camera-motion continuity of preview segments via signalstats YDIF."""
+    from docprod.render.motion_audit import MotionStatus, audit_records
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.preview_manifest.is_file():
+        _fail(f"Missing render manifest: {project_dir.preview_manifest}")
+    manifest = load_model(project_dir.preview_manifest, RenderManifest)
+    rows = audit_records(
+        project_dir.preview_segments_dir,
+        manifest.segments,
+        seed=project.random_seed,
+        renderer_version=manifest.renderer_version,
+    )
+    table = Table(title=f"motion audit {project_id}")
+    table.add_column("Scene")
+    table.add_column("Requested")
+    table.add_column("Rendered")
+    table.add_column("Frames", justify="right")
+    table.add_column("Near-static", justify="right")
+    table.add_column("Longest hold", justify="right")
+    table.add_column("Median YDIF", justify="right")
+    table.add_column("P90 YDIF", justify="right")
+    table.add_column("Max YDIF", justify="right")
+    table.add_column("Status")
+    counts: dict[str, int] = {status.value: 0 for status in MotionStatus}
+    for row in rows:
+        counts[row.status.value] = counts.get(row.status.value, 0) + 1
+        table.add_row(
+            row.scene_id,
+            row.effect_requested.value,
+            row.effect_rendered.value,
+            str(row.frames),
+            str(row.near_static),
+            str(row.longest_hold),
+            f"{row.median_ydif:.4f}",
+            f"{row.p90_ydif:.4f}",
+            f"{row.max_ydif:.4f}",
+            row.status.value,
+        )
+    console.print(table)
+    console.print(
+        f"SMOOTH={counts[MotionStatus.SMOOTH.value]} "
+        f"STATIC_EXPECTED={counts[MotionStatus.STATIC_EXPECTED.value]} "
+        f"REVIEW={counts[MotionStatus.REVIEW.value]} "
+        f"FAIL={counts[MotionStatus.FAIL.value]}"
+    )
+    if counts[MotionStatus.FAIL.value]:
+        raise typer.Exit(1)
+
+
 @app.command("export-schemas")
 def export_schemas(
     output_dir: Path = typer.Argument(..., help="Directory to write JSON Schema files"),

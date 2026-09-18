@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import pytest
-
 from docprod.models.enums import VisualEffect
 from docprod.render.effects import (
     EFFECT_IMPLEMENTATION,
+    HANDHELD_SCALE,
     PULL_OUT_SCALE,
     PUSH_IN_SCALE,
     effect_params,
@@ -12,7 +11,7 @@ from docprod.render.effects import (
     motion_filter,
     motion_progress,
     resolve_effect,
-    sample_motion,
+    sample_camera,
 )
 
 
@@ -28,22 +27,22 @@ def test_deterministic_effect_parameters() -> None:
         VisualEffect.documentary_handheld,
         seed=42,
         scene_id="scene_0004",
-        renderer_version="1.1",
+        renderer_version="1.2",
     )
     b = effect_params(
         VisualEffect.documentary_handheld,
         seed=42,
         scene_id="scene_0004",
-        renderer_version="1.1",
+        renderer_version="1.2",
     )
     c = effect_params(
         VisualEffect.documentary_handheld,
         seed=99,
         scene_id="scene_0004",
-        renderer_version="1.1",
+        renderer_version="1.2",
     )
     assert a == b
-    assert a.handheld_phase != c.handheld_phase or a.pan_x0 != c.pan_x0
+    assert a.x_oscs[0].phase != c.x_oscs[0].phase
 
 
 def test_fallback_mapping_recorded() -> None:
@@ -55,25 +54,32 @@ def test_fallback_mapping_recorded() -> None:
     assert native is VisualEffect.slow_push_in
 
 
-def _samples(effect: VisualEffect, *, frames: int = 105, fps: int = 30):
+def _poses(effect: VisualEffect, *, frames: int = 105, fps: int = 30, width=1280, height=720):
     params = effect_params(
         effect,
         seed=1,
         scene_id="scene_zoom",
-        renderer_version="1.1",
+        renderer_version="1.2",
     )
     return params, [
-        sample_motion(params, frame_index=index, frame_count=frames, fps=fps)
+        sample_camera(
+            params,
+            frame_index=index,
+            frame_count=frames,
+            fps=fps,
+            width=width,
+            height=height,
+        )
         for index in range(frames)
     ]
 
 
 def test_slow_push_in_linear_scale_progression() -> None:
     frames = 105
-    params, samples = _samples(VisualEffect.slow_push_in, frames=frames)
-    scales = [item.scale for item in samples]
-    assert samples[0].progress == 0.0
-    assert samples[-1].progress == 1.0
+    params, poses = _poses(VisualEffect.slow_push_in, frames=frames)
+    scales = [item.scale for item in poses]
+    assert poses[0].progress == 0.0
+    assert poses[-1].progress == 1.0
     assert scales[0] == PUSH_IN_SCALE[0]
     assert scales[-1] == PUSH_IN_SCALE[1]
     assert scales == sorted(scales)
@@ -81,37 +87,48 @@ def test_slow_push_in_linear_scale_progression() -> None:
     expected = (PUSH_IN_SCALE[1] - PUSH_IN_SCALE[0]) / (frames - 1)
     assert all(abs(delta - expected) < 1e-12 for delta in deltas)
     assert len(set(scales)) == frames
-    unique_legacy = {
-        legacy_integer_scale_width(scale, 1280) for scale in scales
-    }
+    unique_legacy = {legacy_integer_scale_width(scale, 1280) for scale in scales}
     assert len(unique_legacy) < frames // 2
+    xs = [item.center_x for item in poses]
+    assert all(abs(x - 640.0) < 1e-9 for x in xs)
+    _ = params
 
 
 def test_slow_pull_out_and_pans_are_linear() -> None:
     frames = 90
-    pull_params, pull = _samples(VisualEffect.slow_pull_out, frames=frames)
+    _pull_params, pull = _poses(VisualEffect.slow_pull_out, frames=frames)
     assert pull[0].scale == PULL_OUT_SCALE[0]
     assert pull[-1].scale == PULL_OUT_SCALE[1]
-    pull_deltas = [
-        b.scale - a.scale for a, b in zip(pull[:-1], pull[1:], strict=True)
-    ]
+    pull_deltas = [b.scale - a.scale for a, b in zip(pull[:-1], pull[1:], strict=True)]
     assert all(delta < 0 for delta in pull_deltas)
     assert all(abs(delta - pull_deltas[0]) < 1e-12 for delta in pull_deltas)
 
-    _left_params, left = _samples(VisualEffect.pan_left, frames=frames)
-    xs = [item.pan_x for item in left]
-    assert xs[0] == pytest.approx(0.85)
-    assert xs[-1] == pytest.approx(0.15)
+    _left_params, left = _poses(VisualEffect.pan_left, frames=frames)
+    xs = [item.center_x for item in left]
     x_deltas = [b - a for a, b in zip(xs[:-1], xs[1:], strict=True)]
     assert all(delta < 0 for delta in x_deltas)
-    assert all(abs(delta - x_deltas[0]) < 1e-12 for delta in x_deltas)
+    assert all(abs(delta - x_deltas[0]) < 1e-9 for delta in x_deltas)
     assert len(set(xs)) == frames
+    assert not all(x == int(x) for x in xs[1:-1])
 
-    _right_params, right = _samples(VisualEffect.pan_right, frames=frames)
-    assert right[0].pan_x == pytest.approx(0.15)
-    assert right[-1].pan_x == pytest.approx(0.85)
-    assert all(b.pan_x > a.pan_x for a, b in zip(right[:-1], right[1:], strict=True))
-    _ = pull_params
+    _right_params, right = _poses(VisualEffect.pan_right, frames=frames)
+    assert all(
+        b.center_x > a.center_x for a, b in zip(right[:-1], right[1:], strict=True)
+    )
+
+
+def test_handheld_centers_are_fractional_and_unique() -> None:
+    frames = 96
+    params, poses = _poses(VisualEffect.documentary_handheld, frames=frames)
+    assert params.scale_start == HANDHELD_SCALE
+    xs = [item.center_x for item in poses]
+    ys = [item.center_y for item in poses]
+    assert len(set(xs)) == frames
+    assert len(set(ys)) == frames
+    assert any(x != int(x) for x in xs)
+    dx = [abs(b - a) for a, b in zip(xs[:-1], xs[1:], strict=True)]
+    assert max(dx) < 4.0
+    assert min(dx) < 0.5
 
 
 def test_motion_progress_bounds() -> None:
@@ -120,8 +137,8 @@ def test_motion_progress_bounds() -> None:
     assert motion_progress(9, 10) == 1.0
 
 
-def test_motion_filter_uses_zoompan_not_integer_scale() -> None:
-    params, _samples_unused = _samples(VisualEffect.slow_push_in, frames=102)
+def test_motion_filter_uses_perspective_cubic() -> None:
+    params, _unused = _poses(VisualEffect.slow_push_in, frames=102)
     graph = motion_filter(
         params,
         duration=3.4,
@@ -129,11 +146,11 @@ def test_motion_filter_uses_zoompan_not_integer_scale() -> None:
         height=720,
         fps=30,
         frame_count=102,
-        oversample=4,
+        oversample=1,
     )
-    assert "zoompan=" in graph
-    assert "flags=lanczos" in graph
-    assert "eval=frame" not in graph
+    assert "perspective=" in graph
+    assert "interpolation=cubic" in graph
+    assert "eval=frame" in graph
+    assert "zoompan=" not in graph
     assert "trunc(" not in graph
-    assert "s=5120x2880" in graph
-    _ = _samples_unused
+    _ = _unused
