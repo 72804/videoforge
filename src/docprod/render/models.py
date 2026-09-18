@@ -79,6 +79,9 @@ class SegmentRecord(BaseModel):
     cache_hit: bool = False
     ffmpeg_command_summary: str = ""
     output_sha256: str | None = None
+    source_asset: str | None = None
+    strategy_requested: AssetStrategy | None = None
+    strategy_rendered: str | None = None
 
 
 class RenderManifest(BaseModel):

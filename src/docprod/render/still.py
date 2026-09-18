@@ -8,6 +8,8 @@ from docprod.providers.image_config import GeneratedImageManifest
 from docprod.storage.json_store import load_model
 from docprod.storage.paths import ProjectPaths
 
+IMAGE_STRATEGIES = frozenset({AssetStrategy.ai_image, AssetStrategy.ai_image_to_video})
+
 
 def image_suffix_for_format(output_format: str) -> str:
     mapping = {"jpeg": ".jpg", "jpg": ".jpg", "png": ".png", "webp": ".webp"}
@@ -31,11 +33,13 @@ def still_fit_filter(src_width: int, src_height: int, dst_width: int, dst_height
     )
 
 
-def resolve_ai_image_still(paths: ProjectPaths, scene: Scene) -> tuple[Path, str] | None:
-    """Return (image_path, sha256) when a valid generated still exists for an ai_image scene."""
-    if scene.asset_strategy is not AssetStrategy.ai_image:
-        return None
-    meta_path = paths.scene_image_meta(scene.id)
+def still_pixel_normalize_filter() -> str:
+    """Map JPEG full-range stills to limited-range yuv420p without a contrast crush."""
+    return "scale=in_range=full:out_range=limited:flags=bicubic,format=yuv420p"
+
+
+def resolve_generated_still(paths: ProjectPaths, scene_id: str) -> tuple[Path, str] | None:
+    meta_path = paths.scene_image_meta(scene_id)
     if not meta_path.is_file():
         return None
     try:
@@ -49,7 +53,14 @@ def resolve_ai_image_still(paths: ProjectPaths, scene: Scene) -> tuple[Path, str
         candidate = (paths.root / manifest.output_path).resolve()
     if not candidate.is_file():
         suffix = image_suffix_for_format(manifest.output_format)
-        candidate = paths.scene_image_path(scene.id, suffix=suffix)
+        candidate = paths.scene_image_path(scene_id, suffix=suffix)
     if not candidate.is_file():
         return None
     return candidate, manifest.output_sha256
+
+
+def resolve_scene_still(paths: ProjectPaths, scene: Scene) -> tuple[Path, str] | None:
+    """Return a generated still for ai_image or ai_image_to_video keyframe preview."""
+    if scene.asset_strategy not in IMAGE_STRATEGIES:
+        return None
+    return resolve_generated_still(paths, scene.id)

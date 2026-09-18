@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from docprod.config import Settings, get_settings
 
@@ -76,3 +76,42 @@ class GeneratedImageManifest(BaseModel):
     cache_hit: bool = False
     elapsed_seconds: float | None = None
     note: str | None = None
+
+
+class ImageBatchSceneRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    strategy: str
+    action: str
+    status: str
+    provider: str | None = None
+    model: str | None = None
+    prompt: str | None = None
+    size: str | None = None
+    quality: str | None = None
+    request_hash: str | None = None
+    output_path: str | None = None
+    output_sha256: str | None = None
+    elapsed_seconds: float | None = None
+    usage: dict[str, int | float | str] | None = None
+    review_state: str | None = None
+    skip_reason: str | None = None
+    error: str | None = None
+
+
+class ImageBatchManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "1.0"
+    project_id: str
+    provider: str
+    model: str
+    size: str
+    quality: str
+    planned_paid_requests: int
+    max_paid_requests: int | None = None
+    generated: int = 0
+    skipped: int = 0
+    failed: int = 0
+    scenes: list[ImageBatchSceneRecord] = Field(default_factory=list)

@@ -7,6 +7,7 @@ from docprod.models.enums import AssetStrategy, Mood, TransitionType, VisualEffe
 from docprod.models.project import Project
 from docprod.models.scene import GenerationSpec, Scene
 from docprod.providers.image_config import GeneratedImageManifest
+from docprod.render.contact_sheet import build_contact_sheet
 from docprod.render.ffmpeg import probe_media, run_ffmpeg
 from docprod.render.models import TINY_TEST_PROFILE
 from docprod.render.renderer import render_preview
@@ -114,6 +115,79 @@ def test_renderer_uses_real_image_when_present(tmp_path: Path) -> None:
     probe = probe_media(paths.preview_segments_dir / "scene_0003.mp4")
     assert probe.width == TINY_TEST_PROFILE.width
     assert probe.height == TINY_TEST_PROFILE.height
+    assert probe.pixel_format == "yuv420p"
+
+
+def test_keyframe_still_used_for_ai_image_to_video(tmp_path: Path) -> None:
+    paths = ProjectPaths(root=tmp_path / "proj")
+    paths.preview_segments_dir.mkdir(parents=True, exist_ok=True)
+    scene = Scene(
+        id="scene_0004",
+        start=0.0,
+        end=0.4,
+        duration=0.4,
+        narration="Adam yürüdü.",
+        visual_intent="Walk",
+        asset_strategy=AssetStrategy.ai_image_to_video,
+        effect=VisualEffect.slow_push_in,
+        transition=TransitionType.cut,
+        mood=Mood.neutral,
+        subtitle="Walk",
+        generation=GenerationSpec(image_prompt="a man walking on a platform"),
+        metadata={"primary_category": "action"},
+    )
+    image = paths.scene_image_path("scene_0004")
+    _write_jpeg(image, 320, 180)
+    save_model(
+        paths.scene_image_meta("scene_0004"),
+        GeneratedImageManifest(
+            provider="openai",
+            model="gpt-image-2.5-flare",
+            scene_id="scene_0004",
+            prompt="a man walking on a platform",
+            size="320x180",
+            quality="medium",
+            output_format="jpeg",
+            source_scene_hash="abc",
+            request_hash="def",
+            output_path="artifacts/visuals/scene_0004/image.jpg",
+            output_sha256=file_sha256(image),
+            generation_status="success",
+        ),
+    )
+    result = render_preview(
+        paths,
+        project=_project(),
+        plan=mini_plan(scene),
+        profile=TINY_TEST_PROFILE,
+        workers=1,
+        use_cache=False,
+    )
+    record = result.manifest.segments[0]
+    assert record.source_asset == "generated_still"
+    assert record.strategy_requested is AssetStrategy.ai_image_to_video
+    assert record.strategy_rendered == "ai_image_keyframe_preview"
+    assert "still-image" in record.ffmpeg_command_summary
+    assert probe_media(paths.preview_segments_dir / "scene_0004.mp4").pixel_format == "yuv420p"
+
+
+def test_contact_sheet_creation(tmp_path: Path) -> None:
+    paths = ProjectPaths(root=tmp_path / "proj")
+    one = paths.scene_image_path("scene_0002")
+    two = paths.scene_image_path("scene_0004")
+    _write_jpeg(one, 320, 180)
+    _write_jpeg(two, 320, 180)
+    sheet = build_contact_sheet(
+        paths,
+        [
+            ("scene_0002", "ai_image", one),
+            ("scene_0004", "ai_image_to_video", two),
+        ],
+    )
+    assert sheet is not None and sheet.is_file()
+    probe = probe_media(sheet)
+    assert probe.width == 640
+    assert probe.height >= 180
 
 
 def test_renderer_falls_back_to_placeholder_when_image_absent(tmp_path: Path) -> None:

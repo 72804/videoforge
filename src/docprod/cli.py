@@ -13,6 +13,7 @@ from docprod import __version__
 from docprod.config import get_settings
 from docprod.demo import build_demo_scene_plan
 from docprod.exceptions import (
+    MaxPaidRequestsExceededError,
     MissingApiKeyError,
     PaidApiDisabledError,
     PaidApiNotConfirmedError,
@@ -26,6 +27,7 @@ from docprod.models.project import Project
 from docprod.models.scene import Scene, ScenePlan
 from docprod.models.script import NarrationScript
 from docprod.pipeline.generate_image_stage import execute_generate_image
+from docprod.pipeline.generate_images_batch import execute_generate_images
 from docprod.pipeline.preview_render_stage import execute_preview_render
 from docprod.pipeline.scene_planner_stage import execute_scene_planner
 from docprod.planning.models import summarize_scene_plan
@@ -376,7 +378,7 @@ def generate_image_cmd(
         help="Regenerate even when a matching cached image exists. Still requires --confirm-paid.",
     ),
 ) -> None:
-    """Generate one documentary still for a single ai_image scene. Paid APIs are gated."""
+    """Generate one documentary still for an ai_image or ai_image_to_video scene."""
     project_dir, _project = _load_project(project_id)
     if not project_dir.scene_plan_json.is_file():
         _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
@@ -410,6 +412,104 @@ def generate_image_cmd(
         f"Wrote {project_dir.scene_image_path(scene_id)} "
         f"sha256={manifest.output_sha256} request_hash={manifest.request_hash}"
     )
+
+
+@app.command("generate-images")
+def generate_images_cmd(
+    project_id: str = typer.Argument(...),
+    confirm_paid: bool = typer.Option(
+        False,
+        "--confirm-paid",
+        help="Required for real paid image API calls (with ALLOW_PAID_APIS=true).",
+    ),
+    max_paid_requests: int = typer.Option(
+        ...,
+        "--max-paid-requests",
+        min=0,
+        help="Abort before any call if planned paid requests exceed this cap.",
+    ),
+    workers: int = typer.Option(1, "--workers", min=1, help="Reserved; paid calls stay serial."),
+    force_scene: list[str] = typer.Option(
+        [],
+        "--force-scene",
+        help="Regenerate this scene even if cached/approved. Repeatable.",
+    ),
+) -> None:
+    """Generate stills for ai_image and ai_image_to_video scenes. No AI video."""
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    try:
+        plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    except Exception as exc:
+        _fail(f"Invalid scene plan: {exc}")
+    try:
+        manifest = execute_generate_images(
+            project_dir,
+            plan=plan,
+            confirm_paid=confirm_paid,
+            max_paid_requests=max_paid_requests,
+            workers=workers,
+            force_scene_ids=force_scene,
+            progress=lambda message: console.print(message),
+        )
+    except MaxPaidRequestsExceededError as exc:
+        _fail(str(exc))
+    except (PaidApiDisabledError, PaidApiNotConfirmedError, MissingApiKeyError, ValueError) as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(str(exc))
+    from docprod.render.contact_sheet import contact_sheet_from_plan
+
+    sheet = contact_sheet_from_plan(
+        project_dir,
+        [(item.scene_id, item.strategy) for item in manifest.scenes],
+    )
+    console.print(
+        f"generated={manifest.generated} skipped={manifest.skipped} failed={manifest.failed}"
+    )
+    console.print(f"Batch manifest {project_dir.image_batch_manifest()}")
+    if sheet:
+        console.print(f"Contact sheet {sheet}")
+
+
+@app.command("approve-image")
+def approve_image_cmd(
+    project_id: str = typer.Argument(...),
+    scene_id: str = typer.Argument(...),
+) -> None:
+    """Mark an existing generated still as approved. No API call."""
+    from docprod.pipeline.generate_image_stage import _load_success_manifest
+    from docprod.providers.image_review import set_review_state
+
+    project_dir, _project = _load_project(project_id)
+    existing = _load_success_manifest(project_dir.scene_image_meta(scene_id))
+    if existing is None:
+        _fail(f"No successful image metadata for {scene_id}")
+    record = set_review_state(
+        project_dir,
+        scene_id,
+        "approved",
+        artifact_sha256=existing.output_sha256,
+        note="pinned without regenerating",
+    )
+    console.print(f"Approved {scene_id} sha256={record.artifact_sha256}")
+
+
+@app.command("reject-image")
+def reject_image_cmd(
+    project_id: str = typer.Argument(...),
+    scene_id: str = typer.Argument(...),
+) -> None:
+    """Mark a generated still as rejected without deleting it."""
+    from docprod.pipeline.generate_image_stage import _load_success_manifest
+    from docprod.providers.image_review import set_review_state
+
+    project_dir, _project = _load_project(project_id)
+    existing = _load_success_manifest(project_dir.scene_image_meta(scene_id))
+    sha = existing.output_sha256 if existing else None
+    record = set_review_state(project_dir, scene_id, "rejected", artifact_sha256=sha)
+    console.print(f"Rejected {scene_id} (file kept) sha256={record.artifact_sha256}")
 
 
 @app.command("render-preview")

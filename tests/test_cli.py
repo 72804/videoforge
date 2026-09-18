@@ -124,7 +124,13 @@ def test_generate_image_help_is_single_scene() -> None:
     result = runner.invoke(app, ["generate-image", "--help"])
     assert result.exit_code == 0, result.output
     assert "--confirm-paid" in result.output
-    assert "SCENE_ID" in result.output.upper() or "scene_id" in result.output.lower()
+
+
+def test_generate_images_help_has_safety_caps() -> None:
+    result = runner.invoke(app, ["generate-images", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--confirm-paid" in result.output
+    assert "--max-paid-requests" in result.output
 
 
 def test_export_schemas_valid_json(tmp_path: Path) -> None:

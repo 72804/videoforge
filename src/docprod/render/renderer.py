@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
-from docprod.models.enums import TransitionType
+from docprod.models.enums import AssetStrategy, TransitionType
 from docprod.models.project import Project
 from docprod.models.scene import Scene, ScenePlan
 from docprod.render.effects import (
@@ -33,7 +33,7 @@ from docprod.render.models import (
 )
 from docprod.render.placeholders import placeholder_filter
 from docprod.render.stats import duration_ok, frame_count_for_span, probe_looks_valid
-from docprod.render.still import resolve_ai_image_still, still_fit_filter
+from docprod.render.still import resolve_scene_still, still_fit_filter, still_pixel_normalize_filter
 from docprod.render.subtitles import write_captions
 from docprod.storage.hashing import content_hash, file_sha256
 from docprod.storage.json_store import atomic_write_text, load_model, save_model
@@ -71,6 +71,7 @@ def segment_input_hash(
             "renderer_version": profile.renderer_version,
             "effect_rendered": params_rendered,
             "still_sha256": still_sha256,
+            "still_pix_fmt": "yuv420p",
         }
     )
 
@@ -122,7 +123,7 @@ def _render_one_segment(
     trans_rendered, trans_fallback = _transition_rendered(scene.transition)
     frames = frame_count_for_span(scene.start, scene.end, profile.fps)
     duration = frames / profile.fps
-    still = resolve_ai_image_still(paths, scene)
+    still = resolve_scene_still(paths, scene)
     still_sha = still[1] if still else None
     input_hash = segment_input_hash(
         scene,
@@ -164,6 +165,18 @@ def _render_one_segment(
         frame_count=frames,
         oversample=oversample,
     )
+    if still is None:
+        source_asset = "placeholder"
+        strategy_rendered = "placeholder" if scene.asset_strategy in {
+            AssetStrategy.ai_image,
+            AssetStrategy.ai_image_to_video,
+        } else scene.asset_strategy.value
+    else:
+        source_asset = "generated_still"
+        if scene.asset_strategy is AssetStrategy.ai_image_to_video:
+            strategy_rendered = "ai_image_keyframe_preview"
+        else:
+            strategy_rendered = "ai_image"
     tmp = mp4.with_suffix(".tmp.mp4")
     try:
         if still is None:
@@ -210,7 +223,7 @@ def _render_one_segment(
                 src_w, src_h = canvas_w, canvas_h
             fit = still_fit_filter(src_w, src_h, canvas_w, canvas_h)
             vf = fit if motion == "null" else f"{fit},{motion}"
-            vf = f"{vf},format={profile.pixel_format}"
+            vf = f"{vf},{still_pixel_normalize_filter()}"
             run_ffmpeg(
                 [
                     "-loop",
@@ -227,7 +240,15 @@ def _render_one_segment(
                     "-c:v",
                     profile.video_codec,
                     "-pix_fmt",
-                    profile.pixel_format,
+                    "yuv420p",
+                    "-color_range",
+                    "tv",
+                    "-colorspace",
+                    "bt709",
+                    "-color_primaries",
+                    "bt709",
+                    "-color_trc",
+                    "bt709",
                     "-preset",
                     profile.preset,
                     "-crf",
@@ -236,7 +257,7 @@ def _render_one_segment(
                 ],
                 timeout=180,
             )
-            summary = "still-image-cover+perspective-cubic,libx264,no-audio"
+            summary = "still-image-cover+perspective-cubic,libx264,yuv420p,no-audio"
         tmp.replace(mp4)
     finally:
         tmp.unlink(missing_ok=True)
@@ -255,6 +276,9 @@ def _render_one_segment(
         cache_hit=False,
         ffmpeg_command_summary=summary,
         output_sha256=file_sha256(mp4),
+        source_asset=source_asset,
+        strategy_requested=scene.asset_strategy,
+        strategy_rendered=strategy_rendered,
     )
     save_model(meta_path, record)
     return record
@@ -474,7 +498,7 @@ def render_debug_scene(
     dest.write_bytes(payload)
     smooth = paths.preview_debug_dir / f"{scene.id}_smooth.mp4"
     smooth.write_bytes(payload)
-    if still_used := resolve_ai_image_still(paths, scene):
+    if still_used := resolve_scene_still(paths, scene):
         real = paths.preview_debug_dir / f"{scene.id}_real_image.mp4"
         real.write_bytes(payload)
         _ = still_used

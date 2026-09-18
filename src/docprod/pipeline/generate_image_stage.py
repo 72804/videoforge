@@ -4,12 +4,17 @@ from collections.abc import Callable
 from pathlib import Path
 
 from docprod.config import Settings, get_settings
-from docprod.models.enums import AssetStrategy
 from docprod.models.scene import Scene, ScenePlan
+from docprod.planning.visual_bible import (
+    VisualBible,
+    derive_visual_bible,
+    scene_includes_protagonist,
+)
 from docprod.providers.image_config import GeneratedImageManifest, ImageGenerationConfig
 from docprod.providers.image_prompt import build_documentary_image_prompt
+from docprod.providers.image_review import load_review, set_review_state
 from docprod.providers.openai_image import OpenAIImageProvider, image_request_hash
-from docprod.render.still import image_suffix_for_format
+from docprod.render.still import IMAGE_STRATEGIES, image_suffix_for_format
 from docprod.storage.hashing import content_hash, file_sha256
 from docprod.storage.json_store import atomic_write_bytes, load_model, save_model
 from docprod.storage.paths import ProjectPaths
@@ -50,6 +55,60 @@ def _load_success_manifest(meta_path: Path) -> GeneratedImageManifest | None:
     return manifest
 
 
+def load_or_create_visual_bible(paths: ProjectPaths, plan: ScenePlan) -> VisualBible:
+    bible_path = paths.visual_bible_json()
+    if bible_path.is_file():
+        try:
+            return load_model(bible_path, VisualBible)
+        except (OSError, ValueError):
+            pass
+    bible = derive_visual_bible(plan)
+    save_model(bible_path, bible)
+    return bible
+
+
+def image_file_matches(paths: ProjectPaths, scene_id: str, digest: str) -> bool:
+    for suffix in (".jpg", ".jpeg", ".png", ".webp"):
+        candidate = paths.scene_image_path(scene_id, suffix=suffix)
+        if candidate.is_file() and file_sha256(candidate) == digest:
+            return True
+    return False
+
+
+def should_skip_paid_generation(
+    paths: ProjectPaths,
+    scene: Scene,
+    *,
+    request_hash: str,
+    force: bool,
+) -> tuple[bool, str | None, GeneratedImageManifest | None]:
+    """Return (skip, reason, existing_manifest). Force never skips."""
+    if force:
+        return False, None, None
+    existing = _load_success_manifest(paths.scene_image_meta(scene.id))
+    review = load_review(paths, scene.id)
+    if (
+        existing is not None
+        and review is not None
+        and review.review_state == "approved"
+        and existing.output_sha256
+        and image_file_matches(paths, scene.id, existing.output_sha256)
+    ):
+        existing.cache_hit = True
+        return True, "approved", existing
+    if (
+        existing is not None
+        and existing.request_hash == request_hash
+        and existing.output_sha256
+        and image_file_matches(paths, scene.id, existing.output_sha256)
+    ):
+        existing.cache_hit = True
+        return True, "cached", existing
+    if review is not None and review.review_state == "rejected":
+        return True, "rejected", existing
+    return False, None, existing
+
+
 def execute_generate_image(
     paths: ProjectPaths,
     *,
@@ -59,37 +118,39 @@ def execute_generate_image(
     force: bool = False,
     settings: Settings | None = None,
     provider: OpenAIImageProvider | None = None,
+    bible: VisualBible | None = None,
+    previous_had_protagonist: bool = False,
     progress: ProgressFn | None = None,
 ) -> GeneratedImageManifest:
     scene = next((item for item in plan.scenes if item.id == scene_id), None)
     if scene is None:
         raise ValueError(f"Unknown scene id {scene_id!r}")
-    if scene.asset_strategy is not AssetStrategy.ai_image:
+    if scene.asset_strategy not in IMAGE_STRATEGIES:
         raise ValueError(
-            f"Scene {scene_id} strategy is {scene.asset_strategy.value}, expected ai_image"
+            f"Scene {scene_id} strategy is {scene.asset_strategy.value}, "
+            "expected ai_image or ai_image_to_video"
         )
     cfg = settings or get_settings()
     image_cfg = ImageGenerationConfig.from_settings(cfg)
-    prompt = build_documentary_image_prompt(scene)
-    if scene.generation.negative_prompt:
-        prompt = f"{prompt} Avoid: {scene.generation.negative_prompt.strip()}."
+    visual_bible = bible if bible is not None else load_or_create_visual_bible(paths, plan)
+    include = scene_includes_protagonist(
+        scene, visual_bible, previous_had_protagonist=previous_had_protagonist
+    )
+    prompt = build_documentary_image_prompt(
+        scene, bible=visual_bible, include_protagonist=include
+    )
     seed = scene.generation.seed
     request_hash = image_request_hash(prompt=prompt, config=image_cfg, seed=seed)
     source_hash = scene_source_hash(scene)
     suffix = image_suffix_for_format(image_cfg.output_format)
     output_path = paths.scene_image_path(scene_id, suffix=suffix)
-    meta_path = paths.scene_image_meta(scene_id)
-    existing = _load_success_manifest(meta_path)
-    if (
-        not force
-        and existing is not None
-        and existing.request_hash == request_hash
-        and output_path.is_file()
-        and file_sha256(output_path) == existing.output_sha256
-    ):
-        existing.cache_hit = True
+    skip, reason, existing = should_skip_paid_generation(
+        paths, scene, request_hash=request_hash, force=force
+    )
+    if skip and existing is not None:
+        existing.note = reason
         if progress:
-            progress(f"Cache hit for {scene_id}; skipping paid image generation")
+            progress(f"Skip {scene_id} ({reason}); no paid image generation")
         return existing
 
     adapter = provider or OpenAIImageProvider(settings=cfg, config=image_cfg)
@@ -98,9 +159,11 @@ def execute_generate_image(
         progress(f"Provider: {image_cfg.provider}")
         progress(f"Model: {image_cfg.model}")
         progress(f"Scene: {scene_id}")
+        progress(f"Strategy: {scene.asset_strategy.value}")
         progress(f"Size: {image_cfg.size}")
         progress(f"Quality: {image_cfg.quality}")
         progress(f"Prompt: {prompt}")
+        progress(f"Request hash: {request_hash}")
         progress(f"Output: {output_path}")
     result = adapter.generate(prompt, confirm_paid=confirm_paid, seed=seed)
     paths.scene_visuals_dir(scene_id).mkdir(parents=True, exist_ok=True)
@@ -125,7 +188,8 @@ def execute_generate_image(
         cache_hit=False,
         elapsed_seconds=round(result.elapsed_seconds, 3),
     )
-    save_model(meta_path, manifest)
+    save_model(paths.scene_image_meta(scene_id), manifest)
+    set_review_state(paths, scene_id, "generated", artifact_sha256=digest)
     if progress:
         progress(f"status: success in {manifest.elapsed_seconds:.3f}s")
         if manifest.usage:

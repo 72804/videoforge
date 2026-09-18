@@ -13,6 +13,10 @@ SCENE_PLAN_FILENAME = "05_scenes.json"
 SCENE_PLANNER_STAGE = "scene_planner"
 PREVIEW_RENDER_STAGE = "preview_render"
 RENDERER_VERSION = "1.2"
+VISUAL_BIBLE_FILENAME = "visual_bible.json"
+IMAGE_REVIEW_FILENAME = "image.review.json"
+IMAGE_BATCH_MANIFEST_FILENAME = "image_batch_manifest.json"
+CONTACT_SHEET_FILENAME = "contact_sheet.jpg"
 
 
 def default_repo_root() -> Path:
@@ -127,6 +131,18 @@ class ProjectPaths:
 
     def scene_image_meta(self, scene_id: str) -> Path:
         return self.scene_visuals_dir(scene_id) / "image.meta.json"
+
+    def scene_image_review(self, scene_id: str) -> Path:
+        return self.scene_visuals_dir(scene_id) / IMAGE_REVIEW_FILENAME
+
+    def visual_bible_json(self) -> Path:
+        return self.stages_dir / VISUAL_BIBLE_FILENAME
+
+    def image_batch_manifest(self) -> Path:
+        return self.visuals_dir / IMAGE_BATCH_MANIFEST_FILENAME
+
+    def contact_sheet(self) -> Path:
+        return self.visuals_dir / CONTACT_SHEET_FILENAME
 
     def iter_layout_dirs(self) -> tuple[Path, ...]:
         return (
