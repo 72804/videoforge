@@ -17,6 +17,7 @@ from docprod.exceptions import (
     MissingApiKeyError,
     PaidApiDisabledError,
     PaidApiNotConfirmedError,
+    StockProviderError,
     UnsafeProjectIdError,
 )
 from docprod.logging_utils import configure_logging
@@ -113,6 +114,10 @@ def doctor() -> None:
     table.add_row(
         "OPENAI_API_KEY_configured",
         str(settings.openai_key_configured()).lower(),
+    )
+    table.add_row(
+        "PEXELS_API_KEY_configured",
+        str(settings.pexels_key_configured()).lower(),
     )
     table.add_row("OPENAI_IMAGE_MODEL", settings.openai_image_model)
     table.add_row("ffmpeg_path", resolved or "NOT FOUND")
@@ -544,6 +549,96 @@ def generate_graphics_cmd(
     console.print(f"graphics={len(manifests)} cache_hits={hits}")
     if sheet:
         console.print(f"Graphics contact sheet {sheet}")
+
+
+@app.command("search-stock")
+def search_stock_cmd(
+    project_id: str = typer.Argument(...),
+    scene_id: str | None = typer.Option(None, "--scene", help="Limit search to one scene id"),
+) -> None:
+    """Search Pexels for stock-video scenes. Metadata and contact sheets only; no download."""
+    from docprod.pipeline.search_stock import search_stock
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    try:
+        manifest = search_stock(
+            project_dir,
+            project=project,
+            plan=plan,
+            scene_id=scene_id,
+        )
+    except (MissingApiKeyError, StockProviderError) as exc:
+        _fail(str(exc))
+    console.print(
+        "ratelimit "
+        f"limit={manifest.ratelimit_limit} "
+        f"remaining={manifest.ratelimit_remaining} "
+        f"reset={manifest.ratelimit_reset}"
+    )
+    for item in manifest.scenes:
+        console.print(
+            f"{item.scene_id} queries={item.queries} unique={len(item.candidates)} "
+            f"sheet={item.contact_sheet}"
+        )
+    console.print(f"Wrote {project_dir.stock_candidates_json()}")
+
+
+@app.command("select-stock")
+def select_stock_cmd(
+    project_id: str = typer.Argument(...),
+    scene_id: str = typer.Argument(...),
+    pexels_video_id: str = typer.Argument(...),
+) -> None:
+    """Download a previously searched Pexels candidate and normalize a scene clip."""
+    from docprod.pipeline.search_stock import select_stock
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    try:
+        meta = select_stock(
+            project_dir,
+            project=project,
+            plan=plan,
+            scene_id=scene_id,
+            video_id=pexels_video_id,
+        )
+    except (MissingApiKeyError, StockProviderError) as exc:
+        _fail(str(exc))
+    console.print(
+        f"Selected {scene_id} pexels={meta.provider_video_id} "
+        f"sha256={meta.sha256} clip={meta.clip_path}"
+    )
+
+
+@app.command("select-stock-auto")
+def select_stock_auto_cmd(
+    project_id: str = typer.Argument(...),
+    scene_id: str = typer.Argument(...),
+) -> None:
+    """Pick the highest-scoring non-rejected candidate. Prefer human select-stock first."""
+    from docprod.pipeline.search_stock import select_stock_auto
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    try:
+        meta = select_stock_auto(
+            project_dir,
+            project=project,
+            plan=plan,
+            scene_id=scene_id,
+        )
+    except (MissingApiKeyError, StockProviderError) as exc:
+        _fail(str(exc))
+    console.print(
+        f"Auto-selected {scene_id} pexels={meta.provider_video_id} sha256={meta.sha256}"
+    )
 
 
 @app.command("render-graphic")

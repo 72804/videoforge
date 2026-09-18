@@ -19,6 +19,8 @@ IMAGE_BATCH_MANIFEST_FILENAME = "image_batch_manifest.json"
 CONTACT_SHEET_FILENAME = "contact_sheet.jpg"
 CONTACT_SHEET_REPAIRS_FILENAME = "contact_sheet_repairs.jpg"
 GRAPHICS_CONTACT_SHEET_FILENAME = "graphics_contact_sheet.jpg"
+STOCK_CANDIDATES_FILENAME = "stock_candidates.json"
+STOCK_CREDITS_FILENAME = "stock_sources.json"
 
 
 def default_repo_root() -> Path:
@@ -178,6 +180,42 @@ class ProjectPaths:
     def graphics_contact_sheet(self) -> Path:
         return self.graphics_dir / GRAPHICS_CONTACT_SHEET_FILENAME
 
+    @property
+    def stock_dir(self) -> Path:
+        return self.artifacts_dir / "stock"
+
+    @property
+    def stock_candidates_dir(self) -> Path:
+        return self.stock_dir / "candidates"
+
+    def stock_scene_dir(self, scene_id: str) -> Path:
+        return self.stock_dir / scene_id
+
+    def stock_source_mp4(self, scene_id: str) -> Path:
+        return self.stock_scene_dir(scene_id) / "source.mp4"
+
+    def stock_source_meta(self, scene_id: str) -> Path:
+        return self.stock_scene_dir(scene_id) / "source.meta.json"
+
+    def stock_clip_mp4(self, scene_id: str) -> Path:
+        return self.stock_scene_dir(scene_id) / "clip.mp4"
+
+    def stock_candidates_json(self) -> Path:
+        return self.stock_candidates_dir / STOCK_CANDIDATES_FILENAME
+
+    def stock_scene_candidates_sheet(self, scene_id: str) -> Path:
+        return self.stock_candidates_dir / f"{scene_id}_candidates.jpg"
+
+    @property
+    def credits_dir(self) -> Path:
+        return self.artifacts_dir / "credits"
+
+    def stock_credits_json(self) -> Path:
+        return self.credits_dir / STOCK_CREDITS_FILENAME
+
+    def stock_credits_txt(self) -> Path:
+        return self.credits_dir / "credits.txt"
+
     def scene_image_history_dir(self, scene_id: str) -> Path:
         return self.scene_visuals_dir(scene_id) / "history"
 
@@ -193,6 +231,8 @@ class ProjectPaths:
             self.audio_dir,
             self.visuals_dir,
             self.graphics_dir,
+            self.stock_dir,
+            self.credits_dir,
             self.subtitles_dir,
             self.render_dir,
             self.logs_dir,

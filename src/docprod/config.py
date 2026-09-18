@@ -27,9 +27,16 @@ class Settings(BaseSettings):
     openai_image_size: str = Field(default="1536x864")
     openai_image_quality: str = Field(default="medium")
     openai_image_output_format: str = Field(default="jpeg")
+    pexels_api_key: SecretStr | None = Field(default=None)
 
     def openai_key_configured(self) -> bool:
         secret = self.openai_api_key
+        if secret is None:
+            return False
+        return bool(secret.get_secret_value().strip())
+
+    def pexels_key_configured(self) -> bool:
+        secret = self.pexels_api_key
         if secret is None:
             return False
         return bool(secret.get_secret_value().strip())
@@ -67,6 +74,15 @@ def require_paid_call_allowed(
             f"Paid call to {provider_name!r} requires --confirm-paid in addition to "
             "ALLOW_PAID_APIS=true."
         )
+
+
+def require_pexels_api_key(settings: Settings | None = None) -> str:
+    cfg = settings if settings is not None else get_settings()
+    if not cfg.pexels_key_configured():
+        raise MissingApiKeyError(
+            "PEXELS_API_KEY is not set. Add it to .env (never commit the file)."
+        )
+    return cfg.pexels_api_key.get_secret_value()  # type: ignore[union-attr]
 
 
 def require_openai_api_key(settings: Settings | None = None) -> str:

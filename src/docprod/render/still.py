@@ -8,10 +8,12 @@ from docprod.graphics.renderer import GRAPHIC_STRATEGIES
 from docprod.models.enums import AssetStrategy
 from docprod.models.scene import Scene
 from docprod.providers.image_config import GeneratedImageManifest
+from docprod.stock.models import StockSourceManifest
 from docprod.storage.json_store import load_model
 from docprod.storage.paths import ProjectPaths
 
 IMAGE_STRATEGIES = frozenset({AssetStrategy.ai_image, AssetStrategy.ai_image_to_video})
+STOCK_STRATEGIES = frozenset({AssetStrategy.stock_video, AssetStrategy.archive_video})
 
 
 @dataclass(frozen=True)
@@ -136,8 +138,40 @@ def resolve_local_graphic(paths: ProjectPaths, scene: Scene) -> VisualSource | N
     )
 
 
+def resolve_stock_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
+    if scene.asset_strategy not in STOCK_STRATEGIES:
+        return None
+    meta_path = paths.stock_source_meta(scene.id)
+    if not meta_path.is_file():
+        return None
+    try:
+        meta = load_model(meta_path, StockSourceManifest)
+    except (OSError, ValueError):
+        return None
+    clip = paths.stock_clip_mp4(scene.id)
+    if meta.clip_path:
+        candidate = Path(meta.clip_path)
+        if candidate.is_file():
+            clip = candidate
+        else:
+            nested = (paths.root / meta.clip_path).resolve()
+            if nested.is_file():
+                clip = nested
+    if not clip.is_file() or not meta.clip_sha256:
+        return None
+    return VisualSource(
+        path=clip,
+        sha256=meta.clip_sha256,
+        kind="stock_video",
+        strategy_rendered="stock_video",
+    )
+
+
 def resolve_scene_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
-    """AI still/keyframe, then local graphic/map, else None (placeholder)."""
+    """AI video (later) > stock/archive clip > AI still > local graphic > placeholder."""
+    stock = resolve_stock_visual(paths, scene)
+    if stock is not None:
+        return stock
     if scene.asset_strategy in IMAGE_STRATEGIES:
         still = resolve_generated_still(paths, scene.id)
         if still is not None:

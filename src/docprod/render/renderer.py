@@ -119,16 +119,21 @@ def _render_one_segment(
     font: Path,
     use_cache: bool,
 ) -> SegmentRecord:
-    params = effect_params(
-        scene.effect,
-        seed=project.random_seed,
-        scene_id=scene.id,
-        renderer_version=profile.renderer_version,
-    )
     trans_rendered, trans_fallback = _transition_rendered(scene.transition)
     frames = frame_count_for_span(scene.start, scene.end, profile.fps)
     duration = frames / profile.fps
     visual = resolve_scene_visual(paths, scene)
+    effect = scene.effect
+    effect_override_reason = None
+    if visual is not None and visual.kind == "stock_video":
+        effect = VisualEffect.none
+        effect_override_reason = "native_video_motion"
+    params = effect_params(
+        effect,
+        seed=project.random_seed,
+        scene_id=scene.id,
+        renderer_version=profile.renderer_version,
+    )
     still_sha = visual.sha256 if visual else None
     input_hash = segment_input_hash(
         scene,
@@ -234,7 +239,40 @@ def _render_one_segment(
                 and visual.map_mask.is_file()
                 and visual.map_ring.is_file()
             )
-            if map_layers:
+            if visual.kind == "stock_video":
+                try:
+                    probe = probe_media(visual.path)
+                    src_w = probe.width or canvas_w
+                    src_h = probe.height or canvas_h
+                except FFmpegError:
+                    src_w, src_h = canvas_w, canvas_h
+                fit = still_fit_filter(src_w, src_h, canvas_w, canvas_h)
+                vf = f"{fit},fps={profile.fps},format=yuv420p"
+                run_ffmpeg(
+                    [
+                        "-i",
+                        str(visual.path),
+                        "-t",
+                        f"{duration:.4f}",
+                        "-frames:v",
+                        str(frames),
+                        "-an",
+                        "-vf",
+                        vf,
+                        "-c:v",
+                        profile.video_codec,
+                        "-pix_fmt",
+                        "yuv420p",
+                        "-preset",
+                        profile.preset,
+                        "-crf",
+                        str(profile.crf),
+                        str(tmp),
+                    ],
+                    timeout=180,
+                )
+                summary = "stock-video-cover,libx264,yuv420p,no-audio"
+            elif map_layers:
                 from PIL import Image
 
                 from docprod.graphics.map import composite_map_frame
@@ -343,7 +381,7 @@ def _render_one_segment(
         duration=duration,
         frame_count=frames,
         strategy=scene.asset_strategy,
-        effect_requested=params.requested,
+        effect_requested=scene.effect,
         effect_rendered=params.rendered,
         fallback_used=params.fallback,
         transition_requested=scene.transition,
@@ -355,6 +393,7 @@ def _render_one_segment(
         source_asset=source_asset,
         strategy_requested=scene.asset_strategy,
         strategy_rendered=strategy_rendered,
+        effect_override_reason=effect_override_reason,
     )
     save_model(meta_path, record)
     return record

@@ -10,6 +10,10 @@ class MissingApiKeyError(RuntimeError):
     """Raised when a required provider API key is not configured."""
 
 
+class StockProviderError(RuntimeError):
+    """Raised when a stock provider request fails without leaking secrets."""
+
+
 class MaxPaidRequestsExceededError(RuntimeError):
     """Raised when a batch would exceed the explicit paid-request cap."""
 

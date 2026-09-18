@@ -82,6 +82,7 @@ class SegmentRecord(BaseModel):
     source_asset: str | None = None
     strategy_requested: AssetStrategy | None = None
     strategy_rendered: str | None = None
+    effect_override_reason: str | None = None
 
 
 class RenderManifest(BaseModel):
