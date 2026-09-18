@@ -13,6 +13,7 @@ from docprod import __version__
 from docprod.config import get_settings
 from docprod.demo import build_demo_scene_plan
 from docprod.exceptions import (
+    AlignmentQualityError,
     MaxPaidRequestsExceededError,
     MissingApiKeyError,
     PaidApiDisabledError,
@@ -121,6 +122,8 @@ def doctor() -> None:
         str(settings.pexels_key_configured()).lower(),
     )
     table.add_row("OPENAI_IMAGE_MODEL", settings.openai_image_model)
+    table.add_row("OPENAI_TTS_MODEL", settings.openai_tts_model)
+    table.add_row("OPENAI_TTS_VOICE", settings.openai_tts_voice)
     table.add_row("ffmpeg_path", resolved or "NOT FOUND")
     table.add_row(
         "ffmpeg",
@@ -552,6 +555,60 @@ def generate_graphics_cmd(
         console.print(f"Graphics contact sheet {sheet}")
 
 
+@app.command("generate-narration")
+def generate_narration_cmd(
+    project_id: str = typer.Argument(...),
+    confirm_paid: bool = typer.Option(
+        False,
+        "--confirm-paid",
+        help="Required for the real OpenAI TTS + Whisper calls.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Write script and print plan; no API."),
+) -> None:
+    """Generate one continuous Turkish narration and word-align it. Two paid calls."""
+    from docprod.pipeline.generate_narration import generate_narration, prepare_narration
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    settings = get_settings()
+    prepared = prepare_narration(project_dir, plan, settings=settings)
+    console.print(f"provider={prepared.provider}")
+    console.print(f"model={prepared.model}")
+    console.print(f"voice={prepared.voice}")
+    console.print(f"speed={prepared.speed}")
+    console.print(f"character_count={prepared.character_count}")
+    console.print(f"output_path={prepared.output_wav}")
+    console.print(f"instructions={prepared.instructions}")
+    console.print(f"script_path={project_dir.narration_script_txt()}")
+    if dry_run:
+        console.print(prepared.script.text)
+        return
+    try:
+        result = generate_narration(
+            project_dir,
+            project=project,
+            plan=plan,
+            confirm_paid=confirm_paid,
+            settings=settings,
+        )
+    except (
+        PaidApiDisabledError,
+        PaidApiNotConfirmedError,
+        MissingApiKeyError,
+        AlignmentQualityError,
+    ) as exc:
+        _fail(str(exc))
+    console.print(
+        f"tts_requests={result.tts_request_count} "
+        f"whisper_requests={result.whisper_request_count} "
+        f"duration={result.meta.duration:.3f}s "
+        f"match={result.alignment.match_fraction:.3f}"
+    )
+    console.print(f"timeline {project_dir.runtime_timeline_json()}")
+
+
 @app.command("search-stock")
 def search_stock_cmd(
     project_id: str = typer.Argument(...),
@@ -724,6 +781,11 @@ def render_preview_cmd(
         "--allow-placeholders",
         help="Allow debug placeholder cards (tests and incomplete projects).",
     ),
+    narrated: bool = typer.Option(
+        False,
+        "--narrated",
+        help="Render documentary_preview_narrated.mp4 from the runtime timeline.",
+    ),
 ) -> None:
     """Render a 720p documentary preview with FFmpeg. No paid APIs."""
     import time
@@ -742,22 +804,57 @@ def render_preview_cmd(
             require_zero_placeholders(project_dir, plan)
         except ZeroPlaceholderError as exc:
             _fail(str(exc))
-    stats = summarize_scene_plan(plan)
+    runtime_plan = plan
+    if narrated:
+        from docprod.pipeline.generate_narration import load_runtime_plan, retime_stock_for_runtime
+
+        if not project_dir.runtime_timeline_json().is_file():
+            _fail("Missing runtime timeline. Run generate-narration first.")
+        if not project_dir.narration_master_wav().is_file():
+            _fail("Missing master narration WAV.")
+        runtime_plan = load_runtime_plan(project_dir, plan)
+        try:
+            retime_stock_for_runtime(
+                project_dir, plan=runtime_plan, seed=project.random_seed
+            )
+        except ValueError as exc:
+            _fail(str(exc))
+    stats = summarize_scene_plan(runtime_plan)
     console.print(
         f"Preview render {project_id}: {stats.scene_count} scenes, "
         f"{stats.total_duration:.2f}s plan, strategies={stats.strategy_counts}"
     )
     started = time.perf_counter()
     try:
-        result, skipped, _hash = execute_preview_render(
-            project_dir,
-            project=project,
-            plan=plan,
-            force=force,
-            workers=workers,
-            use_cache=not no_cache,
-            progress=lambda message: console.print(message),
-        )
+        if narrated:
+            from docprod.render.models import PreviewRenderProfile
+            from docprod.render.renderer import render_preview
+
+            result = render_preview(
+                project_dir,
+                project=project,
+                plan=runtime_plan,
+                profile=PreviewRenderProfile(),
+                workers=workers,
+                use_cache=not no_cache,
+                progress=lambda message: console.print(message),
+                output_mp4=project_dir.preview_narrated_mp4(),
+                manifest_path=project_dir.preview_narrated_manifest(),
+                captions_srt=project_dir.captions_narrated_srt(),
+                captions_ass=project_dir.captions_narrated_ass(),
+                narration_wav=project_dir.narration_master_wav(),
+            )
+            skipped = False
+        else:
+            result, skipped, _hash = execute_preview_render(
+                project_dir,
+                project=project,
+                plan=runtime_plan,
+                force=force,
+                workers=workers,
+                use_cache=not no_cache,
+                progress=lambda message: console.print(message),
+            )
     except FFmpegError as exc:
         _fail(str(exc))
     except Exception as exc:
@@ -803,13 +900,17 @@ def render_scene_cmd(
 @app.command("inspect-render")
 def inspect_render_cmd(
     project_id: str = typer.Argument(...),
+    narrated: bool = typer.Option(False, "--narrated"),
 ) -> None:
     """Inspect the preview MP4 and render manifest."""
     project_dir, _project = _load_project(project_id)
     table = Table(title=f"render {project_id}", show_header=False)
     table.add_column("k")
     table.add_column("v")
-    final = project_dir.preview_mp4
+    final = project_dir.preview_narrated_mp4() if narrated else project_dir.preview_mp4
+    manifest_path = (
+        project_dir.preview_narrated_manifest() if narrated else project_dir.preview_manifest
+    )
     table.add_row("final_path", str(final))
     table.add_row("exists", str(final.is_file()).lower())
     if not final.is_file():
@@ -831,10 +932,21 @@ def inspect_render_cmd(
         table.add_row("error", str(exc))
         console.print(table)
         return
-    table.add_row("captions.srt", str(project_dir.captions_srt.is_file()).lower())
-    table.add_row("captions.ass", str(project_dir.captions_ass.is_file()).lower())
-    if project_dir.preview_manifest.is_file():
-        manifest = load_model(project_dir.preview_manifest, RenderManifest)
+    table.add_row("captions.srt", str(
+        (project_dir.captions_narrated_srt() if narrated else project_dir.captions_srt).is_file()
+    ).lower())
+    table.add_row("captions.ass", str(
+        (project_dir.captions_narrated_ass() if narrated else project_dir.captions_ass).is_file()
+    ).lower())
+    if narrated and project_dir.narration_master_meta().is_file():
+        from docprod.audio.models import NarrationMasterMeta
+
+        nmeta = load_model(project_dir.narration_master_meta(), NarrationMasterMeta)
+        if nmeta.loudness:
+            table.add_row("input_i", nmeta.loudness.get("input_i", ""))
+            table.add_row("input_tp", nmeta.loudness.get("input_tp", ""))
+    if manifest_path.is_file():
+        manifest = load_model(manifest_path, RenderManifest)
         table.add_row("scene_count", str(manifest.scene_count))
         table.add_row("segment_count", str(len(manifest.segments)))
         table.add_row("cache_hits", str(sum(1 for s in manifest.segments if s.cache_hit)))
@@ -871,6 +983,7 @@ def inspect_render_cmd(
 @app.command("inspect-assets")
 def inspect_assets_cmd(
     project_id: str = typer.Argument(...),
+    runtime: bool = typer.Option(False, "--runtime"),
 ) -> None:
     """List resolved visual sources for every scene. Fails if any placeholder remains."""
     from docprod.pipeline.inspect_assets import inspect_assets, placeholder_scene_ids
@@ -879,28 +992,95 @@ def inspect_assets_cmd(
     if not project_dir.scene_plan_json.is_file():
         _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
     plan = load_model(project_dir.scene_plan_json, ScenePlan)
-    rows = inspect_assets(project_dir, plan)
+    rows = inspect_assets(project_dir, plan, runtime=runtime)
     table = Table(title=f"assets {project_id}")
     table.add_column("scene")
     table.add_column("strategy")
     table.add_column("source")
     table.add_column("label")
-    table.add_column("provider")
-    table.add_column("path")
+    table.add_column("planned")
+    table.add_column("runtime")
+    table.add_column("stock_ok")
     for row in rows:
         table.add_row(
             row.scene_id,
             row.strategy_requested,
             row.source_type,
             row.source_label,
-            row.provider,
-            row.artifact_path,
+            f"{row.planned_duration:.2f}",
+            "" if row.runtime_duration is None else f"{row.runtime_duration:.2f}",
+            "" if row.stock_covers_runtime is None else str(row.stock_covers_runtime).lower(),
         )
     console.print(table)
     missing = placeholder_scene_ids(rows)
     console.print(f"placeholders={len(missing)}")
     if missing:
         _fail("Placeholder visuals remain for: " + ", ".join(missing))
+
+
+@app.command("inspect-narration")
+def inspect_narration_cmd(
+    project_id: str = typer.Argument(...),
+) -> None:
+    """Show TTS, alignment, and runtime timeline status."""
+    from docprod.audio.models import AlignmentReport, NarrationMasterMeta, RuntimeTimeline
+    from docprod.audio.script import tokenize_display
+
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    table = Table(title=f"narration {project_id}", show_header=False)
+    table.add_column("k")
+    table.add_column("v")
+    if project_dir.narration_master_meta().is_file():
+        meta = load_model(project_dir.narration_master_meta(), NarrationMasterMeta)
+        table.add_row("model", meta.model)
+        table.add_row("voice", meta.voice)
+        table.add_row("audio_duration", f"{meta.duration:.3f}s")
+        table.add_row("tts_requests", str(meta.tts_request_count))
+        table.add_row("whisper_requests", str(meta.whisper_request_count))
+    script = project_dir.narration_script_txt()
+    if script.is_file():
+        text = script.read_text(encoding="utf-8")
+        table.add_row("script_chars", str(len(text.strip())))
+        table.add_row("script_words", str(len(tokenize_display(text))))
+    if project_dir.narration_alignment_json().is_file():
+        alignment = load_model(project_dir.narration_alignment_json(), AlignmentReport)
+        table.add_row("matched_fraction", f"{alignment.match_fraction:.4f}")
+        table.add_row("matched", str(alignment.matched_word_count))
+        table.add_row("interpolated", str(alignment.interpolated_word_count))
+        table.add_row("unmatched", str(alignment.unmatched_word_count))
+        table.add_row("quality_passed", str(alignment.quality_passed).lower())
+    if project_dir.runtime_timeline_json().is_file():
+        timeline = load_model(project_dir.runtime_timeline_json(), RuntimeTimeline)
+        durs = [item.duration for item in timeline.scenes]
+        table.add_row("runtime_scenes", str(len(timeline.scenes)))
+        table.add_row("runtime_duration", f"{timeline.total_duration:.3f}s")
+        table.add_row("min_scene", f"{min(durs):.3f}s")
+        table.add_row("max_scene", f"{max(durs):.3f}s")
+        if project_dir.narration_master_meta().is_file():
+            meta = load_model(project_dir.narration_master_meta(), NarrationMasterMeta)
+            if meta.loudness:
+                table.add_row("loudness_input_i", meta.loudness.get("input_i", ""))
+                table.add_row("loudness_input_tp", meta.loudness.get("input_tp", ""))
+    console.print(table)
+    if project_dir.runtime_timeline_json().is_file():
+        timeline = load_model(project_dir.runtime_timeline_json(), RuntimeTimeline)
+        scenes = Table(title="scene durations")
+        scenes.add_column("scene")
+        scenes.add_column("planned")
+        scenes.add_column("runtime")
+        scenes.add_column("snippet")
+        planned = {item.id: item.duration for item in plan.scenes}
+        for item in timeline.scenes:
+            scenes.add_row(
+                item.scene_id,
+                f"{planned.get(item.scene_id, 0):.2f}",
+                f"{item.duration:.2f}",
+                item.narration[:48],
+            )
+        console.print(scenes)
 
 
 @app.command("audit-motion")

@@ -21,6 +21,8 @@ CONTACT_SHEET_REPAIRS_FILENAME = "contact_sheet_repairs.jpg"
 GRAPHICS_CONTACT_SHEET_FILENAME = "graphics_contact_sheet.jpg"
 STOCK_CANDIDATES_FILENAME = "stock_candidates.json"
 STOCK_CREDITS_FILENAME = "stock_sources.json"
+RUNTIME_TIMELINE_FILENAME = "06_runtime_timeline.json"
+NARRATED_PREVIEW_FILENAME = "documentary_preview_narrated.mp4"
 
 
 def default_repo_root() -> Path:
@@ -216,6 +218,43 @@ class ProjectPaths:
     def stock_credits_txt(self) -> Path:
         return self.credits_dir / "credits.txt"
 
+    @property
+    def narration_dir(self) -> Path:
+        return self.audio_dir / "narration"
+
+    def narration_script_txt(self) -> Path:
+        return self.narration_dir / "script.txt"
+
+    def narration_script_spans(self) -> Path:
+        return self.narration_dir / "script_spans.json"
+
+    def narration_master_wav(self) -> Path:
+        return self.narration_dir / "master.wav"
+
+    def narration_master_meta(self) -> Path:
+        return self.narration_dir / "master.meta.json"
+
+    def whisper_alignment_json(self) -> Path:
+        return self.narration_dir / "whisper_alignment.json"
+
+    def narration_alignment_json(self) -> Path:
+        return self.narration_dir / "alignment.json"
+
+    def runtime_timeline_json(self) -> Path:
+        return self.stages_dir / RUNTIME_TIMELINE_FILENAME
+
+    def preview_narrated_mp4(self) -> Path:
+        return self.preview_dir / NARRATED_PREVIEW_FILENAME
+
+    def preview_narrated_manifest(self) -> Path:
+        return self.preview_dir / "render_manifest_narrated.json"
+
+    def captions_narrated_srt(self) -> Path:
+        return self.preview_dir / "captions_narrated.srt"
+
+    def captions_narrated_ass(self) -> Path:
+        return self.preview_dir / "captions_narrated.ass"
+
     def scene_image_history_dir(self, scene_id: str) -> Path:
         return self.scene_visuals_dir(scene_id) / "history"
 
@@ -238,6 +277,7 @@ class ProjectPaths:
             self.logs_dir,
             self.preview_dir,
             self.preview_segments_dir,
+            self.narration_dir,
         )
 
 

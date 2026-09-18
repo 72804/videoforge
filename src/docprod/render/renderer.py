@@ -416,16 +416,23 @@ def render_preview(
     workers: int | None = None,
     use_cache: bool = True,
     progress: ProgressFn | None = None,
+    output_mp4: Path | None = None,
+    manifest_path: Path | None = None,
+    captions_srt: Path | None = None,
+    captions_ass: Path | None = None,
+    narration_wav: Path | None = None,
 ) -> PreviewRenderResult:
     require_perspective_filter()
     if profile.burn_subtitles:
         require_subtitles_filter()
     font = discover_font()
     paths.preview_segments_dir.mkdir(parents=True, exist_ok=True)
+    srt_path = captions_srt or paths.captions_srt
+    ass_path = captions_ass or paths.captions_ass
     write_captions(
         plan,
-        srt_path=paths.captions_srt,
-        ass_path=paths.captions_ass,
+        srt_path=srt_path,
+        ass_path=ass_path,
         play_res_x=profile.width,
         play_res_y=profile.height,
         font_name=_ass_font_name(font),
@@ -490,24 +497,30 @@ def render_preview(
         vf_parts = []
         if profile.burn_subtitles:
             vf_parts.append(
-                f"subtitles={escape_filter_path(paths.captions_ass)}:"
+                f"subtitles={escape_filter_path(ass_path)}:"
                 f"fontsdir={escape_filter_path(font.parent)}"
             )
         expected = sum(item.frame_count for item in ordered) / profile.fps
         args = [
             "-i",
             str(concat_tmp),
-            "-f",
-            "lavfi",
-            "-t",
-            f"{expected + 1.0:.4f}",
-            "-i",
-            f"anullsrc=r={profile.audio_sample_rate}:cl=stereo",
         ]
+        if narration_wav is not None:
+            args.extend(["-i", str(narration_wav)])
+        else:
+            args.extend(
+                [
+                    "-f",
+                    "lavfi",
+                    "-t",
+                    f"{expected + 1.0:.4f}",
+                    "-i",
+                    f"anullsrc=r={profile.audio_sample_rate}:cl=stereo",
+                ]
+            )
         if vf_parts:
             args.extend(["-vf", ",".join(vf_parts)])
-        args.extend(
-            [
+        encode = [
                 "-map",
                 "0:v:0",
                 "-map",
@@ -528,6 +541,16 @@ def render_preview(
                 str(profile.audio_sample_rate),
                 "-ac",
                 "2",
+        ]
+        if narration_wav is not None:
+            encode.extend(
+                [
+                    "-af",
+                    "loudnorm=I=-16:TP=-1.5:LRA=11,aformat=channel_layouts=stereo",
+                ]
+            )
+        encode.extend(
+            [
                 "-t",
                 f"{expected:.6f}",
                 "-movflags",
@@ -535,13 +558,17 @@ def render_preview(
                 str(final_tmp),
             ]
         )
+        args.extend(encode)
         run_ffmpeg(args, timeout=300)
-        final_tmp.replace(paths.preview_mp4)
+        dest = output_mp4 or paths.preview_mp4
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        final_tmp.replace(dest)
     finally:
         concat_tmp.unlink(missing_ok=True)
         final_tmp.unlink(missing_ok=True)
 
-    probe = probe_media(paths.preview_mp4)
+    dest = output_mp4 or paths.preview_mp4
+    probe = probe_media(dest)
     expected = sum(item.frame_count for item in ordered) / profile.fps
     manifest = RenderManifest(
         renderer_version=profile.renderer_version,
@@ -555,17 +582,17 @@ def render_preview(
         width=profile.width,
         height=profile.height,
         fps=profile.fps,
-        subtitle_srt=str(paths.captions_srt),
-        subtitle_ass=str(paths.captions_ass),
-        final_output=str(paths.preview_mp4),
+        subtitle_srt=str(srt_path),
+        subtitle_ass=str(ass_path),
+        final_output=str(dest),
         ffmpeg_version=ffmpeg_version_line(),
         ffprobe_version=ffprobe_version_line(),
         font_path=str(font),
         fallback_count=sum(1 for item in ordered if item.fallback_used),
         segments=ordered,
-        final_output_sha256=file_sha256(paths.preview_mp4),
+        final_output_sha256=file_sha256(dest),
     )
-    save_model(paths.preview_manifest, manifest)
+    save_model(manifest_path or paths.preview_manifest, manifest)
     if not probe.has_video or not probe.has_audio:
         raise FFmpegError("Final preview is missing video or audio stream")
     if probe.width != profile.width or probe.height != profile.height:

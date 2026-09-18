@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from docprod.audio.models import RuntimeTimeline
 from docprod.exceptions import ZeroPlaceholderError
 from docprod.models.scene import Scene, ScenePlan
 from docprod.render.still import resolve_scene_visual
@@ -26,6 +27,10 @@ class AssetInspectionRow:
     artifact_path: str
     effect_requested: str
     provider: str
+    planned_duration: float = 0.0
+    runtime_duration: float | None = None
+    stock_source_duration: float | None = None
+    stock_covers_runtime: bool | None = None
 
 
 def _provider_for(paths: ProjectPaths, scene: Scene, kind: str) -> str:
@@ -45,10 +50,30 @@ def _provider_for(paths: ProjectPaths, scene: Scene, kind: str) -> str:
     return meta.provider
 
 
-def inspect_assets(paths: ProjectPaths, plan: ScenePlan) -> list[AssetInspectionRow]:
+def inspect_assets(
+    paths: ProjectPaths,
+    plan: ScenePlan,
+    *,
+    runtime: bool = False,
+) -> list[AssetInspectionRow]:
+    timeline = None
+    if runtime and paths.runtime_timeline_json().is_file():
+        timeline = load_model(paths.runtime_timeline_json(), RuntimeTimeline)
+    by_runtime = {item.scene_id: item for item in timeline.scenes} if timeline else {}
     rows: list[AssetInspectionRow] = []
     for scene in plan.scenes:
         visual = resolve_scene_visual(paths, scene)
+        runtime_duration = by_runtime[scene.id].duration if scene.id in by_runtime else None
+        stock_dur = None
+        covers = None
+        if scene.asset_strategy.value in {"stock_video", "archive_video"}:
+            source = paths.stock_source_mp4(scene.id)
+            if source.is_file():
+                from docprod.render.ffmpeg import probe_media
+
+                stock_dur = probe_media(source).duration
+                need = runtime_duration if runtime_duration is not None else scene.duration
+                covers = stock_dur >= need + 0.25
         if visual is None:
             source_type = "placeholder"
             source_label = "placeholder"
@@ -75,6 +100,10 @@ def inspect_assets(paths: ProjectPaths, plan: ScenePlan) -> list[AssetInspection
                 artifact_path=artifact,
                 effect_requested=scene.effect.value,
                 provider=provider,
+                planned_duration=float(scene.duration),
+                runtime_duration=runtime_duration,
+                stock_source_duration=stock_dur,
+                stock_covers_runtime=covers,
             )
         )
     return rows

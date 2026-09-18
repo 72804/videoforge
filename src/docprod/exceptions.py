@@ -22,5 +22,9 @@ class MaxPaidRequestsExceededError(RuntimeError):
     """Raised when a batch would exceed the explicit paid-request cap."""
 
 
+class AlignmentQualityError(RuntimeError):
+    """Raised when Whisper-to-script alignment is too weak to retime the film."""
+
+
 class UnsafeProjectIdError(ValueError):
     """Raised when a project id would escape the projects root or is not filesystem-safe."""

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     openai_image_quality: str = Field(default="medium")
     openai_image_output_format: str = Field(default="jpeg")
     pexels_api_key: SecretStr | None = Field(default=None)
+    openai_tts_model: str = Field(default="gpt-4o-mini-tts")
+    openai_tts_voice: str = Field(default="cedar")
+    openai_tts_speed: float = Field(default=1.0)
 
     def openai_key_configured(self) -> bool:
         secret = self.openai_api_key

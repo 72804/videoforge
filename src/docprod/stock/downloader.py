@@ -136,6 +136,32 @@ def normalize_stock_clip(
     return file_sha256(dest)
 
 
+def reclip_stock_to_duration(
+    source: Path,
+    dest: Path,
+    *,
+    needed: float,
+    seed: int,
+    scene_id: str,
+) -> tuple[float, str]:
+    probe = probe_media(source)
+    source_duration = probe.duration
+    if source_duration < needed + 0.25:
+        raise ValueError(
+            f"Stock source for {scene_id} is {source_duration:.3f}s; "
+            f"runtime needs {needed:.3f}s and cannot loop"
+        )
+    start = pick_clip_start(
+        source_duration=source_duration,
+        needed=needed,
+        seed=seed,
+        scene_id=scene_id,
+    )
+    start = adjust_start_away_from_black(source, start, needed, source_duration)
+    sha = normalize_stock_clip(source, dest, start=start, duration=needed)
+    return start, sha
+
+
 def rendition_payload(file: StockVideoFile) -> dict[str, object]:
     return {
         "file_id": file.file_id,
