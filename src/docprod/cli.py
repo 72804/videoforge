@@ -14,10 +14,13 @@ from docprod.config import get_settings
 from docprod.demo import build_demo_scene_plan
 from docprod.exceptions import (
     AlignmentQualityError,
+    DossierValidationError,
     MaxPaidRequestsExceededError,
     MissingApiKeyError,
     PaidApiDisabledError,
     PaidApiNotConfirmedError,
+    ResearchQualityError,
+    ScriptValidationError,
     StockProviderError,
     UnsafeProjectIdError,
     ZeroPlaceholderError,
@@ -124,6 +127,10 @@ def doctor() -> None:
     table.add_row("OPENAI_IMAGE_MODEL", settings.openai_image_model)
     table.add_row("OPENAI_TTS_MODEL", settings.openai_tts_model)
     table.add_row("OPENAI_TTS_VOICE", settings.openai_tts_voice)
+    table.add_row("RESEARCH_PROVIDER", settings.research_provider)
+    table.add_row("RESEARCH_MODEL", settings.research_model)
+    table.add_row("DOSSIER_MODEL", settings.dossier_model)
+    table.add_row("WRITER_MODEL", settings.writer_model)
     table.add_row("ffmpeg_path", resolved or "NOT FOUND")
     table.add_row(
         "ffmpeg",
@@ -204,6 +211,278 @@ def init_project(
 
     action = "Updated" if exists else "Created"
     console.print(f"{action} project [bold]{project_id}[/bold] at {project_dir.root}")
+
+
+@app.command("init-research")
+def init_research_cmd(
+    project_id: str = typer.Argument(...),
+    topic: str = typer.Option(..., "--topic"),
+    language: str = typer.Option("tr", "--language"),
+    target_minutes: float = typer.Option(7.0, "--target-minutes"),
+    content_type: str = typer.Option(
+        "documentary / unusual crime / heist",
+        "--content-type",
+    ),
+    audience: str = typer.Option("general adult documentary viewers", "--audience"),
+    notes: str = typer.Option("", "--notes"),
+    force: bool = typer.Option(False, "--force"),
+) -> None:
+    """Create a project and 00_topic.json. No paid APIs."""
+    from docprod.research.models import TopicSpec
+
+    try:
+        project_dir = pathmod.project_paths(project_id)
+    except UnsafeProjectIdError as exc:
+        _fail(str(exc))
+    exists = project_dir.project_json.is_file()
+    if exists and not force and project_dir.topic_json().is_file():
+        _fail(f"Research topic already exists: {project_dir.topic_json()}. Use --force.")
+    now = _utc_now()
+    created_at = now
+    if exists:
+        try:
+            existing = load_model(project_dir.project_json, Project)
+            created_at = existing.created_at
+        except Exception:
+            created_at = now
+    project = Project(
+        id=project_id,
+        title=topic[:80],
+        language=language,
+        target_duration_seconds=max(target_minutes, 0.1) * 60.0,
+        created_at=created_at,
+        updated_at=now,
+        random_seed=42,
+        metadata={"content_type": content_type},
+    )
+    pathmod.ensure_project_layout(project_dir)
+    save_model(project_dir.project_json, project)
+    spec = TopicSpec(
+        project_id=project_id,
+        topic=topic,
+        language=language,
+        target_runtime_minutes=target_minutes,
+        target_audience=audience,
+        content_type=content_type,
+        research_notes_optional=notes,
+    )
+    save_model(project_dir.topic_json(), spec)
+    console.print(f"Wrote {project_dir.topic_json()}")
+
+
+@app.command("research-topic")
+def research_topic_cmd(
+    project_id: str = typer.Argument(...),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Web-research a topic with OpenAI Responses + web_search. One paid research request."""
+    from docprod.pipeline.research_topic import prepare_research, run_research_topic
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.topic_json().is_file():
+        _fail("Missing 00_topic.json. Run init-research first.")
+    prepared = prepare_research(project_dir)
+    console.print(f"topic={prepared.topic.topic}")
+    console.print(f"research_model={prepared.model}")
+    console.print(f"max_web_tool_calls={prepared.max_tool_calls}")
+    console.print("research_objectives=timeline,locations,orgs,quantity/value,")
+    console.print("discovery,investigation,legal_outcomes,recovery,disputed_figures")
+    for path in prepared.expected_paths:
+        console.print(f"expected_path={path}")
+    console.print("paid_call_warning=ALLOW_PAID_APIS=true AND --confirm-paid required")
+    if dry_run:
+        console.print("dry_run=true (zero network calls)")
+        return
+    try:
+        result = run_research_topic(
+            project_dir,
+            project=project,
+            confirm_paid=confirm_paid,
+        )
+    except (
+        PaidApiDisabledError,
+        PaidApiNotConfirmedError,
+        MissingApiKeyError,
+        ResearchQualityError,
+    ) as exc:
+        _fail(str(exc))
+    console.print(
+        f"cache_hit={str(result.cache_hit).lower()} "
+        f"requests={result.request_count} "
+        f"sources={len(result.registry.sources)} "
+        f"quality={'pass' if result.quality.passed else 'fail'}"
+    )
+
+
+@app.command("build-dossier")
+def build_dossier_cmd(
+    project_id: str = typer.Argument(...),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Extract a sourced fact dossier. No web_search. One paid request unless cached."""
+    from docprod.pipeline.build_dossier import run_build_dossier
+
+    project_dir, _project = _load_project(project_id)
+    try:
+        dossier, summary, cache_hit, requests = run_build_dossier(
+            project_dir,
+            confirm_paid=confirm_paid,
+        )
+    except (
+        PaidApiDisabledError,
+        PaidApiNotConfirmedError,
+        MissingApiKeyError,
+        ResearchQualityError,
+        DossierValidationError,
+    ) as exc:
+        _fail(str(exc))
+    console.print(
+        f"cache_hit={str(cache_hit).lower()} requests={requests} "
+        f"facts={summary.fact_count} unsupported={summary.unsupported_fact_count}"
+    )
+    console.print(f"dossier {project_dir.research_dossier_json()}")
+
+
+@app.command("write-script")
+def write_script_cmd(
+    project_id: str = typer.Argument(...),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Write a Turkish documentary narration from the dossier. No web_search."""
+    from docprod.pipeline.research_review import write_research_review
+    from docprod.pipeline.write_script import run_write_script
+
+    project_dir, _project = _load_project(project_id)
+    try:
+        script, cache_hit, requests = run_write_script(
+            project_dir,
+            confirm_paid=confirm_paid,
+        )
+    except (
+        PaidApiDisabledError,
+        PaidApiNotConfirmedError,
+        MissingApiKeyError,
+        DossierValidationError,
+        ScriptValidationError,
+    ) as exc:
+        _fail(str(exc))
+    review = write_research_review(project_dir)
+    console.print(
+        f"cache_hit={str(cache_hit).lower()} requests={requests} "
+        f"words={script.word_count} runtime_min={script.estimated_runtime_minutes:.2f}"
+    )
+    console.print(f"script {project_dir.story_script_json()}")
+    console.print(f"review {project_dir.research_review_md()} ({len(review.split())} review-words)")
+
+
+@app.command("research-and-write")
+def research_and_write_cmd(
+    project_id: str = typer.Argument(...),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Run research, dossier, and script in order. Still three independent cached stages."""
+    research_topic_cmd(project_id, confirm_paid=confirm_paid, dry_run=False)
+    build_dossier_cmd(project_id, confirm_paid=confirm_paid)
+    write_script_cmd(project_id, confirm_paid=confirm_paid)
+
+
+@app.command("inspect-research")
+def inspect_research_cmd(project_id: str = typer.Argument(...)) -> None:
+    """Show research sources, quality gate, dossier, and usage."""
+    from docprod.research.models import (
+        DossierValidationSummary,
+        ResearchDossier,
+        ResearchRawResponse,
+        SourceRegistry,
+        TopicSpec,
+    )
+    from docprod.research.validation import evaluate_research_quality
+
+    project_dir, _project = _load_project(project_id)
+    table = Table(title=f"research {project_id}", show_header=False)
+    table.add_column("k")
+    table.add_column("v")
+    if project_dir.topic_json().is_file():
+        topic = load_model(project_dir.topic_json(), TopicSpec)
+        table.add_row("topic", topic.topic)
+    if project_dir.research_response_json().is_file():
+        raw = load_model(project_dir.research_response_json(), ResearchRawResponse)
+        table.add_row("research_model", raw.model)
+        table.add_row("web_search_calls", str(raw.usage.web_search_call_count if raw.usage else 0))
+        table.add_row("cache_hit", str(raw.cache_hit).lower())
+        if raw.usage:
+            table.add_row("input_tokens", str(raw.usage.input_tokens))
+            table.add_row("output_tokens", str(raw.usage.output_tokens))
+            table.add_row("cached_tokens", str(raw.usage.cached_tokens))
+            table.add_row("reasoning_tokens", str(raw.usage.reasoning_tokens))
+            table.add_row("request_count", str(raw.usage.request_count))
+    if project_dir.sources_json().is_file():
+        registry = load_model(project_dir.sources_json(), SourceRegistry)
+        table.add_row("sources_retained", str(len(registry.sources)))
+        domains = {item.domain for item in registry.sources if item.quality_tier != "low"}
+        table.add_row("independent_domains", str(len(domains)))
+        tiers = {"A": 0, "B": 0, "C": 0, "low": 0}
+        for item in registry.sources:
+            tiers[item.quality_tier] = tiers.get(item.quality_tier, 0) + 1
+        table.add_row("tiers", f"A={tiers['A']} B={tiers['B']} C={tiers['C']} low={tiers['low']}")
+        if project_dir.research_report_md().is_file():
+            report = project_dir.research_report_md().read_text(encoding="utf-8")
+            quality = evaluate_research_quality(report, registry, require=False)
+            table.add_row("quality_gate", "pass" if quality.passed else "fail")
+            table.add_row("sources_discovered", str(len(registry.sources)))
+    if project_dir.research_dossier_json().is_file():
+        dossier = load_model(project_dir.research_dossier_json(), ResearchDossier)
+        table.add_row("facts", str(len(dossier.facts)))
+        table.add_row("timeline_events", str(len(dossier.timeline_events)))
+        table.add_row("uncertainties", str(len(dossier.uncertainties)))
+        if dossier.usage:
+            table.add_row("dossier_model", dossier.model)
+            table.add_row("dossier_input_tokens", str(dossier.usage.input_tokens))
+            table.add_row("dossier_output_tokens", str(dossier.usage.output_tokens))
+            table.add_row("dossier_requests", str(dossier.usage.request_count))
+    if project_dir.dossier_validation_json().is_file():
+        summary = load_model(project_dir.dossier_validation_json(), DossierValidationSummary)
+        table.add_row("unsupported_facts", str(summary.unsupported_fact_count))
+    console.print(table)
+
+
+@app.command("inspect-script")
+def inspect_script_cmd(project_id: str = typer.Argument(...)) -> None:
+    """Show writer stats, chapters, beats, and coverage."""
+    from docprod.writing.models import NarrationScript
+
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.story_script_json().is_file():
+        _fail("Missing 04_story_script.json")
+    script = load_model(project_dir.story_script_json(), NarrationScript)
+    table = Table(title=f"script {project_id}", show_header=False)
+    table.add_column("k")
+    table.add_column("v")
+    table.add_row("writer_model", script.writer_model)
+    table.add_row("word_count", str(script.word_count))
+    table.add_row("estimated_runtime_min", f"{script.estimated_runtime_minutes:.2f}")
+    table.add_row("chapters", str(len(script.outline.chapters)))
+    table.add_row("beats", str(len(script.beats)))
+    if script.validation:
+        table.add_row("claims_referenced", str(script.validation.claims_referenced))
+        table.add_row("sources_referenced", str(script.validation.sources_referenced))
+        table.add_row("unsupported_beats", str(script.validation.unsupported_beat_count))
+        table.add_row("target_word_range", str(script.validation.within_target_word_range).lower())
+        if script.validation.repetition_notes:
+            table.add_row("notes", "; ".join(script.validation.repetition_notes))
+    if script.usage:
+        table.add_row("input_tokens", str(script.usage.input_tokens))
+        table.add_row("output_tokens", str(script.usage.output_tokens))
+        table.add_row("request_count", str(script.usage.request_count))
+    console.print(table)
+    chapters = Table(title="chapters")
+    chapters.add_column("id")
+    chapters.add_column("title")
+    chapters.add_column("beats")
+    for item in script.outline.chapters:
+        chapters.add_row(item.chapter_id, item.title, ",".join(item.beat_ids))
+    console.print(chapters)
 
 
 @app.command("show-project")
@@ -504,8 +783,7 @@ def generate_images_cmd(
         [
             (item.id, item.asset_strategy.value)
             for item in plan.scenes
-            if item.asset_strategy
-            in {AssetStrategy.ai_image, AssetStrategy.ai_image_to_video}
+            if item.asset_strategy in {AssetStrategy.ai_image, AssetStrategy.ai_image_to_video}
         ],
         output=project_dir.contact_sheet(),
     )
@@ -698,9 +976,7 @@ def select_stock_auto_cmd(
         )
     except (MissingApiKeyError, StockProviderError) as exc:
         _fail(str(exc))
-    console.print(
-        f"Auto-selected {scene_id} pexels={meta.provider_video_id} sha256={meta.sha256}"
-    )
+    console.print(f"Auto-selected {scene_id} pexels={meta.provider_video_id} sha256={meta.sha256}")
 
 
 @app.command("render-graphic")
@@ -814,9 +1090,7 @@ def render_preview_cmd(
             _fail("Missing master narration WAV.")
         runtime_plan = load_runtime_plan(project_dir, plan)
         try:
-            retime_stock_for_runtime(
-                project_dir, plan=runtime_plan, seed=project.random_seed
-            )
+            retime_stock_for_runtime(project_dir, plan=runtime_plan, seed=project.random_seed)
         except ValueError as exc:
             _fail(str(exc))
     stats = summarize_scene_plan(runtime_plan)
@@ -932,12 +1206,22 @@ def inspect_render_cmd(
         table.add_row("error", str(exc))
         console.print(table)
         return
-    table.add_row("captions.srt", str(
-        (project_dir.captions_narrated_srt() if narrated else project_dir.captions_srt).is_file()
-    ).lower())
-    table.add_row("captions.ass", str(
-        (project_dir.captions_narrated_ass() if narrated else project_dir.captions_ass).is_file()
-    ).lower())
+    table.add_row(
+        "captions.srt",
+        str(
+            (
+                project_dir.captions_narrated_srt() if narrated else project_dir.captions_srt
+            ).is_file()
+        ).lower(),
+    )
+    table.add_row(
+        "captions.ass",
+        str(
+            (
+                project_dir.captions_narrated_ass() if narrated else project_dir.captions_ass
+            ).is_file()
+        ).lower(),
+    )
     if narrated and project_dir.narration_master_meta().is_file():
         from docprod.audio.models import NarrationMasterMeta
 

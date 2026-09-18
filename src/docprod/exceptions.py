@@ -28,3 +28,15 @@ class AlignmentQualityError(RuntimeError):
 
 class UnsafeProjectIdError(ValueError):
     """Raised when a project id would escape the projects root or is not filesystem-safe."""
+
+
+class ResearchQualityError(RuntimeError):
+    """Raised when web research does not meet the evidence quality gate."""
+
+
+class DossierValidationError(RuntimeError):
+    """Raised when the structured dossier is not fully sourced or internally consistent."""
+
+
+class ScriptValidationError(RuntimeError):
+    """Raised when the narration script invents unsupported detail or fails length checks."""

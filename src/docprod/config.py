@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     openai_tts_model: str = Field(default="gpt-4o-mini-tts")
     openai_tts_voice: str = Field(default="cedar")
     openai_tts_speed: float = Field(default=1.0)
+    research_provider: str = Field(default="openai")
+    research_model: str = Field(default="gpt-5.6-luna")
+    dossier_model: str = Field(default="gpt-5.6-luna")
+    writer_model: str = Field(default="gpt-5.6-terra")
+    research_max_tool_calls: int = Field(default=8)
 
     def openai_key_configured(self) -> bool:
         secret = self.openai_api_key

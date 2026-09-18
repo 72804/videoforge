@@ -23,6 +23,14 @@ STOCK_CANDIDATES_FILENAME = "stock_candidates.json"
 STOCK_CREDITS_FILENAME = "stock_sources.json"
 RUNTIME_TIMELINE_FILENAME = "06_runtime_timeline.json"
 NARRATED_PREVIEW_FILENAME = "documentary_preview_narrated.mp4"
+TOPIC_FILENAME = "00_topic.json"
+RESEARCH_REPORT_FILENAME = "01_research_report.md"
+RESEARCH_RESPONSE_FILENAME = "01_research_response.json"
+SOURCES_FILENAME = "02_sources.json"
+DOSSIER_FILENAME = "03_research_dossier.json"
+DOSSIER_VALIDATION_FILENAME = "03_dossier_validation.json"
+STORY_SCRIPT_FILENAME = "04_story_script.json"
+RESEARCH_REVIEW_FILENAME = "research_and_script_review.md"
 
 
 def default_repo_root() -> Path:
@@ -255,6 +263,34 @@ class ProjectPaths:
     def captions_narrated_ass(self) -> Path:
         return self.preview_dir / "captions_narrated.ass"
 
+    def topic_json(self) -> Path:
+        return self.stages_dir / TOPIC_FILENAME
+
+    def research_report_md(self) -> Path:
+        return self.stages_dir / RESEARCH_REPORT_FILENAME
+
+    def research_response_json(self) -> Path:
+        return self.stages_dir / RESEARCH_RESPONSE_FILENAME
+
+    def sources_json(self) -> Path:
+        return self.stages_dir / SOURCES_FILENAME
+
+    def research_dossier_json(self) -> Path:
+        return self.stages_dir / DOSSIER_FILENAME
+
+    def dossier_validation_json(self) -> Path:
+        return self.stages_dir / DOSSIER_VALIDATION_FILENAME
+
+    def story_script_json(self) -> Path:
+        return self.stages_dir / STORY_SCRIPT_FILENAME
+
+    @property
+    def review_dir(self) -> Path:
+        return self.artifacts_dir / "review"
+
+    def research_review_md(self) -> Path:
+        return self.review_dir / RESEARCH_REVIEW_FILENAME
+
     def scene_image_history_dir(self, scene_id: str) -> Path:
         return self.scene_visuals_dir(scene_id) / "history"
 
@@ -278,6 +314,7 @@ class ProjectPaths:
             self.preview_dir,
             self.preview_segments_dir,
             self.narration_dir,
+            self.review_dir,
         )
 
 
