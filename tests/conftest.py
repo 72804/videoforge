@@ -4,7 +4,18 @@ from pathlib import Path
 
 import pytest
 
+from docprod.config import get_settings
 from docprod.storage import paths as pathmod
+
+
+@pytest.fixture(autouse=True)
+def isolate_settings(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep tests independent of a local .env with paid keys enabled."""
+    monkeypatch.setenv("ALLOW_PAID_APIS", "false")
+    monkeypatch.setenv("OPENAI_API_KEY", "")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture

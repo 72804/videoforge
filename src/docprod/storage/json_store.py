@@ -8,6 +8,22 @@ from pathlib import Path
 from pydantic import BaseModel
 
 
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write binary data atomically via a temp file in the same directory."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, path)
+    except Exception:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
 def atomic_write_text(path: Path, text: str) -> None:
     """Write UTF-8 text atomically via a temp file in the same directory."""
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -119,6 +119,15 @@ class ProjectPaths:
     def preview_concat(self) -> Path:
         return self.preview_dir / "concat.txt"
 
+    def scene_visuals_dir(self, scene_id: str) -> Path:
+        return self.visuals_dir / scene_id
+
+    def scene_image_path(self, scene_id: str, suffix: str = ".jpg") -> Path:
+        return self.scene_visuals_dir(scene_id) / f"image{suffix}"
+
+    def scene_image_meta(self, scene_id: str) -> Path:
+        return self.scene_visuals_dir(scene_id) / "image.meta.json"
+
     def iter_layout_dirs(self) -> tuple[Path, ...]:
         return (
             self.stages_dir,

@@ -33,6 +33,7 @@ from docprod.render.models import (
 )
 from docprod.render.placeholders import placeholder_filter
 from docprod.render.stats import duration_ok, frame_count_for_span, probe_looks_valid
+from docprod.render.still import resolve_ai_image_still, still_fit_filter
 from docprod.render.subtitles import write_captions
 from docprod.storage.hashing import content_hash, file_sha256
 from docprod.storage.json_store import atomic_write_text, load_model, save_model
@@ -60,6 +61,7 @@ def segment_input_hash(
     project: Project,
     profile: PreviewRenderProfile,
     params_rendered: str,
+    still_sha256: str | None = None,
 ) -> str:
     return content_hash(
         {
@@ -68,6 +70,7 @@ def segment_input_hash(
             "profile": profile.model_dump(mode="json"),
             "renderer_version": profile.renderer_version,
             "effect_rendered": params_rendered,
+            "still_sha256": still_sha256,
         }
     )
 
@@ -119,8 +122,14 @@ def _render_one_segment(
     trans_rendered, trans_fallback = _transition_rendered(scene.transition)
     frames = frame_count_for_span(scene.start, scene.end, profile.fps)
     duration = frames / profile.fps
+    still = resolve_ai_image_still(paths, scene)
+    still_sha = still[1] if still else None
     input_hash = segment_input_hash(
-        scene, project=project, profile=profile, params_rendered=params.rendered.value
+        scene,
+        project=project,
+        profile=profile,
+        params_rendered=params.rendered.value,
+        still_sha256=still_sha,
     )
     mp4 = paths.preview_segments_dir / f"{scene.id}.mp4"
     meta_path = paths.preview_segments_dir / f"{scene.id}.meta.json"
@@ -146,16 +155,6 @@ def _render_one_segment(
         profile.motion_oversample_factor if camera_motion_needed(params) else 1
     )
     canvas_w, canvas_h = oversampled_size(profile.width, profile.height, oversample)
-    base = placeholder_filter(
-        strategy=scene.asset_strategy,
-        scene_id=scene.id,
-        category=category,
-        width=canvas_w,
-        height=canvas_h,
-        duration=duration + 0.25,
-        fps=profile.fps,
-        font=font,
-    )
     motion = motion_filter(
         params,
         duration=duration,
@@ -165,30 +164,79 @@ def _render_one_segment(
         frame_count=frames,
         oversample=oversample,
     )
-    vf = base if motion == "null" else f"{base},{motion}"
     tmp = mp4.with_suffix(".tmp.mp4")
     try:
-        run_ffmpeg(
-            [
-                "-f",
-                "lavfi",
-                "-i",
-                vf,
-                "-frames:v",
-                str(frames),
-                "-an",
-                "-c:v",
-                profile.video_codec,
-                "-pix_fmt",
-                profile.pixel_format,
-                "-preset",
-                profile.preset,
-                "-crf",
-                str(profile.crf),
-                str(tmp),
-            ],
-            timeout=180,
-        )
+        if still is None:
+            base = placeholder_filter(
+                strategy=scene.asset_strategy,
+                scene_id=scene.id,
+                category=category,
+                width=canvas_w,
+                height=canvas_h,
+                duration=duration + 0.25,
+                fps=profile.fps,
+                font=font,
+            )
+            vf = base if motion == "null" else f"{base},{motion}"
+            run_ffmpeg(
+                [
+                    "-f",
+                    "lavfi",
+                    "-i",
+                    vf,
+                    "-frames:v",
+                    str(frames),
+                    "-an",
+                    "-c:v",
+                    profile.video_codec,
+                    "-pix_fmt",
+                    profile.pixel_format,
+                    "-preset",
+                    profile.preset,
+                    "-crf",
+                    str(profile.crf),
+                    str(tmp),
+                ],
+                timeout=180,
+            )
+            summary = "lavfi-placeholder+perspective-cubic,libx264,no-audio"
+        else:
+            image_path, _digest = still
+            try:
+                probe = probe_media(image_path)
+                src_w = probe.width or canvas_w
+                src_h = probe.height or canvas_h
+            except FFmpegError:
+                src_w, src_h = canvas_w, canvas_h
+            fit = still_fit_filter(src_w, src_h, canvas_w, canvas_h)
+            vf = fit if motion == "null" else f"{fit},{motion}"
+            vf = f"{vf},format={profile.pixel_format}"
+            run_ffmpeg(
+                [
+                    "-loop",
+                    "1",
+                    "-framerate",
+                    str(profile.fps),
+                    "-i",
+                    str(image_path),
+                    "-frames:v",
+                    str(frames),
+                    "-an",
+                    "-vf",
+                    vf,
+                    "-c:v",
+                    profile.video_codec,
+                    "-pix_fmt",
+                    profile.pixel_format,
+                    "-preset",
+                    profile.preset,
+                    "-crf",
+                    str(profile.crf),
+                    str(tmp),
+                ],
+                timeout=180,
+            )
+            summary = "still-image-cover+perspective-cubic,libx264,no-audio"
         tmp.replace(mp4)
     finally:
         tmp.unlink(missing_ok=True)
@@ -205,7 +253,7 @@ def _render_one_segment(
         transition_rendered=trans_rendered,
         transition_fallback=trans_fallback,
         cache_hit=False,
-        ffmpeg_command_summary="lavfi-placeholder+perspective-cubic,libx264,no-audio",
+        ffmpeg_command_summary=summary,
         output_sha256=file_sha256(mp4),
     )
     save_model(meta_path, record)
@@ -426,5 +474,9 @@ def render_debug_scene(
     dest.write_bytes(payload)
     smooth = paths.preview_debug_dir / f"{scene.id}_smooth.mp4"
     smooth.write_bytes(payload)
+    if still_used := resolve_ai_image_still(paths, scene):
+        real = paths.preview_debug_dir / f"{scene.id}_real_image.mp4"
+        real.write_bytes(payload)
+        _ = still_used
     _ = record
     return dest

@@ -12,7 +12,12 @@ from rich.table import Table
 from docprod import __version__
 from docprod.config import get_settings
 from docprod.demo import build_demo_scene_plan
-from docprod.exceptions import UnsafeProjectIdError
+from docprod.exceptions import (
+    MissingApiKeyError,
+    PaidApiDisabledError,
+    PaidApiNotConfirmedError,
+    UnsafeProjectIdError,
+)
 from docprod.logging_utils import configure_logging
 from docprod.media import probe_binary
 from docprod.models.enums import JobStatus
@@ -20,6 +25,7 @@ from docprod.models.job import JobState
 from docprod.models.project import Project
 from docprod.models.scene import Scene, ScenePlan
 from docprod.models.script import NarrationScript
+from docprod.pipeline.generate_image_stage import execute_generate_image
 from docprod.pipeline.preview_render_stage import execute_preview_render
 from docprod.pipeline.scene_planner_stage import execute_scene_planner
 from docprod.planning.models import summarize_scene_plan
@@ -101,6 +107,12 @@ def doctor() -> None:
     table.add_row("projects_root", str(pathmod.default_projects_root()))
     table.add_row("cache_root", str(pathmod.default_cache_root()))
     table.add_row("ALLOW_PAID_APIS", str(settings.allow_paid_apis).lower())
+    table.add_row("IMAGE_PROVIDER", settings.image_provider)
+    table.add_row(
+        "OPENAI_API_KEY_configured",
+        str(settings.openai_key_configured()).lower(),
+    )
+    table.add_row("OPENAI_IMAGE_MODEL", settings.openai_image_model)
     table.add_row("ffmpeg_path", resolved or "NOT FOUND")
     table.add_row(
         "ffmpeg",
@@ -347,6 +359,57 @@ def inspect_scenes(
     summary.add_row("ai_image_to_video_duration", f"{stats.ai_video_duration:.2f}s")
     summary.add_row("ai_image_to_video_fraction", f"{stats.ai_video_fraction:.3f}")
     console.print(summary)
+
+
+@app.command("generate-image")
+def generate_image_cmd(
+    project_id: str = typer.Argument(...),
+    scene_id: str = typer.Argument(...),
+    confirm_paid: bool = typer.Option(
+        False,
+        "--confirm-paid",
+        help="Required for a real paid image API call (with ALLOW_PAID_APIS=true).",
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Regenerate even when a matching cached image exists. Still requires --confirm-paid.",
+    ),
+) -> None:
+    """Generate one documentary still for a single ai_image scene. Paid APIs are gated."""
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    try:
+        plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    except Exception as exc:
+        _fail(f"Invalid scene plan: {exc}")
+    try:
+        manifest = execute_generate_image(
+            project_dir,
+            plan=plan,
+            scene_id=scene_id,
+            confirm_paid=confirm_paid,
+            force=force,
+            progress=lambda message: console.print(message),
+        )
+    except (PaidApiDisabledError, PaidApiNotConfirmedError, MissingApiKeyError, ValueError) as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        status = getattr(exc, "status_code", None)
+        detail = str(exc)
+        if "sk-" in detail.lower() or "authorization" in detail.lower():
+            detail = "OpenAI request failed (details omitted to avoid leaking secrets)"
+        if status is not None:
+            _fail(f"OpenAI image request failed (HTTP {status}): {detail}")
+        _fail(f"OpenAI image request failed: {detail}")
+    if manifest.cache_hit:
+        console.print(f"Reused cached image {manifest.output_path}")
+        return
+    console.print(
+        f"Wrote {project_dir.scene_image_path(scene_id)} "
+        f"sha256={manifest.output_sha256} request_hash={manifest.request_hash}"
+    )
 
 
 @app.command("render-preview")
