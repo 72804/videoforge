@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from docprod.storage.json_store import load_model, save_model
 from docprod.storage.paths import ProjectPaths
 
-ReviewState = Literal["generated", "approved", "rejected"]
+ReviewState = Literal["generated", "approved", "rejected", "superseded"]
 
 
 class ImageReviewRecord(BaseModel):

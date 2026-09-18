@@ -17,6 +17,7 @@ VISUAL_BIBLE_FILENAME = "visual_bible.json"
 IMAGE_REVIEW_FILENAME = "image.review.json"
 IMAGE_BATCH_MANIFEST_FILENAME = "image_batch_manifest.json"
 CONTACT_SHEET_FILENAME = "contact_sheet.jpg"
+CONTACT_SHEET_REPAIRS_FILENAME = "contact_sheet_repairs.jpg"
 
 
 def default_repo_root() -> Path:
@@ -141,8 +142,14 @@ class ProjectPaths:
     def image_batch_manifest(self) -> Path:
         return self.visuals_dir / IMAGE_BATCH_MANIFEST_FILENAME
 
+    def scene_image_history_dir(self, scene_id: str) -> Path:
+        return self.scene_visuals_dir(scene_id) / "history"
+
     def contact_sheet(self) -> Path:
         return self.visuals_dir / CONTACT_SHEET_FILENAME
+
+    def contact_sheet_repairs(self) -> Path:
+        return self.visuals_dir / CONTACT_SHEET_REPAIRS_FILENAME
 
     def iter_layout_dirs(self) -> tuple[Path, ...]:
         return (

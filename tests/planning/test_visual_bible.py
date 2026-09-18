@@ -4,6 +4,8 @@ from docprod.models.enums import AssetStrategy, Mood, TransitionType, VisualEffe
 from docprod.models.scene import GenerationSpec, Scene, ScenePlan
 from docprod.planning.visual_bible import (
     derive_visual_bible,
+    primary_visual_category,
+    scene_contains_protagonist,
     scene_includes_protagonist,
 )
 from docprod.providers.image_prompt import build_documentary_image_prompt
@@ -75,3 +77,74 @@ def test_continuity_only_where_protagonist_appears() -> None:
     assert "same adult man" in man
     assert "same adult man" not in bag
     assert "evrak çantası" in bag
+
+
+def test_protagonist_coexists_with_crowd_category() -> None:
+    plan = ScenePlan(
+        project_id="demo",
+        scenes=[
+            _scene("scene_0001", "Koyu paltolu bir adam son vagondan indi.", start=0.0),
+            _scene(
+                "scene_0013",
+                "Adam kaçan birini kovaladı ama kalabalık peronda iz kayboldu.",
+                start=1.0,
+                category="crowd",
+            ),
+        ],
+        total_duration=2.0,
+    )
+    bible = derive_visual_bible(plan)
+    crowd = plan.scenes[1]
+    assert primary_visual_category(crowd) == "crowd"
+    assert scene_contains_protagonist(crowd, bible, previous_had_protagonist=True) is True
+    prompt = build_documentary_image_prompt(crowd, bible=bible, include_protagonist=True)
+    assert "same adult man" in prompt
+    assert "dark practical coat" in prompt
+    assert "kalabalık" in prompt.lower()
+
+
+def test_protagonist_coexists_with_police_action_when_cued() -> None:
+    plan = ScenePlan(
+        project_id="demo",
+        scenes=[
+            _scene("scene_0001", "Koyu paltolu bir adam indi.", start=0.0),
+            _scene(
+                "scene_0012",
+                "Adam polislerin arasından perona doğru koştu.",
+                start=1.0,
+                category="police",
+            ),
+        ],
+        total_duration=2.0,
+    )
+    bible = derive_visual_bible(plan)
+    action = plan.scenes[1]
+    assert primary_visual_category(action) == "police"
+    assert scene_contains_protagonist(action, bible, previous_had_protagonist=True) is True
+    prompt = build_documentary_image_prompt(action, bible=bible, include_protagonist=True)
+    assert "same adult man" in prompt
+
+
+def test_crowd_does_not_clear_continuity_without_cue() -> None:
+    bible = derive_visual_bible(
+        ScenePlan(
+            project_id="demo",
+            scenes=[_scene("scene_0001", "Koyu paltolu bir adam indi.", start=0.0)],
+            total_duration=1.0,
+        )
+    )
+    crowd = _scene(
+        "scene_0008",
+        "Kalabalık peronda iz kayboldu.",
+        start=1.0,
+        category="crowd",
+    )
+    assert scene_contains_protagonist(crowd, bible, previous_had_protagonist=True) is True
+    police_only = _scene(
+        "scene_0010",
+        "Polis memurları perona girdi.",
+        start=2.0,
+        category="police",
+    )
+    assert scene_contains_protagonist(police_only, bible, previous_had_protagonist=True) is False
+

@@ -19,8 +19,14 @@ CONSTRAINTS = (
     "clothing, or identity details that are not specified. No visible text, logos, or "
     "watermarks. Avoid illustration, cartoon look, surrealism, distorted anatomy, "
     "duplicated people, extra fingers, oversaturated advertising imagery, fantasy "
-    "spectacle, and gratuitous gore."
+    "spectacle, and gratuitous gore. Render one single continuous photographic frame; "
+    "avoid split screen, collage, contact sheet, storyboard, multiple panels, "
+    "before-and-after layout, or a sequence of frames."
 )
+
+SINGLE_FRAME = "one single continuous photographic frame"
+
+THIN_FACT_TOKEN_LIMIT = 4
 
 COMPOSITION = (
     "Compose with modest surrounding environment and safe framing for a subtle "
@@ -166,6 +172,42 @@ def collect_unique_scene_facts(scene: Scene) -> list[str]:
     return ordered
 
 
+def is_semantically_thin(scene: Scene) -> bool:
+    """Judge thinness from narration/visual intent, not leftover planner boilerplate."""
+    text = f"{strip_boilerplate(scene.narration)} {strip_boilerplate(scene.visual_intent)}"
+    return len(_tokens(text)) < THIN_FACT_TOKEN_LIMIT
+
+
+def neighbor_context_snippets(
+    scene: Scene,
+    *,
+    previous_scene: Scene | None = None,
+    next_scene: Scene | None = None,
+) -> list[str]:
+    """Adjacent narration as context only; never duplicate the current beat."""
+    current_facts = collect_unique_scene_facts(scene)
+    snippets: list[str] = []
+    for neighbor in (previous_scene, next_scene):
+        if neighbor is None or not neighbor.narration.strip():
+            continue
+        candidate = strip_boilerplate(neighbor.narration)
+        if not candidate:
+            continue
+        if _is_redundant(candidate, [*current_facts, *snippets]):
+            continue
+        snippets.append(candidate)
+    return snippets
+
+
+def scene_neighbors(plan_scenes: list[Scene], scene_id: str) -> tuple[Scene | None, Scene | None]:
+    index = next((i for i, item in enumerate(plan_scenes) if item.id == scene_id), None)
+    if index is None:
+        return None, None
+    previous_scene = plan_scenes[index - 1] if index > 0 else None
+    next_scene = plan_scenes[index + 1] if index + 1 < len(plan_scenes) else None
+    return previous_scene, next_scene
+
+
 def _is_detail_scene(scene: Scene) -> bool:
     category = str(scene.metadata.get("primary_category") or "").lower()
     if category in _DETAIL_CATEGORIES:
@@ -178,11 +220,28 @@ def build_documentary_image_prompt(
     *,
     bible: VisualBible | None = None,
     include_protagonist: bool | None = None,
+    previous_scene: Scene | None = None,
+    next_scene: Scene | None = None,
 ) -> str:
     """One concise scene description plus a single documentary style block."""
     facts = collect_unique_scene_facts(scene)
     description = " ".join(facts) if facts else strip_boilerplate(scene.visual_intent)
-    parts = [description]
+    parts: list[str] = []
+    if is_semantically_thin(scene):
+        context = neighbor_context_snippets(
+            scene, previous_scene=previous_scene, next_scene=next_scene
+        )
+        if context:
+            parts.append(
+                "Single continuous documentary frame. "
+                f"Context: {' '.join(context)} "
+                f"Current visual moment: {description} "
+                "Depict only the current moment."
+            )
+        else:
+            parts.append(description)
+    else:
+        parts.append(description)
     if include_protagonist is None:
         include_protagonist = scene_includes_protagonist(scene, bible)
     if include_protagonist and bible and bible.protagonist_description:

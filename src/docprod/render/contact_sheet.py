@@ -16,6 +16,7 @@ def build_contact_sheet(
     entries: list[tuple[str, str, Path]],
     *,
     columns: int = 4,
+    output: Path | None = None,
 ) -> Path | None:
     """Local FFmpeg contact sheet. entries = (scene_id, strategy, image_path)."""
     usable = [(scene_id, strategy, path) for scene_id, strategy, path in entries if path.is_file()]
@@ -56,20 +57,43 @@ def build_contact_sheet(
         f"{stacked}xstack=inputs={cols * rows}:layout={'|'.join(layout_parts)}:"
         f"fill=black,format=yuv420p[out]"
     )
-    output = paths.contact_sheet()
-    output.parent.mkdir(parents=True, exist_ok=True)
+    dest = output or paths.contact_sheet()
+    dest.parent.mkdir(parents=True, exist_ok=True)
     # Pad cells that have no corresponding input use color filter; they must not
     # consume file inputs. Rebuild so only real images are -i.
     args = [*inputs, "-filter_complex", ";".join(filters), "-map", "[out]", "-frames:v", "1"]
-    run_ffmpeg([*args, str(output)], timeout=120)
-    return output
+    run_ffmpeg([*args, str(dest)], timeout=120)
+    return dest
 
 
-def contact_sheet_from_plan(paths: ProjectPaths, scene_ids: list[tuple[str, str]]) -> Path | None:
+def contact_sheet_from_plan(
+    paths: ProjectPaths,
+    scene_ids: list[tuple[str, str]],
+    *,
+    output: Path | None = None,
+    columns: int = 4,
+) -> Path | None:
     entries: list[tuple[str, str, Path]] = []
     for scene_id, strategy in scene_ids:
         resolved = resolve_generated_still(paths, scene_id)
         if resolved is None:
             continue
         entries.append((scene_id, strategy, resolved[0]))
-    return build_contact_sheet(paths, entries)
+    return build_contact_sheet(paths, entries, output=output, columns=columns)
+
+
+def build_repair_contact_sheet(
+    paths: ProjectPaths,
+    pairs: list[tuple[str, Path, Path]],
+) -> Path | None:
+    """Two-column OLD | NEW comparison for targeted still repairs."""
+    entries: list[tuple[str, str, Path]] = []
+    for scene_id, old_path, new_path in pairs:
+        entries.append((scene_id, "OLD", old_path))
+        entries.append((scene_id, "NEW", new_path))
+    return build_contact_sheet(
+        paths,
+        entries,
+        columns=2,
+        output=paths.contact_sheet_repairs(),
+    )

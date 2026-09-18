@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 from docprod.config import Settings, get_settings
@@ -18,8 +18,8 @@ from docprod.providers.image_config import (
     ImageBatchSceneRecord,
     ImageGenerationConfig,
 )
-from docprod.providers.image_prompt import build_documentary_image_prompt
-from docprod.providers.image_review import load_review
+from docprod.providers.image_prompt import build_documentary_image_prompt, scene_neighbors
+from docprod.providers.image_review import ReviewState, load_review
 from docprod.providers.openai_image import OpenAIImageProvider, image_request_hash
 from docprod.storage.json_store import save_model
 from docprod.storage.paths import ProjectPaths
@@ -46,18 +46,28 @@ def plan_image_batch(
     *,
     settings: Settings | None = None,
     force_scene_ids: Sequence[str] = (),
+    only_scene_ids: Sequence[str] = (),
 ) -> tuple[list[PlannedImageJob], ImageGenerationConfig]:
     cfg = settings or get_settings()
     image_cfg = ImageGenerationConfig.from_settings(cfg)
     bible = load_or_create_visual_bible(paths, plan)
     force_ids = set(force_scene_ids)
+    only_ids = set(only_scene_ids)
     jobs: list[PlannedImageJob] = []
     previous_had = False
     for scene in plan.scenes:
         include, next_had = next_protagonist_memory(scene, bible, previous_had)
         if scene.asset_strategy in IMAGE_STRATEGIES:
+            if only_ids and scene.id not in only_ids:
+                previous_had = next_had
+                continue
+            previous_scene, next_scene = scene_neighbors(plan.scenes, scene.id)
             prompt = build_documentary_image_prompt(
-                scene, bible=bible, include_protagonist=include
+                scene,
+                bible=bible,
+                include_protagonist=include,
+                previous_scene=previous_scene,
+                next_scene=next_scene,
             )
             request_hash = image_request_hash(
                 prompt=prompt, config=image_cfg, seed=scene.generation.seed
@@ -89,6 +99,9 @@ def execute_generate_images(
     max_paid_requests: int,
     workers: int = 1,
     force_scene_ids: Sequence[str] = (),
+    only_scene_ids: Sequence[str] = (),
+    archive_as: ReviewState = "superseded",
+    archive_as_by_scene: Mapping[str, ReviewState] | None = None,
     settings: Settings | None = None,
     provider: OpenAIImageProvider | None = None,
     progress: ProgressFn | None = None,
@@ -101,7 +114,11 @@ def execute_generate_images(
     if workers > MAX_PAID_WORKERS:
         workers = MAX_PAID_WORKERS
     jobs, image_cfg = plan_image_batch(
-        paths, plan, settings=settings, force_scene_ids=force_scene_ids
+        paths,
+        plan,
+        settings=settings,
+        force_scene_ids=force_scene_ids,
+        only_scene_ids=only_scene_ids,
     )
     paid = sum(1 for job in jobs if job.action == "GENERATE")
     if progress:
@@ -113,6 +130,13 @@ def execute_generate_images(
             )
         progress(f"New paid requests: {paid}")
         progress(f"Existing/skipped: {len(jobs) - paid}")
+        for job in jobs:
+            if job.action != "GENERATE":
+                continue
+            progress(f"SAFE REQUEST {job.scene.id}")
+            progress(f"Include protagonist: {job.include_protagonist}")
+            progress(f"Request hash: {job.request_hash}")
+            progress(f"Prompt: {job.prompt}")
     if paid > max_paid_requests:
         raise MaxPaidRequestsExceededError(
             f"Batch would make {paid} paid image requests, exceeding "
@@ -171,6 +195,7 @@ def execute_generate_images(
             continue
         review = load_review(paths, job.scene.id)
         try:
+            archived_as = (archive_as_by_scene or {}).get(job.scene.id, archive_as)
             manifest = execute_generate_image(
                 paths,
                 plan=plan,
@@ -181,6 +206,7 @@ def execute_generate_images(
                 provider=provider,
                 bible=bible,
                 previous_had_protagonist=job.previous_had_protagonist,
+                archive_as=archived_as,
                 progress=progress,
             )
             generated += 1

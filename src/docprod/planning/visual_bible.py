@@ -8,13 +8,12 @@ from docprod.models.enums import AssetStrategy
 from docprod.models.scene import Scene, ScenePlan
 
 _WORD_RE = re.compile(r"[\wğüşöçıİĞÜŞÖÇ]+", re.UNICODE | re.IGNORECASE)
-_OTHER_CAST = (
+_EXCLUSIVE_CAST = (
     "polis memur",
     "polisler",
     "memurlar",
-    "kalabalık",
-    "gazete",
 )
+_CROWD_TERMS = ("kalabalık", "crowd")
 _OBJECT_CATEGORIES = frozenset(
     {
         "money",
@@ -65,9 +64,14 @@ def _scene_text(scene: Scene) -> str:
     return f"{scene.narration} {scene.visual_intent}"
 
 
-def _has_other_cast(text: str) -> bool:
+def _has_exclusive_other_cast(text: str) -> bool:
     lowered = text.lower()
-    return any(term in lowered for term in _OTHER_CAST)
+    return any(term in lowered for term in _EXCLUSIVE_CAST)
+
+
+def _has_crowd(text: str) -> bool:
+    lowered = text.lower()
+    return any(term in lowered for term in _CROWD_TERMS)
 
 
 def _has_cue(text: str, terms: tuple[str, ...] | list[str]) -> bool:
@@ -85,6 +89,10 @@ def _has_cue(text: str, terms: tuple[str, ...] | list[str]) -> bool:
     return False
 
 
+def primary_visual_category(scene: Scene) -> str:
+    return str(scene.metadata.get("primary_category") or "").lower()
+
+
 def scene_includes_protagonist(
     scene: Scene,
     bible: VisualBible | None,
@@ -98,14 +106,14 @@ def scene_includes_protagonist(
         AssetStrategy.ai_image_to_video,
     }:
         return False
-    category = str(scene.metadata.get("primary_category") or "").lower()
-    if category in _OBJECT_CATEGORIES:
-        return False
+    category = primary_visual_category(scene)
     text = _scene_text(scene)
-    if _has_other_cast(text):
-        return False
     if _has_cue(text, bible.cue_terms):
         return True
+    if category in _OBJECT_CATEGORIES:
+        return False
+    if _has_exclusive_other_cast(text):
+        return False
     words = _tokens(scene.narration)
     if len(words) <= 2 and previous_had_protagonist:
         return True
@@ -116,14 +124,23 @@ def scene_includes_protagonist(
         term in text.lower()
         for term in ("evrak çantası", "tomar para", "haber kupürü", "haritada")
     )
-    if (
-        previous_had_protagonist
-        and not object_only
-        and not _has_other_cast(text)
-        and category not in _OBJECT_CATEGORIES
-    ):
+    if object_only:
+        return False
+    if previous_had_protagonist:
         return True
     return False
+
+
+def scene_contains_protagonist(
+    scene: Scene,
+    bible: VisualBible | None,
+    *,
+    previous_had_protagonist: bool = False,
+) -> bool:
+    """Independent of primary_visual_category: crowd/police may still include him."""
+    return scene_includes_protagonist(
+        scene, bible, previous_had_protagonist=previous_had_protagonist
+    )
 
 
 def next_protagonist_memory(
@@ -134,10 +151,10 @@ def next_protagonist_memory(
     include = scene_includes_protagonist(
         scene, bible, previous_had_protagonist=previous_had_protagonist
     )
-    if _has_other_cast(_scene_text(scene)):
-        return include, False
     if include:
         return include, True
+    if _has_exclusive_other_cast(_scene_text(scene)):
+        return include, False
     return include, previous_had_protagonist
 
 

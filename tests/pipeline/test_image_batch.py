@@ -9,10 +9,10 @@ from tests.providers.test_openai_image import JPEG_BYTES, FakeClient, FakeImages
 from docprod.exceptions import MaxPaidRequestsExceededError
 from docprod.models.enums import AssetStrategy, Mood, TransitionType, VisualEffect
 from docprod.models.scene import GenerationSpec, Scene, ScenePlan
-from docprod.pipeline.generate_image_stage import execute_generate_image
+from docprod.pipeline.generate_image_stage import archive_active_still, execute_generate_image
 from docprod.pipeline.generate_images_batch import execute_generate_images, plan_image_batch
 from docprod.providers.image_config import GeneratedImageManifest
-from docprod.providers.image_review import set_review_state
+from docprod.providers.image_review import load_review, set_review_state
 from docprod.providers.openai_image import OpenAIImageProvider
 from docprod.storage.hashing import file_sha256
 from docprod.storage.json_store import save_model
@@ -192,3 +192,80 @@ def test_cached_image_not_counted_as_paid(tmp_path: Path) -> None:
     assert "authorization" not in dumped
     payload = json.loads(paths.image_batch_manifest().read_text(encoding="utf-8"))
     assert payload["scenes"][0]["status"] == "skipped"
+
+
+def test_max_paid_cap_of_two_aborts_before_calls(tmp_path: Path) -> None:
+    paths = ProjectPaths(root=tmp_path / "proj")
+    plan = _plan(
+        _scene("scene_0006", "Durdu.", AssetStrategy.ai_image, start=0.0),
+        _scene("scene_0013", "Adam kaçan birini kovaladı.", AssetStrategy.ai_image, start=1.0),
+        _scene("scene_0014", "Adam durdu tekrar.", AssetStrategy.ai_image, start=2.0),
+    )
+    images = FakeImages()
+    provider = OpenAIImageProvider(settings=_settings(), client=FakeClient(images))
+    with pytest.raises(MaxPaidRequestsExceededError, match="Aborting before any API call"):
+        execute_generate_images(
+            paths,
+            plan=plan,
+            confirm_paid=True,
+            max_paid_requests=2,
+            settings=_settings(),
+            provider=provider,
+        )
+    assert images.calls == []
+
+
+def test_only_scene_ids_limits_paid_plan(tmp_path: Path) -> None:
+    paths = ProjectPaths(root=tmp_path / "proj")
+    plan = _plan(
+        _scene("scene_0006", "Durdu.", AssetStrategy.ai_image, start=0.0),
+        _scene("scene_0010", "Polis memurları perona girdi.", AssetStrategy.ai_image, start=1.0),
+        _scene("scene_0013", "Adam kaçan birini kovaladı.", AssetStrategy.ai_image, start=2.0),
+    )
+    jobs, _cfg = plan_image_batch(
+        paths,
+        plan,
+        settings=_settings(),
+        only_scene_ids=("scene_0006", "scene_0013"),
+        force_scene_ids=("scene_0006", "scene_0013"),
+    )
+    assert [job.scene.id for job in jobs] == ["scene_0006", "scene_0013"]
+
+
+def test_regeneration_preserves_history_and_review(tmp_path: Path) -> None:
+    paths = ProjectPaths(root=tmp_path / "proj")
+    plan = _plan(_scene("scene_0006", "Durdu.", AssetStrategy.ai_image))
+    _seed_image(paths, "scene_0006")
+    old_digest = file_sha256(paths.scene_image_path("scene_0006"))
+    set_review_state(paths, "scene_0006", "generated", artifact_sha256=old_digest)
+    archived = archive_active_still(paths, "scene_0006", archived_as="rejected")
+    assert archived is not None
+    assert archived is not None and archived.is_file()
+    from docprod.providers.image_review import ImageReviewRecord
+    from docprod.storage.json_store import load_model
+
+    record = load_model(
+        paths.scene_image_history_dir("scene_0006") / f"{old_digest}.review.json",
+        ImageReviewRecord,
+    )
+    assert record.review_state == "rejected"
+    images = FakeImages()
+    provider = OpenAIImageProvider(settings=_settings(), client=FakeClient(images))
+    execute_generate_image(
+        paths,
+        plan=plan,
+        scene_id="scene_0006",
+        confirm_paid=True,
+        force=True,
+        archive_as="superseded",
+        settings=_settings(),
+        provider=provider,
+    )
+    assert archived.is_file()
+    assert archived.read_bytes() == JPEG_BYTES
+    active = load_review(paths, "scene_0006")
+    assert active is not None
+    assert active.review_state == "generated"
+    history_meta = paths.scene_image_history_dir("scene_0006") / f"{old_digest}.meta.json"
+    assert history_meta.is_file()
+

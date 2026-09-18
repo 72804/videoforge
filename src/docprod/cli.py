@@ -377,6 +377,11 @@ def generate_image_cmd(
         "--force",
         help="Regenerate even when a matching cached image exists. Still requires --confirm-paid.",
     ),
+    archive_as: str = typer.Option(
+        "superseded",
+        "--archive-as",
+        help="Review state stored on the archived previous still (rejected or superseded).",
+    ),
 ) -> None:
     """Generate one documentary still for an ai_image or ai_image_to_video scene."""
     project_dir, _project = _load_project(project_id)
@@ -386,6 +391,8 @@ def generate_image_cmd(
         plan = load_model(project_dir.scene_plan_json, ScenePlan)
     except Exception as exc:
         _fail(f"Invalid scene plan: {exc}")
+    if archive_as not in {"rejected", "superseded", "generated", "approved"}:
+        _fail(f"Invalid --archive-as {archive_as!r}")
     try:
         manifest = execute_generate_image(
             project_dir,
@@ -393,6 +400,7 @@ def generate_image_cmd(
             scene_id=scene_id,
             confirm_paid=confirm_paid,
             force=force,
+            archive_as=archive_as,  # type: ignore[arg-type]
             progress=lambda message: console.print(message),
         )
     except (PaidApiDisabledError, PaidApiNotConfirmedError, MissingApiKeyError, ValueError) as exc:
@@ -434,6 +442,16 @@ def generate_images_cmd(
         "--force-scene",
         help="Regenerate this scene even if cached/approved. Repeatable.",
     ),
+    only_scene: list[str] = typer.Option(
+        [],
+        "--only",
+        help="Limit the batch to these scene ids. Repeatable.",
+    ),
+    archive_as: list[str] = typer.Option(
+        [],
+        "--archive-as",
+        help="Per-scene archive review state as scene_id=rejected|superseded. Repeatable.",
+    ),
 ) -> None:
     """Generate stills for ai_image and ai_image_to_video scenes. No AI video."""
     project_dir, _project = _load_project(project_id)
@@ -443,6 +461,14 @@ def generate_images_cmd(
         plan = load_model(project_dir.scene_plan_json, ScenePlan)
     except Exception as exc:
         _fail(f"Invalid scene plan: {exc}")
+    archive_map: dict[str, str] = {}
+    for item in archive_as:
+        if "=" not in item:
+            _fail(f"Invalid --archive-as {item!r}; expected scene_id=state")
+        scene_key, state = item.split("=", 1)
+        if state not in {"rejected", "superseded", "generated", "approved"}:
+            _fail(f"Invalid archive state {state!r}")
+        archive_map[scene_key.strip()] = state
     try:
         manifest = execute_generate_images(
             project_dir,
@@ -451,6 +477,8 @@ def generate_images_cmd(
             max_paid_requests=max_paid_requests,
             workers=workers,
             force_scene_ids=force_scene,
+            only_scene_ids=only_scene,
+            archive_as_by_scene=archive_map,  # type: ignore[arg-type]
             progress=lambda message: console.print(message),
         )
     except MaxPaidRequestsExceededError as exc:
@@ -459,11 +487,18 @@ def generate_images_cmd(
         _fail(str(exc))
     except Exception as exc:
         _fail(str(exc))
+    from docprod.models.enums import AssetStrategy
     from docprod.render.contact_sheet import contact_sheet_from_plan
 
     sheet = contact_sheet_from_plan(
         project_dir,
-        [(item.scene_id, item.strategy) for item in manifest.scenes],
+        [
+            (item.id, item.asset_strategy.value)
+            for item in plan.scenes
+            if item.asset_strategy
+            in {AssetStrategy.ai_image, AssetStrategy.ai_image_to_video}
+        ],
+        output=project_dir.contact_sheet(),
     )
     console.print(
         f"generated={manifest.generated} skipped={manifest.skipped} failed={manifest.failed}"
