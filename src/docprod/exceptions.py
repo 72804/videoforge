@@ -40,3 +40,7 @@ class DossierValidationError(RuntimeError):
 
 class ScriptValidationError(RuntimeError):
     """Raised when the narration script invents unsupported detail or fails length checks."""
+
+
+class SemanticPlannerError(RuntimeError):
+    """Raised when semantic scene planning fails (parse, budget, or validation)."""

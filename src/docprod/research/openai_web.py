@@ -12,6 +12,7 @@ from openai import (
 )
 
 from docprod.config import Settings, get_settings, require_openai_api_key, require_paid_call_allowed
+from docprod.providers.request_budget import ModelRequestBudget
 from docprod.research.models import MAX_WEB_TOOL_CALLS, ApiUsage
 
 SECRET_KEYS = {
@@ -168,6 +169,9 @@ class OpenAIResponsesProvider:
         include: list[str] | None = None,
         max_tool_calls: int | None = None,
         text_format: dict[str, Any] | None = None,
+        budget: ModelRequestBudget | None = None,
+        stage: str = "responses",
+        allow_retry: bool = True,
     ) -> Any:
         require_paid_call_allowed("openai", confirm_paid=confirm_paid, settings=self.settings)
         require_openai_api_key(self.settings)
@@ -186,14 +190,17 @@ class OpenAIResponsesProvider:
         if text_format is not None:
             kwargs["text"] = text_format
         last_error: BaseException | None = None
-        for attempt in range(2):
+        attempts = 2 if allow_retry else 1
+        for attempt in range(attempts):
+            if budget is not None:
+                budget.reserve(stage)
             try:
                 self.request_count += 1
                 responses = getattr(client, "responses")
                 return responses.create(**kwargs)
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                if attempt == 0 and _is_transient(exc):
+                if attempt + 1 < attempts and _is_transient(exc):
                     time.sleep(0.4)
                     continue
                 raise

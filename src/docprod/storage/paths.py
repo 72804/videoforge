@@ -30,6 +30,9 @@ SOURCES_FILENAME = "02_sources.json"
 DOSSIER_FILENAME = "03_research_dossier.json"
 DOSSIER_VALIDATION_FILENAME = "03_dossier_validation.json"
 STORY_SCRIPT_FILENAME = "04_story_script.json"
+SEMANTIC_INTENTS_FILENAME = "05_semantic_scene_intents.json"
+SEMANTIC_PLANNER_RAW_FILENAME = "05_semantic_planner_raw.json"
+SCENE_PLAN_REVIEW_FILENAME = "scene_plan_review.md"
 RESEARCH_REVIEW_FILENAME = "research_and_script_review.md"
 
 
@@ -283,6 +286,15 @@ class ProjectPaths:
 
     def story_script_json(self) -> Path:
         return self.stages_dir / STORY_SCRIPT_FILENAME
+
+    def semantic_intents_json(self) -> Path:
+        return self.stages_dir / SEMANTIC_INTENTS_FILENAME
+
+    def semantic_planner_raw_json(self) -> Path:
+        return self.stages_dir / SEMANTIC_PLANNER_RAW_FILENAME
+
+    def scene_plan_review_md(self) -> Path:
+        return self.review_dir / SCENE_PLAN_REVIEW_FILENAME
 
     @property
     def review_dir(self) -> Path:

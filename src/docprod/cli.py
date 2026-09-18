@@ -21,6 +21,7 @@ from docprod.exceptions import (
     PaidApiNotConfirmedError,
     ResearchQualityError,
     ScriptValidationError,
+    SemanticPlannerError,
     StockProviderError,
     UnsafeProjectIdError,
     ZeroPlaceholderError,
@@ -419,7 +420,7 @@ def inspect_research_cmd(project_id: str = typer.Argument(...)) -> None:
             table.add_row("request_count", str(raw.usage.request_count))
     if project_dir.sources_json().is_file():
         registry = load_model(project_dir.sources_json(), SourceRegistry)
-        table.add_row("sources_retained", str(len(registry.sources)))
+        table.add_row("sources_discovered", str(len(registry.sources)))
         domains = {item.domain for item in registry.sources if item.quality_tier != "low"}
         table.add_row("independent_domains", str(len(domains)))
         tiers = {"A": 0, "B": 0, "C": 0, "low": 0}
@@ -430,7 +431,26 @@ def inspect_research_cmd(project_id: str = typer.Argument(...)) -> None:
             report = project_dir.research_report_md().read_text(encoding="utf-8")
             quality = evaluate_research_quality(report, registry, require=False)
             table.add_row("quality_gate", "pass" if quality.passed else "fail")
-            table.add_row("sources_discovered", str(len(registry.sources)))
+        evidence_ids = registry.evidence_source_ids
+        if not evidence_ids and project_dir.research_dossier_json().is_file():
+            from docprod.research.evidence import apply_evidence_set
+            from docprod.writing.models import NarrationScript as StoryScript
+
+            dossier = load_model(project_dir.research_dossier_json(), ResearchDossier)
+            script = (
+                load_model(project_dir.story_script_json(), StoryScript)
+                if project_dir.story_script_json().is_file()
+                else None
+            )
+            registry = apply_evidence_set(registry, dossier=dossier, script=script)
+            evidence_ids = registry.evidence_source_ids
+        table.add_row("sources_retained_evidence", str(len(evidence_ids)))
+        evidence_domains = {
+            item.domain
+            for item in registry.sources
+            if item.source_id in set(evidence_ids)
+        }
+        table.add_row("evidence_domains", str(len(evidence_domains)))
     if project_dir.research_dossier_json().is_file():
         dossier = load_model(project_dir.research_dossier_json(), ResearchDossier)
         table.add_row("facts", str(len(dossier.facts)))
@@ -483,6 +503,131 @@ def inspect_script_cmd(project_id: str = typer.Argument(...)) -> None:
     for item in script.outline.chapters:
         chapters.add_row(item.chapter_id, item.title, ",".join(item.beat_ids))
     console.print(chapters)
+
+
+@app.command("plan-story-scenes")
+def plan_story_scenes_cmd(
+    project_id: str = typer.Argument(...),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+) -> None:
+    """Semantic documentary scene plan from the sourced script. One model call. No assets."""
+    from docprod.pipeline.plan_story_scenes import prepare_story_plan, run_plan_story_scenes
+    from docprod.pipeline.scene_plan_review import write_scene_plan_review
+    from docprod.research.models import TopicSpec
+    from docprod.writing.models import NarrationScript as StoryScript
+
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.story_script_json().is_file():
+        _fail("Missing 04_story_script.json")
+    prepared = prepare_story_plan(project_dir)
+    console.print(f"model={prepared.model}")
+    console.print(f"script_word_count={prepared.script_word_count}")
+    console.print(f"chapters={prepared.chapters}")
+    console.print(f"expected_estimated_runtime_min={prepared.estimated_runtime_minutes:.2f}")
+    console.print(f"max_model_requests={prepared.max_model_requests}")
+    console.print(f"web_search={str(prepared.web_search).lower()}")
+    for path in prepared.expected_paths:
+        console.print(f"expected_path={path}")
+    if dry_run:
+        console.print("dry_run=true (zero network calls)")
+        return
+    try:
+        result = run_plan_story_scenes(project_dir, confirm_paid=confirm_paid)
+    except (
+        PaidApiDisabledError,
+        PaidApiNotConfirmedError,
+        MissingApiKeyError,
+        MaxPaidRequestsExceededError,
+        SemanticPlannerError,
+    ) as exc:
+        _fail(str(exc))
+    topic = load_model(project_dir.topic_json(), TopicSpec)
+    script = load_model(project_dir.story_script_json(), StoryScript)
+    review = write_scene_plan_review(
+        project_dir,
+        topic=topic,
+        script=script,
+        plan=result.plan,
+        diagnostics=result.diagnostics,
+    )
+    diag = result.diagnostics
+    console.print(
+        f"cache_hit={str(result.cache_hit).lower()} requests={result.request_count} "
+        f"scenes={diag.scene_count} runtime_s={diag.estimated_runtime_seconds:.1f} "
+        f"ai_video_frac={diag.ai_video_fraction:.4f}"
+    )
+    console.print(f"intents {project_dir.semantic_intents_json()}")
+    console.print(f"scenes {project_dir.scene_plan_json}")
+    nwords = len(review.split())
+    console.print(f"review {project_dir.scene_plan_review_md()} ({nwords} review-words)")
+
+
+@app.command("inspect-scene-plan")
+def inspect_scene_plan_cmd(
+    project_id: str = typer.Argument(...),
+    chapter: str | None = typer.Option(None, "--chapter"),
+) -> None:
+    """Show compiled story scene-plan statistics and warnings."""
+    from docprod.planning.semantic_compiler import compile_semantic_plan
+    from docprod.planning.semantic_models import SemanticIntentSet
+    from docprod.research.models import ResearchDossier
+    from docprod.writing.models import NarrationScript as StoryScript
+
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail("Missing 05_scenes.json")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    diagnostics = None
+    if project_dir.semantic_intents_json().is_file() and project_dir.story_script_json().is_file():
+        intents = load_model(project_dir.semantic_intents_json(), SemanticIntentSet)
+        script = load_model(project_dir.story_script_json(), StoryScript)
+        dossier = load_model(project_dir.research_dossier_json(), ResearchDossier)
+        _plan, diagnostics = compile_semantic_plan(intents, script=script, dossier=dossier)
+        plan = _plan
+    stats = summarize_scene_plan(plan)
+    table = Table(title=f"scene-plan {project_id}", show_header=False)
+    table.add_column("k")
+    table.add_column("v")
+    table.add_row("scene_count", str(stats.scene_count))
+    table.add_row("estimated_duration_s", f"{stats.total_duration:.2f}")
+    table.add_row("avg_duration", f"{stats.average_scene_duration:.2f}")
+    table.add_row("min_duration", f"{stats.min_scene_duration:.2f}")
+    table.add_row("max_duration", f"{stats.max_scene_duration:.2f}")
+    table.add_row("strategy_counts", str(stats.strategy_counts))
+    table.add_row("ai_video_seconds", f"{stats.ai_video_duration:.2f}")
+    table.add_row("ai_video_fraction", f"{stats.ai_video_fraction:.4f}")
+    if diagnostics:
+        table.add_row("maps", str(diagnostics.map_scenes))
+        table.add_row("graphics", str(diagnostics.graphic_scenes))
+        table.add_row("archive_opportunities", str(diagnostics.archive_opportunities))
+        table.add_row("document_scenes", str(diagnostics.document_scenes))
+        table.add_row("reenactments", str(diagnostics.reenactment_count))
+        table.add_row("claims_referenced", str(diagnostics.claims_referenced))
+        table.add_row("sources_referenced", str(diagnostics.sources_referenced))
+        table.add_row("repetition_warnings", str(len(diagnostics.repetition_warnings)))
+        table.add_row("hallucination_warnings", str(len(diagnostics.hallucination_warnings)))
+        table.add_row("diversity_warnings", str(len(diagnostics.diversity_warnings)))
+    console.print(table)
+    scenes = plan.scenes
+    if chapter:
+        scenes = [scene for scene in scenes if str(scene.metadata.get("chapter") or "") == chapter]
+    detail = Table(title="scenes" if not chapter else f"chapter {chapter}")
+    detail.add_column("id")
+    detail.add_column("t")
+    detail.add_column("strategy")
+    detail.add_column("subject")
+    for scene in scenes:
+        detail.add_row(
+            scene.id,
+            f"{scene.start:.1f}-{scene.end:.1f}",
+            scene.asset_strategy.value,
+            str(scene.metadata.get("visual_subject") or "")[:40],
+        )
+    console.print(detail)
+    if diagnostics:
+        for item in diagnostics.hallucination_warnings + diagnostics.repetition_warnings:
+            console.print(f"[yellow]{item.code}[/yellow] {item.scene_id}: {item.message}")
 
 
 @app.command("show-project")

@@ -347,9 +347,12 @@ def _figure_contradictions(figures: list[Figure]) -> list[Contradiction]:
 
 
 def dossier_input_text(report: str, registry: SourceRegistry) -> str:
+    from docprod.research.evidence import evidence_catalog_rows
+
+    rows = evidence_catalog_rows(registry)
     catalog = "\n".join(
         f"{item.source_id}\t{item.quality_tier}\t{item.title or item.domain}\t{item.url}"
-        for item in registry.sources
+        for item in rows
     )
     return (
         f"PROMPT_VERSION={DOSSIER_PROMPT_VERSION}\n\n"

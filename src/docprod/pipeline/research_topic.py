@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 from docprod.config import Settings, get_settings
 from docprod.models.project import Project
+from docprod.providers.request_budget import ModelRequestBudget
 from docprod.research.citations import (
     annotations_from_response,
     build_source_registry,
@@ -175,6 +176,9 @@ def run_research_topic(
         tools=web_search_tools(),
         include=web_search_include(),
         max_tool_calls=max_calls,
+        budget=ModelRequestBudget(max_requests=2),
+        stage="research",
+        allow_retry=True,
     )
     elapsed = (datetime.now(UTC) - started).total_seconds()
     payload = dump_response(response)

@@ -47,8 +47,20 @@ class ScenePlannerProfile(BaseModel):
 
 
 DOCUMENTARY_V1 = ScenePlannerProfile()
+STORY_DOCUMENTARY_V1 = ScenePlannerProfile(
+    name="story_documentary_v1",
+    planner_version="1.0",
+    min_scene_duration=2.0,
+    target_scene_duration=4.0,
+    max_scene_duration=7.0,
+    max_ai_video_fraction=0.10,
+    max_consecutive_ai_video=2,
+    max_consecutive_same_effect=2,
+    max_consecutive_same_strategy=3,
+)
 PROFILES: dict[str, ScenePlannerProfile] = {
     DOCUMENTARY_V1.name: DOCUMENTARY_V1,
+    STORY_DOCUMENTARY_V1.name: STORY_DOCUMENTARY_V1,
 }
 
 

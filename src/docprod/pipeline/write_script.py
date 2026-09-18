@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from docprod.config import Settings, get_settings
 from docprod.exceptions import DossierValidationError
+from docprod.providers.request_budget import ModelRequestBudget
 from docprod.research.models import ResearchDossier, TopicSpec
 from docprod.research.openai_web import (
     OpenAIResponsesProvider,
@@ -107,6 +108,9 @@ def run_write_script(
         input_text=writer_input_text(topic, dossier),
         confirm_paid=confirm_paid,
         text_format={"format": writer_json_schema()},
+        budget=ModelRequestBudget(max_requests=1),
+        stage="writer",
+        allow_retry=False,
     )
     elapsed = (datetime.now(UTC) - started).total_seconds()
     payload = dump_response(response)

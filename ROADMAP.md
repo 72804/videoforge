@@ -3,7 +3,8 @@
 This document records product direction that is **not** in the current pipeline.
 
 Phase 8 implements sourced web research, a citation dossier, and a Turkish documentary script.
-It does **not** implement the creator-control surfaces below.
+Phase 9 compiles that script into a semantic scene plan. It does **not** generate assets
+and does **not** implement the creator-control surfaces below.
 
 ---
 

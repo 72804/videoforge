@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from docprod.config import Settings, get_settings
 from docprod.exceptions import ResearchQualityError
+from docprod.providers.request_budget import ModelRequestBudget
 from docprod.research.dossier import (
     DOSSIER_INSTRUCTIONS,
     dossier_input_text,
@@ -73,6 +74,9 @@ def run_build_dossier(
         input_text=dossier_input_text(report, registry),
         confirm_paid=confirm_paid,
         text_format={"format": dossier_json_schema()},
+        budget=ModelRequestBudget(max_requests=1),
+        stage="dossier",
+        allow_retry=False,
     )
     elapsed = (datetime.now(UTC) - started).total_seconds()
     payload = dump_response(response)

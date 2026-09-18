@@ -65,6 +65,16 @@ class SourceRegistry(BaseModel):
     schema_version: str = "1.0"
     project_id: str
     sources: list[SourceRecord] = Field(default_factory=list)
+    evidence_source_ids: list[str] = Field(default_factory=list)
+
+    def discovered_count(self) -> int:
+        return len(self.sources)
+
+    def evidence_records(self) -> list[SourceRecord]:
+        ids = set(self.evidence_source_ids)
+        if not ids:
+            return []
+        return [item for item in self.sources if item.source_id in ids]
 
 
 class ResearchRawResponse(BaseModel):

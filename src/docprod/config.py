@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     research_model: str = Field(default="gpt-5.6-luna")
     dossier_model: str = Field(default="gpt-5.6-luna")
     writer_model: str = Field(default="gpt-5.6-terra")
+    scene_planner_model: str = Field(default="gpt-5.6-luna")
     research_max_tool_calls: int = Field(default=8)
 
     def openai_key_configured(self) -> bool:
