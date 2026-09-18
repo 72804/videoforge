@@ -6,6 +6,7 @@ from docprod.models.enums import AssetStrategy
 from docprod.render.ffmpeg import discover_font
 from docprod.render.models import PreviewRenderProfile
 from docprod.render.placeholders import STRATEGY_COLORS, placeholder_filter
+from docprod.storage.paths import RENDERER_VERSION
 
 
 def test_render_profile_validation() -> None:
@@ -13,8 +14,12 @@ def test_render_profile_validation() -> None:
         PreviewRenderProfile(width=1279, height=720)
     with pytest.raises(ValueError):
         PreviewRenderProfile(segment_workers=0)
+    with pytest.raises(ValueError):
+        PreviewRenderProfile(motion_oversample_factor=0)
     ok = PreviewRenderProfile()
     assert ok.width == 1280 and ok.height == 720
+    assert ok.motion_oversample_factor == 4
+    assert ok.renderer_version == RENDERER_VERSION
 
 
 def test_placeholder_filter_mentions_strategy() -> None:

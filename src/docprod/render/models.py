@@ -23,6 +23,7 @@ class PreviewRenderProfile(BaseModel):
     audio_sample_rate: int = 48000
     burn_subtitles: bool = True
     segment_workers: int = 2
+    motion_oversample_factor: int = 4
 
     @field_validator("name", "renderer_version", "video_codec", "preset")
     @classmethod
@@ -45,6 +46,8 @@ class PreviewRenderProfile(BaseModel):
             raise ValueError("crf out of range")
         if self.audio_sample_rate < 8000:
             raise ValueError("audio_sample_rate too low")
+        if self.motion_oversample_factor < 1:
+            raise ValueError("motion_oversample_factor must be >= 1")
         return self
 
 

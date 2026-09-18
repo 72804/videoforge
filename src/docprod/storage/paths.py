@@ -12,7 +12,7 @@ NARRATION_FILENAME = "04_narration.json"
 SCENE_PLAN_FILENAME = "05_scenes.json"
 SCENE_PLANNER_STAGE = "scene_planner"
 PREVIEW_RENDER_STAGE = "preview_render"
-RENDERER_VERSION = "1.0"
+RENDERER_VERSION = "1.1"
 
 
 def default_repo_root() -> Path:

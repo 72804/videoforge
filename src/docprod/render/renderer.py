@@ -9,7 +9,12 @@ from threading import Lock
 from docprod.models.enums import TransitionType
 from docprod.models.project import Project
 from docprod.models.scene import Scene, ScenePlan
-from docprod.render.effects import effect_params, motion_filter
+from docprod.render.effects import (
+    camera_motion_needed,
+    effect_params,
+    motion_filter,
+    oversampled_size,
+)
 from docprod.render.ffmpeg import (
     FFmpegError,
     discover_font,
@@ -136,18 +141,28 @@ def _render_one_segment(
             pass
 
     category = str(scene.metadata.get("primary_category") or "generic")
+    oversample = (
+        profile.motion_oversample_factor if camera_motion_needed(params) else 1
+    )
+    canvas_w, canvas_h = oversampled_size(profile.width, profile.height, oversample)
     base = placeholder_filter(
         strategy=scene.asset_strategy,
         scene_id=scene.id,
         category=category,
-        width=profile.width,
-        height=profile.height,
+        width=canvas_w,
+        height=canvas_h,
         duration=duration + 0.25,
         fps=profile.fps,
         font=font,
     )
     motion = motion_filter(
-        params, duration=duration, width=profile.width, height=profile.height
+        params,
+        duration=duration,
+        width=profile.width,
+        height=profile.height,
+        fps=profile.fps,
+        frame_count=frames,
+        oversample=oversample,
     )
     vf = base if motion == "null" else f"{base},{motion}"
     tmp = mp4.with_suffix(".tmp.mp4")
@@ -189,7 +204,7 @@ def _render_one_segment(
         transition_rendered=trans_rendered,
         transition_fallback=trans_fallback,
         cache_hit=False,
-        ffmpeg_command_summary="lavfi-placeholder+motion,libx264,no-audio",
+        ffmpeg_command_summary="lavfi-placeholder+zoompan-oversample,libx264,no-audio",
         output_sha256=file_sha256(mp4),
     )
     save_model(meta_path, record)
@@ -405,6 +420,9 @@ def render_debug_scene(
     )
     source = paths.preview_segments_dir / f"{scene.id}.mp4"
     dest = paths.preview_debug_dir / f"{scene.id}.mp4"
-    dest.write_bytes(source.read_bytes())
+    payload = source.read_bytes()
+    dest.write_bytes(payload)
+    smooth = paths.preview_debug_dir / f"{scene.id}_smooth.mp4"
+    smooth.write_bytes(payload)
     _ = record
     return dest

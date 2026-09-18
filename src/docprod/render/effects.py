@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import random
 from dataclasses import dataclass
 
@@ -27,6 +28,10 @@ EFFECT_IMPLEMENTATION: dict[VisualEffect, VisualEffect] = {
     VisualEffect.location_date_card: VisualEffect.none,
 }
 
+# Output-resolution zoom range. Applied on an oversampled canvas via zoompan.
+PUSH_IN_SCALE = (1.00, 1.05)
+PULL_OUT_SCALE = (1.05, 1.00)
+
 
 @dataclass(frozen=True)
 class EffectParams:
@@ -44,6 +49,17 @@ class EffectParams:
     handheld_phase: float
     flicker: bool
     desaturate: bool
+
+
+@dataclass(frozen=True)
+class MotionSample:
+    frame_index: int
+    progress: float
+    scale: float
+    pan_x: float
+    pan_y: float
+    offset_x: float
+    offset_y: float
 
 
 def resolve_effect(requested: VisualEffect) -> tuple[VisualEffect, bool]:
@@ -67,9 +83,9 @@ def effect_params(
     flicker = False
     desaturate = False
     if rendered is VisualEffect.slow_push_in:
-        scale_start, scale_end = 1.02, 1.07
+        scale_start, scale_end = PUSH_IN_SCALE
     elif rendered is VisualEffect.slow_pull_out:
-        scale_start, scale_end = 1.07, 1.02
+        scale_start, scale_end = PULL_OUT_SCALE
     elif rendered is VisualEffect.pan_left:
         scale_start = scale_end = 1.08
         pan_x0, pan_x1 = 0.85, 0.15
@@ -112,45 +128,112 @@ def effect_params(
     )
 
 
-def motion_filter(params: EffectParams, *, duration: float, width: int, height: int) -> str:
-    """Return an ffmpeg filter chain (no leading comma) applying documentary motion."""
-    dur = max(duration, 0.001)
-    filters: list[str] = []
-    needs_motion = (
-        abs(params.scale_end - params.scale_start) > 1e-6
-        or abs(params.pan_x1 - params.pan_x0) > 1e-6
-        or abs(params.pan_y1 - params.pan_y0) > 1e-6
+def motion_progress(frame_index: int, frame_count: int) -> float:
+    """Normalized linear progress p in [0, 1] for camera moves."""
+    if frame_count <= 1:
+        return 0.0
+    return frame_index / (frame_count - 1)
+
+
+def sample_motion(
+    params: EffectParams,
+    *,
+    frame_index: int,
+    frame_count: int,
+    fps: int,
+) -> MotionSample:
+    """Deterministic per-frame camera state. Independent of FFmpeg."""
+    progress = motion_progress(frame_index, frame_count)
+    scale = params.scale_start + (params.scale_end - params.scale_start) * progress
+    pan_x = params.pan_x0 + (params.pan_x1 - params.pan_x0) * progress
+    pan_y = params.pan_y0 + (params.pan_y1 - params.pan_y0) * progress
+    t = frame_index / max(fps, 1)
+    angle = 2 * math.pi * (t * params.handheld_freq + params.handheld_phase)
+    offset_x = params.handheld_amp * math.sin(angle)
+    offset_y = params.handheld_amp * math.cos(angle)
+    return MotionSample(
+        frame_index=frame_index,
+        progress=progress,
+        scale=scale,
+        pan_x=pan_x,
+        pan_y=pan_y,
+        offset_x=offset_x,
+        offset_y=offset_y,
+    )
+
+
+def camera_motion_needed(params: EffectParams) -> bool:
+    return (
+        abs(params.scale_end - params.scale_start) > 1e-9
+        or abs(params.pan_x1 - params.pan_x0) > 1e-9
+        or abs(params.pan_y1 - params.pan_y0) > 1e-9
         or params.handheld_amp > 0
     )
-    if needs_motion:
+
+
+def oversampled_size(width: int, height: int, factor: int) -> tuple[int, int]:
+    factor = max(1, factor)
+    canvas_w = width * factor
+    canvas_h = height * factor
+    if canvas_w % 2:
+        canvas_w += 1
+    if canvas_h % 2:
+        canvas_h += 1
+    return canvas_w, canvas_h
+
+
+def legacy_integer_scale_width(scale: float, output_width: int) -> int:
+    """Old even-pixel scale width. Kept to document the staircase defect."""
+    return max(output_width, int(output_width * scale / 2) * 2)
+
+
+def motion_filter(
+    params: EffectParams,
+    *,
+    duration: float,
+    width: int,
+    height: int,
+    fps: int,
+    frame_count: int,
+    oversample: int = 4,
+) -> str:
+    """Oversampled zoompan + Lanczos downsample. `width`/`height` are OUTPUT pixels."""
+    del duration  # progress is frame-linear, not wall-clock eased
+    filters: list[str] = []
+    canvas_w, canvas_h = oversampled_size(width, height, oversample)
+    if camera_motion_needed(params):
+        denom = max(1, frame_count - 1)
+        p_expr = f"min(1\\,on/{denom})"
         z0 = params.scale_start
         z1 = params.scale_end
-        # Animate scale then crop a WxH window. Expressions use t in seconds.
-        z_expr = f"({z0}+({z1}-{z0})*t/{dur})"
-        filters.append(
-            f"scale=w='max({width},trunc({width}*{z_expr}/2)*2)':"
-            f"h='max({height},trunc({height}*{z_expr}/2)*2)':eval=frame"
-        )
+        z_expr = f"({z0}+({z1}-{z0})*{p_expr})"
+        amp = params.handheld_amp * oversample
         hx = (
-            f"+{params.handheld_amp}*sin(2*PI*(t*{params.handheld_freq}+{params.handheld_phase}))"
-            if params.handheld_amp
+            f"+{amp}*sin(2*PI*(on/{max(fps, 1)}*{params.handheld_freq}"
+            f"+{params.handheld_phase}))"
+            if amp
             else ""
         )
         hy = (
-            f"+{params.handheld_amp}*cos(2*PI*(t*{params.handheld_freq}+{params.handheld_phase}))"
-            if params.handheld_amp
+            f"+{amp}*cos(2*PI*(on/{max(fps, 1)}*{params.handheld_freq}"
+            f"+{params.handheld_phase}))"
+            if amp
             else ""
         )
         x_expr = (
-            f"(in_w-{width})*({params.pan_x0}+({params.pan_x1}-{params.pan_x0})*t/{dur}){hx}"
+            f"(iw-iw/zoom)*({params.pan_x0}+({params.pan_x1}-{params.pan_x0})*{p_expr}){hx}"
         )
         y_expr = (
-            f"(in_h-{height})*({params.pan_y0}+({params.pan_y1}-{params.pan_y0})*t/{dur}){hy}"
+            f"(ih-ih/zoom)*({params.pan_y0}+({params.pan_y1}-{params.pan_y0})*{p_expr}){hy}"
         )
+        x_clamped = f"max(0\\,min((iw-iw/zoom)\\,{x_expr}))"
+        y_clamped = f"max(0\\,min((ih-ih/zoom)\\,{y_expr}))"
         filters.append(
-            f"crop={width}:{height}:x='max(0,min(in_w-{width},{x_expr}))':"
-            f"y='max(0,min(in_h-{height},{y_expr}))'"
+            f"zoompan=z='{z_expr}':x='{x_clamped}':y='{y_clamped}':"
+            f"d=1:s={canvas_w}x{canvas_h}:fps={fps}"
         )
+    if canvas_w != width or canvas_h != height:
+        filters.append(f"scale={width}:{height}:flags=lanczos")
     if params.desaturate:
         filters.append("eq=saturation=0.35:contrast=1.08")
     if params.flicker:
