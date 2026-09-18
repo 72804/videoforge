@@ -42,6 +42,7 @@ class ClassificationResult(BaseModel):
     rule_score: int = 0
     motion_terms: list[str] = Field(default_factory=list)
     motion_score: int = 0
+    motion_strength: int = 0
 
 
 @dataclass

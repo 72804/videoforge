@@ -1,10 +1,11 @@
-from docprod.storage.hashing import canonical_json, content_hash
+from docprod.storage.hashing import canonical_json, content_hash, file_sha256
 from docprod.storage.json_store import load_model, save_model
 from docprod.storage.paths import ProjectPaths, project_paths
 
 __all__ = [
     "canonical_json",
     "content_hash",
+    "file_sha256",
     "load_model",
     "save_model",
     "ProjectPaths",

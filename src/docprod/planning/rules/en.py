@@ -76,30 +76,49 @@ CATEGORY_TERMS: dict[ContentCategory, tuple[str, ...]] = {
     ContentCategory.generic: (),
 }
 
-MOTION_TERMS: tuple[str, ...] = (
-    "run",
-    "ran",
-    "running",
-    "drive",
-    "drove",
-    "fight",
-    "fought",
-    "escape",
-    "escaped",
-    "enter",
-    "entered",
-    "leave",
-    "left",
-    "open",
-    "opened",
-    "close",
-    "closed",
-    "grab",
-    "grabbed",
-    "chase",
-    "chased",
-    "walk",
-    "walked",
-    "attack",
-    "attacked",
+MOTION_STRENGTH: dict[str, int] = {
+    # high
+    "run": 3,
+    "ran": 3,
+    "running": 3,
+    "sprint": 3,
+    "chase": 3,
+    "chased": 3,
+    "fight": 3,
+    "fought": 3,
+    "attack": 3,
+    "attacked": 3,
+    "crash": 3,
+    "crashed": 3,
+    "escape": 3,
+    "escaped": 3,
+    # medium
+    "drive": 2,
+    "drove": 2,
+    "grab": 2,
+    "grabbed": 2,
+    "throw": 2,
+    "threw": 2,
+    "climb": 2,
+    "climbed": 2,
+    # low
+    "walk": 1,
+    "walked": 1,
+    "enter": 1,
+    "entered": 1,
+    "leave": 1,
+    "left": 1,
+    "open": 1,
+    "opened": 1,
+    "close": 1,
+    "closed": 1,
+}
+
+MOTION_TERMS: tuple[str, ...] = tuple(MOTION_STRENGTH)
+
+# Bag/container phrases must not count as document visuals.
+DOCUMENT_CONTAINER_PHRASES: tuple[str, ...] = (
+    "briefcase",
+    "document bag",
+    "file bag",
 )

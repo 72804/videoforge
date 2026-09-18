@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from docprod.models.enums import AssetStrategy
 from docprod.planning.models import summarize_scene_plan
-from docprod.planning.planner import plan_scenes
+from docprod.planning.planner import image_prompt_for, join_prompt_parts, plan_scenes
 from docprod.planning.profile import ScenePlannerProfile
 from docprod.storage.hashing import content_hash
 from tests.planning.helpers import PROFILE, script_from, utterance
@@ -186,3 +186,14 @@ def test_thousand_utterances_complete() -> None:
     assert abs(plan.scenes[-1].end - 2500.0) <= 0.05
     for prev, curr in zip(plan.scenes, plan.scenes[1:], strict=False):
         assert curr.start >= prev.end - 1e-4
+
+
+def test_prompt_punctuation_is_clean() -> None:
+    joined = join_prompt_parts("A man waited.", "cinematic documentary look")
+    assert ".." not in joined
+    assert "?." not in joined
+    assert "!." not in joined
+    question = join_prompt_parts("Did he wait?", "cinematic documentary look")
+    assert "?." not in question
+    prompt = image_prompt_for("Documentary portrait representing: Hello.")
+    assert ".." not in prompt

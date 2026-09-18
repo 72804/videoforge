@@ -20,9 +20,19 @@ from docprod.models.job import JobState
 from docprod.models.project import Project
 from docprod.models.scene import Scene, ScenePlan
 from docprod.models.script import NarrationScript
+from docprod.pipeline.preview_render_stage import execute_preview_render
 from docprod.pipeline.scene_planner_stage import execute_scene_planner
 from docprod.planning.models import summarize_scene_plan
 from docprod.planning.narration_demo import build_narration_demo
+from docprod.render.ffmpeg import (
+    FFmpegError,
+    ffmpeg_has_filter,
+    ffmpeg_path,
+    ffmpeg_version_line,
+    probe_media,
+)
+from docprod.render.models import PreviewRenderProfile, RenderManifest
+from docprod.render.renderer import render_debug_scene
 from docprod.storage import paths as pathmod
 from docprod.storage.json_store import load_model, save_model
 
@@ -68,8 +78,20 @@ def _load_project(project_id: str) -> tuple[pathmod.ProjectPaths, Project]:
 def doctor() -> None:
     """Print toolchain and safety status."""
     settings = get_settings()
-    ffmpeg_ok, _, ffmpeg_ver = probe_binary("ffmpeg")
+    path_ffmpeg_ok, _, path_ffmpeg_ver = probe_binary("ffmpeg")
     ffprobe_ok, _, ffprobe_ver = probe_binary("ffprobe")
+    try:
+        resolved = ffmpeg_path()
+        ffmpeg_ok = True
+        ffmpeg_ver = ffmpeg_version_line() or resolved
+        has_libass = ffmpeg_has_filter("subtitles")
+        has_drawtext = ffmpeg_has_filter("drawtext")
+    except FFmpegError as exc:
+        resolved = None
+        ffmpeg_ok = False
+        ffmpeg_ver = str(exc)
+        has_libass = False
+        has_drawtext = False
     table = Table(title="docprod doctor", show_header=False)
     table.add_column("key")
     table.add_column("value")
@@ -79,16 +101,25 @@ def doctor() -> None:
     table.add_row("projects_root", str(pathmod.default_projects_root()))
     table.add_row("cache_root", str(pathmod.default_cache_root()))
     table.add_row("ALLOW_PAID_APIS", str(settings.allow_paid_apis).lower())
+    table.add_row("ffmpeg_path", resolved or "NOT FOUND")
     table.add_row(
         "ffmpeg",
-        ffmpeg_ver if ffmpeg_ok else "NOT FOUND",
+        ffmpeg_ver if ffmpeg_ok else (path_ffmpeg_ver or "NOT FOUND"),
     )
     table.add_row(
         "ffprobe",
         ffprobe_ver if ffprobe_ok else "NOT FOUND",
     )
+    table.add_row("ffmpeg_libass_subtitles", str(has_libass).lower())
+    table.add_row("ffmpeg_drawtext", str(has_drawtext).lower())
     console.print(table)
     if not ffmpeg_ok or not ffprobe_ok:
+        raise typer.Exit(2)
+    if not has_libass:
+        err_console.print(
+            "[yellow]Preview burn-in needs libass (`subtitles` filter). "
+            "Install Homebrew ffmpeg-full or set DOCPROD_FFMPEG.[/yellow]"
+        )
         raise typer.Exit(2)
 
 
@@ -316,6 +347,136 @@ def inspect_scenes(
     summary.add_row("ai_image_to_video_duration", f"{stats.ai_video_duration:.2f}s")
     summary.add_row("ai_image_to_video_fraction", f"{stats.ai_video_fraction:.3f}")
     console.print(summary)
+
+
+@app.command("render-preview")
+def render_preview_cmd(
+    project_id: str = typer.Argument(...),
+    force: bool = typer.Option(False, "--force", help="Re-run the preview_render stage"),
+    workers: int = typer.Option(2, "--workers", min=1, help="Parallel FFmpeg scene workers"),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Re-encode all scene segments"),
+) -> None:
+    """Render a placeholder 720p documentary preview with FFmpeg. No paid APIs."""
+    import time
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    try:
+        plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    except Exception as exc:
+        _fail(f"Invalid scene plan: {exc}")
+    stats = summarize_scene_plan(plan)
+    console.print(
+        f"Preview render {project_id}: {stats.scene_count} scenes, "
+        f"{stats.total_duration:.2f}s plan, strategies={stats.strategy_counts}"
+    )
+    started = time.perf_counter()
+    try:
+        result, skipped, _hash = execute_preview_render(
+            project_dir,
+            project=project,
+            plan=plan,
+            force=force,
+            workers=workers,
+            use_cache=not no_cache,
+            progress=lambda message: console.print(message),
+        )
+    except FFmpegError as exc:
+        _fail(str(exc))
+    except Exception as exc:
+        _fail(f"Preview render failed: {exc}")
+    elapsed = time.perf_counter() - started
+    if skipped:
+        console.print(
+            f"[yellow]Idempotent skip[/yellow]: preview already valid "
+            f"({result.manifest.final_output})"
+        )
+        return
+    console.print(
+        f"Wrote {result.manifest.final_output} in {elapsed:.1f}s "
+        f"({result.rendered_segments} rendered, {result.cache_hits} cache hits, "
+        f"{result.manifest.actual_duration:.2f}s, "
+        f"{result.manifest.width}x{result.manifest.height})"
+    )
+
+
+@app.command("render-scene")
+def render_scene_cmd(
+    project_id: str = typer.Argument(...),
+    scene_id: str = typer.Argument(...),
+) -> None:
+    """Render a single scene segment into artifacts/render/preview/debug/."""
+    project_dir, project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    try:
+        dest = render_debug_scene(
+            project_dir,
+            project=project,
+            plan=plan,
+            scene_id=scene_id,
+            profile=PreviewRenderProfile(),
+        )
+    except (FFmpegError, ValueError) as exc:
+        _fail(str(exc))
+    console.print(f"Wrote debug scene {dest}")
+
+
+@app.command("inspect-render")
+def inspect_render_cmd(
+    project_id: str = typer.Argument(...),
+) -> None:
+    """Inspect the preview MP4 and render manifest."""
+    project_dir, _project = _load_project(project_id)
+    table = Table(title=f"render {project_id}", show_header=False)
+    table.add_column("k")
+    table.add_column("v")
+    final = project_dir.preview_mp4
+    table.add_row("final_path", str(final))
+    table.add_row("exists", str(final.is_file()).lower())
+    if not final.is_file():
+        console.print(table)
+        return
+    try:
+        probe = probe_media(final)
+        valid = probe.has_video and probe.has_audio
+        table.add_row("valid", str(valid).lower())
+        table.add_row("duration", f"{probe.duration:.3f}s")
+        table.add_row("resolution", f"{probe.width}x{probe.height}")
+        table.add_row("fps", str(probe.fps))
+        table.add_row("video_codec", str(probe.video_codec))
+        table.add_row("pixel_format", str(probe.pixel_format))
+        table.add_row("audio_codec", str(probe.audio_codec))
+        table.add_row("audio", f"{probe.sample_rate}Hz/{probe.channels}ch")
+    except FFmpegError as exc:
+        table.add_row("valid", "no")
+        table.add_row("error", str(exc))
+        console.print(table)
+        return
+    table.add_row("captions.srt", str(project_dir.captions_srt.is_file()).lower())
+    table.add_row("captions.ass", str(project_dir.captions_ass.is_file()).lower())
+    if project_dir.preview_manifest.is_file():
+        manifest = load_model(project_dir.preview_manifest, RenderManifest)
+        table.add_row("scene_count", str(manifest.scene_count))
+        table.add_row("segment_count", str(len(manifest.segments)))
+        table.add_row("cache_hits", str(sum(1 for s in manifest.segments if s.cache_hit)))
+        table.add_row("fallback_count", str(manifest.fallback_count))
+        table.add_row("final_sha256", manifest.final_output_sha256 or "")
+        table.add_row("font", manifest.font_path or "")
+        console.print(table)
+        fallbacks = [s for s in manifest.segments if s.fallback_used]
+        if fallbacks:
+            fb = Table(title="effect fallbacks")
+            fb.add_column("scene")
+            fb.add_column("requested")
+            fb.add_column("rendered")
+            for item in fallbacks:
+                fb.add_row(item.scene_id, item.effect_requested.value, item.effect_rendered.value)
+            console.print(fb)
+    else:
+        console.print(table)
 
 
 @app.command("export-schemas")

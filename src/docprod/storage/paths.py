@@ -11,6 +11,8 @@ PROJECT_ID_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,62}$")
 NARRATION_FILENAME = "04_narration.json"
 SCENE_PLAN_FILENAME = "05_scenes.json"
 SCENE_PLANNER_STAGE = "scene_planner"
+PREVIEW_RENDER_STAGE = "preview_render"
+RENDERER_VERSION = "1.0"
 
 
 def default_repo_root() -> Path:
@@ -85,6 +87,38 @@ class ProjectPaths:
     def scene_plan_json(self) -> Path:
         return self.stages_dir / SCENE_PLAN_FILENAME
 
+    @property
+    def preview_dir(self) -> Path:
+        return self.render_dir / "preview"
+
+    @property
+    def preview_segments_dir(self) -> Path:
+        return self.preview_dir / "segments"
+
+    @property
+    def preview_debug_dir(self) -> Path:
+        return self.preview_dir / "debug"
+
+    @property
+    def preview_mp4(self) -> Path:
+        return self.preview_dir / "documentary_preview.mp4"
+
+    @property
+    def preview_manifest(self) -> Path:
+        return self.preview_dir / "render_manifest.json"
+
+    @property
+    def captions_srt(self) -> Path:
+        return self.preview_dir / "captions.srt"
+
+    @property
+    def captions_ass(self) -> Path:
+        return self.preview_dir / "captions.ass"
+
+    @property
+    def preview_concat(self) -> Path:
+        return self.preview_dir / "concat.txt"
+
     def iter_layout_dirs(self) -> tuple[Path, ...]:
         return (
             self.stages_dir,
@@ -93,6 +127,8 @@ class ProjectPaths:
             self.subtitles_dir,
             self.render_dir,
             self.logs_dir,
+            self.preview_dir,
+            self.preview_segments_dir,
         )
 
 

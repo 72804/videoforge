@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from docprod.models.project import Project
-from docprod.storage.hashing import canonical_json, content_hash
+from docprod.storage.hashing import canonical_json, content_hash, file_sha256
 
 
 def test_canonical_hash_independent_of_dict_key_order() -> None:
@@ -36,3 +36,12 @@ def test_pydantic_model_hashing_deterministic() -> None:
     )
     assert content_hash(first) == content_hash(second)
     assert content_hash(first) == content_hash(first.model_dump(mode="json"))
+
+
+def test_file_sha256_streaming(tmp_path) -> None:
+    path = tmp_path / "blob.bin"
+    path.write_bytes(b"docprod-preview" * 1000)
+    digest = file_sha256(path, chunk_size=64)
+    import hashlib
+
+    assert digest == hashlib.sha256(path.read_bytes()).hexdigest()

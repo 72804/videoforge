@@ -36,10 +36,14 @@ def _language_key(language: str) -> str:
     return language.strip().lower().split("-")[0]
 
 
-def _vocab(language: str) -> tuple[dict[ContentCategory, tuple[str, ...]], tuple[str, ...]]:
+def _vocab(language: str) -> tuple[
+    dict[ContentCategory, tuple[str, ...]],
+    dict[str, int],
+    tuple[str, ...],
+]:
     if _language_key(language) == "tr":
-        return tr.CATEGORY_TERMS, tr.MOTION_TERMS
-    return en.CATEGORY_TERMS, en.MOTION_TERMS
+        return tr.CATEGORY_TERMS, tr.MOTION_STRENGTH, tr.DOCUMENT_CONTAINER_PHRASES
+    return en.CATEGORY_TERMS, en.MOTION_STRENGTH, en.DOCUMENT_CONTAINER_PHRASES
 
 
 def _normalize(text: str, language: str) -> str:
@@ -58,27 +62,42 @@ def _term_pattern(term: str, language: str) -> re.Pattern[str]:
 
 
 @lru_cache(maxsize=8)
-def _compiled_vocab(
-    language_key: str,
-) -> tuple[list[tuple[ContentCategory, str, re.Pattern[str]]], list[tuple[str, re.Pattern[str]]]]:
-    categories, motion = _vocab(language_key)
+def _compiled_vocab(language_key: str) -> tuple[
+    list[tuple[ContentCategory, str, re.Pattern[str]]],
+    list[tuple[str, int, re.Pattern[str]]],
+    list[re.Pattern[str]],
+]:
+    categories, motion, containers = _vocab(language_key)
     cat_patterns: list[tuple[ContentCategory, str, re.Pattern[str]]] = []
     for category, terms in categories.items():
         for term in terms:
             cat_patterns.append((category, term, _term_pattern(term, language_key)))
-    motion_patterns = [(term, _term_pattern(term, language_key)) for term in motion]
-    return cat_patterns, motion_patterns
+    motion_patterns = [
+        (term, strength, _term_pattern(term, language_key))
+        for term, strength in motion.items()
+    ]
+    container_patterns = [_term_pattern(phrase, language_key) for phrase in containers]
+    return cat_patterns, motion_patterns, container_patterns
+
+
+def _mask_containers(text: str, patterns: list[re.Pattern[str]]) -> str:
+    masked = text
+    for pattern in patterns:
+        masked = pattern.sub(" ", masked)
+    return " ".join(masked.split())
 
 
 def classify_text(text: str, language: str) -> ClassificationResult:
     language_key = _language_key(language) or "en"
     normalized = _normalize(text, language_key)
-    cat_patterns, motion_patterns = _compiled_vocab(language_key)
+    cat_patterns, motion_patterns, container_patterns = _compiled_vocab(language_key)
+    document_haystack = _mask_containers(normalized, container_patterns)
     scores: dict[ContentCategory, int] = {}
     matched_terms: list[str] = []
     matched_categories: set[ContentCategory] = set()
     for category, term, pattern in cat_patterns:
-        hits = pattern.findall(normalized)
+        haystack = document_haystack if category is ContentCategory.document else normalized
+        hits = pattern.findall(haystack)
         if not hits:
             continue
         scores[category] = scores.get(category, 0) + len(hits) * max(1, len(term.split()))
@@ -88,10 +107,12 @@ def classify_text(text: str, language: str) -> ClassificationResult:
 
     motion_terms: list[str] = []
     motion_score = 0
-    for term, pattern in motion_patterns:
+    motion_strength = 0
+    for term, strength, pattern in motion_patterns:
         hits = pattern.findall(normalized)
         if hits:
-            motion_score += len(hits)
+            motion_score += len(hits) * strength
+            motion_strength = max(motion_strength, strength)
             if term not in motion_terms:
                 motion_terms.append(term)
 
@@ -116,4 +137,5 @@ def classify_text(text: str, language: str) -> ClassificationResult:
         rule_score=rule_score,
         motion_terms=motion_terms,
         motion_score=motion_score,
+        motion_strength=motion_strength,
     )

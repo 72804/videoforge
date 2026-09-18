@@ -51,3 +51,15 @@ def canonical_json(value: Any) -> str:
 def content_hash(value: Any) -> str:
     """SHA-256 hex digest of canonical JSON."""
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def file_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
+    """Streaming SHA-256 of a file. Does not load the whole file into memory."""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while True:
+            chunk = handle.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()

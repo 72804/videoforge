@@ -121,7 +121,16 @@ def allocate_ai_video(
     ]
     ranked.sort(
         key=lambda index: (
-            -(beats[index].classification.motion_score if beats[index].classification else 0),
+            -(
+                beats[index].classification.motion_strength
+                if beats[index].classification
+                else 0
+            ),
+            -(
+                beats[index].classification.motion_score
+                if beats[index].classification
+                else 0
+            ),
             index,
         )
     )

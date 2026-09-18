@@ -70,8 +70,24 @@ def visual_intent_for(beat: VisualBeat) -> str:
     return template.format(n=snippet)
 
 
+def join_prompt_parts(*parts: str) -> str:
+    """Join prompt clauses without producing '..' or '?.' artifacts."""
+    chunks = [" ".join(part.split()) for part in parts if part and part.strip()]
+    if not chunks:
+        return ""
+    text = chunks[0]
+    for chunk in chunks[1:]:
+        if text[-1] in ".!?…":
+            text = f"{text} {chunk}"
+        else:
+            text = f"{text}. {chunk}"
+    text = re.sub(r"\.{2,}", ".", text)
+    text = re.sub(r"([!?])\.", r"\1", text)
+    return text
+
+
 def image_prompt_for(intent: str) -> str:
-    return f"{intent}. {STILL_SUFFIX}"
+    return join_prompt_parts(intent, STILL_SUFFIX)
 
 
 def motion_prompt_for(text: str, motion_terms: list[str]) -> str:
@@ -169,6 +185,9 @@ def plan_scenes(
             "transition_reason": transition_reason,
             "segmentation_reason": beat.segmentation_reason,
             "motion_score": beat.classification.motion_score if beat.classification else 0,
+            "motion_strength": (
+                beat.classification.motion_strength if beat.classification else 0
+            ),
             "ai_video_budget_seconds": beat.metadata.get("ai_video_budget_seconds"),
         }
         if beat.visual_bridge:

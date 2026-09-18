@@ -102,3 +102,36 @@ def test_ai_video_consecutive_limit() -> None:
     flags = [s is AssetStrategy.ai_image_to_video for s in out]
     for prev, curr in zip(flags, flags[1:], strict=False):
         assert not (prev and curr)
+
+
+def test_high_motion_outranks_low_motion_for_scarce_budget() -> None:
+    profile = ScenePlannerProfile(max_ai_video_fraction=0.5, max_consecutive_ai_video=1)
+    low = VisualBeat(
+        start=0.0,
+        end=3.0,
+        text="The man entered the room and opened the door.",
+        source_utterance_ids=["u1"],
+        segmentation_reason="keep",
+        classification=classify_text("The man entered the room and opened the door.", "en"),
+    )
+    high = VisualBeat(
+        start=3.0,
+        end=6.0,
+        text="The man chased the suspect and ran down the street.",
+        source_utterance_ids=["u2"],
+        segmentation_reason="keep",
+        classification=classify_text(
+            "The man chased the suspect and ran down the street.", "en"
+        ),
+    )
+    assert high.classification.motion_strength > low.classification.motion_strength
+    out, reasons = allocate_ai_video(
+        [low, high],
+        [AssetStrategy.ai_image, AssetStrategy.ai_image],
+        ["low", "high"],
+        profile,
+    )
+    assert out[1] is AssetStrategy.ai_image_to_video
+    assert out[0] is AssetStrategy.ai_image
+    assert "budget_allowed" in reasons[1]
+    assert "over_budget" in reasons[0] or "consecutive" in reasons[0]

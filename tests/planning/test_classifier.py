@@ -39,6 +39,30 @@ def test_turkish_keywords() -> None:
     assert phone.primary_category is ContentCategory.phone_or_computer or phone.motion_score >= 1
 
 
+def test_briefcase_is_not_document() -> None:
+    turkish = classify_text("Bankın üzerinde unutulmuş bir evrak çantası duruyordu.", "tr")
+    assert turkish.primary_category is not ContentCategory.document
+    assert "evrak" not in turkish.matched_terms
+
+    english = classify_text("An abandoned briefcase sat upright on the bench.", "en")
+    assert english.primary_category is not ContentCategory.document
+
+    dosya = classify_text("Dosya çantası koltukta duruyordu.", "tr")
+    assert dosya.primary_category is not ContentCategory.document
+
+
+def test_true_documents_still_classify() -> None:
+    tr_report = classify_text("Polis raporu masaya bırakıldı.", "tr")
+    assert tr_report.primary_category is ContentCategory.document
+    tr_file = classify_text("Mahkeme dosyası incelendi.", "tr")
+    assert tr_file.primary_category in {
+        ContentCategory.document,
+        ContentCategory.court_or_legal,
+    }
+    en_report = classify_text("The police report was placed on the desk.", "en")
+    assert en_report.primary_category is ContentCategory.document
+
+
 def test_turkish_cased_istasyon() -> None:
     result = classify_text("İstanbul'daki tren istasyonu boştu.", "tr")
     assert result.primary_category is ContentCategory.location_establishing
