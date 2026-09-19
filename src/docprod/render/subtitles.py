@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from docprod.audio.cues import chunk_alignment_cues
+from docprod.audio.models import AlignmentReport
 from docprod.models.scene import Scene, ScenePlan
 from docprod.storage.json_store import atomic_write_text
 
@@ -114,6 +116,57 @@ def build_ass(
     return header + "\n".join(events) + ("\n" if events else "")
 
 
+def build_srt_from_cues(cues: list[tuple[float, float, str]]) -> str:
+    blocks: list[str] = []
+    for index, (start, end, text) in enumerate(cues, start=1):
+        lines = wrap_caption(text)
+        if not lines:
+            continue
+        blocks.append(
+            f"{index}\n{srt_timestamp(start)} --> {srt_timestamp(end)}\n" + "\n".join(lines)
+        )
+    return "\n\n".join(blocks) + ("\n" if blocks else "")
+
+
+def build_ass_from_cues(
+    cues: list[tuple[float, float, str]],
+    *,
+    play_res_x: int,
+    play_res_y: int,
+    font_name: str = "Arial",
+) -> str:
+    fontsize = max(18, play_res_y // 20)
+    margin_v = max(28, play_res_y // 13)
+    header = (
+        "[Script Info]\n"
+        "ScriptType: v4.00+\n"
+        f"PlayResX: {play_res_x}\n"
+        f"PlayResY: {play_res_y}\n"
+        "WrapStyle: 0\n"
+        "ScaledBorderAndShadow: yes\n"
+        "\n"
+        "[V4+ Styles]\n"
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, "
+        "BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, "
+        "BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n"
+        f"Style: Default,{font_name},{fontsize},&H00FFFFFF,&H000000FF,&H00000000,&H64000000,"
+        f"0,0,0,0,100,100,0,0,1,2.4,0.8,2,70,70,{margin_v},1\n"
+        "\n"
+        "[Events]\n"
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+    )
+    events: list[str] = []
+    for start, end, text in cues:
+        lines = wrap_caption(text)
+        if not lines:
+            continue
+        body = r"\N".join(_ass_escape(line) for line in lines)
+        events.append(
+            f"Dialogue: 0,{ass_timestamp(start)},{ass_timestamp(end)},Default,,0,0,0,,{body}"
+        )
+    return header + "\n".join(events) + ("\n" if events else "")
+
+
 def write_captions(
     plan: ScenePlan,
     *,
@@ -122,12 +175,24 @@ def write_captions(
     play_res_x: int,
     play_res_y: int,
     font_name: str = "Arial",
-) -> None:
+    alignment: AlignmentReport | None = None,
+) -> int:
+    if alignment is not None:
+        cues = chunk_alignment_cues(alignment)
+        atomic_write_text(srt_path, build_srt_from_cues(cues))
+        atomic_write_text(
+            ass_path,
+            build_ass_from_cues(
+                cues, play_res_x=play_res_x, play_res_y=play_res_y, font_name=font_name
+            ),
+        )
+        return len(cues)
     atomic_write_text(srt_path, build_srt(plan))
     atomic_write_text(
         ass_path,
         build_ass(plan, play_res_x=play_res_x, play_res_y=play_res_y, font_name=font_name),
     )
+    return sum(1 for scene in plan.scenes if scene.subtitle.strip())
 
 
 def scene_has_caption(scene: Scene) -> bool:

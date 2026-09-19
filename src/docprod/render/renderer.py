@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 
+from docprod.exceptions import ZeroPlaceholderError
 from docprod.models.enums import AssetStrategy, TransitionType, VisualEffect
 from docprod.models.project import Project
 from docprod.models.scene import Scene, ScenePlan
@@ -77,6 +78,8 @@ def segment_input_hash(
             "effect_rendered": params_rendered,
             "still_sha256": still_sha256,
             "still_pix_fmt": "yuv420p",
+            "unit_progress_start": scene.metadata.get("unit_progress_start"),
+            "unit_progress_end": scene.metadata.get("unit_progress_end"),
         }
     )
 
@@ -118,6 +121,7 @@ def _render_one_segment(
     paths: ProjectPaths,
     font: Path,
     use_cache: bool,
+    allow_placeholders: bool = True,
 ) -> SegmentRecord:
     trans_rendered, trans_fallback = _transition_rendered(scene.transition)
     frames = frame_count_for_span(scene.start, scene.end, profile.fps)
@@ -166,6 +170,8 @@ def _render_one_segment(
         profile.motion_oversample_factor if camera_motion_needed(params) else 1
     )
     canvas_w, canvas_h = oversampled_size(profile.width, profile.height, oversample)
+    progress_start = float(scene.metadata.get("unit_progress_start") or 0.0)
+    progress_end = float(scene.metadata.get("unit_progress_end") or 1.0)
     motion = motion_filter(
         params,
         duration=duration,
@@ -174,8 +180,12 @@ def _render_one_segment(
         fps=profile.fps,
         frame_count=frames,
         oversample=oversample,
+        progress_start=progress_start,
+        progress_end=progress_end,
     )
     if visual is None:
+        if not allow_placeholders:
+            raise ZeroPlaceholderError(f"No visual resolved for {scene.id}")
         source_asset = "placeholder"
         strategy_rendered = (
             "placeholder"
@@ -294,6 +304,7 @@ def _render_one_segment(
                     mask = Image.open(visual.map_mask)
                     for index in range(frames):
                         progress = motion_progress(index, frames)
+                        progress = progress_start + (progress_end - progress_start) * progress
                         frame = composite_map_frame(
                             background, overlay, mask, progress=progress
                         )
@@ -421,6 +432,8 @@ def render_preview(
     captions_srt: Path | None = None,
     captions_ass: Path | None = None,
     narration_wav: Path | None = None,
+    allow_placeholders: bool = True,
+    alignment=None,
 ) -> PreviewRenderResult:
     require_perspective_filter()
     if profile.burn_subtitles:
@@ -436,6 +449,7 @@ def render_preview(
         play_res_x=profile.width,
         play_res_y=profile.height,
         font_name=_ass_font_name(font),
+        alignment=alignment,
     )
     worker_count = workers or profile.segment_workers
     records: dict[str, SegmentRecord] = {}
@@ -450,6 +464,7 @@ def render_preview(
             paths=paths,
             font=font,
             use_cache=use_cache,
+            allow_placeholders=allow_placeholders,
         )
 
     if worker_count == 1 or total <= 1:
@@ -492,7 +507,7 @@ def render_preview(
                 "copy",
                 str(concat_tmp),
             ],
-            timeout=180,
+            timeout=600,
         )
         vf_parts = []
         if profile.burn_subtitles:
@@ -559,7 +574,7 @@ def render_preview(
             ]
         )
         args.extend(encode)
-        run_ffmpeg(args, timeout=300)
+        run_ffmpeg(args, timeout=1800)
         dest = output_mp4 or paths.preview_mp4
         dest.parent.mkdir(parents=True, exist_ok=True)
         final_tmp.replace(dest)

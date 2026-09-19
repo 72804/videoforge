@@ -270,6 +270,8 @@ def motion_filter(
     fps: int,
     frame_count: int,
     oversample: int = 1,
+    progress_start: float = 0.0,
+    progress_end: float = 1.0,
 ) -> str:
     """Fractional perspective camera. `width`/`height` are OUTPUT pixels."""
     del duration
@@ -277,7 +279,8 @@ def motion_filter(
     canvas_w, canvas_h = oversampled_size(width, height, oversample)
     if camera_motion_needed(params):
         denom = max(1, frame_count - 1)
-        p_expr = f"min(1\\,max(0\\,(in-1)/{denom}))"
+        local = f"min(1\\,max(0\\,(in-1)/{denom}))"
+        p_expr = f"min(1\\,max(0\\,{progress_start}+({progress_end}-{progress_start})*{local}))"
         z0 = params.scale_start
         z1 = params.scale_end
         z_expr = f"({z0}+({z1}-{z0})*{p_expr})"

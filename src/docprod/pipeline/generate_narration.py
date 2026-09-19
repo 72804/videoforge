@@ -94,10 +94,47 @@ def generate_narration(
     tts: OpenAITTSProvider | None = None,
     whisper: OpenAIWhisperAligner | None = None,
 ) -> NarrationResult:
+    from docprod.audio.tts_preflight import require_tts_within_limit
+
     cfg = settings or get_settings()
     _ = project
     prepared = prepare_narration(paths, plan, settings=cfg)
     script = prepared.script
+    require_tts_within_limit(script.text)
+    script_hash = content_hash(script.text)
+    request_hash = tts_request_hash(
+        model=cfg.openai_tts_model,
+        voice=cfg.openai_tts_voice,
+        speed=cfg.openai_tts_speed,
+        instructions=DEFAULT_VOICE_INSTRUCTIONS,
+        script=script.text,
+    )
+    wav = paths.narration_master_wav()
+    meta_path = paths.narration_master_meta()
+    align_path = paths.narration_alignment_json()
+    if wav.is_file() and meta_path.is_file() and align_path.is_file():
+        existing = load_model(meta_path, NarrationMasterMeta)
+        if existing.request_hash == request_hash and existing.output_sha256 == file_sha256(wav):
+            alignment = load_model(align_path, AlignmentReport)
+            if paths.runtime_timeline_json().is_file():
+                timeline = load_model(paths.runtime_timeline_json(), RuntimeTimeline)
+            else:
+                probe = probe_media(wav)
+                timeline = build_runtime_timeline(
+                    plan, alignment, audio_duration=probe.duration
+                )
+                save_model(paths.runtime_timeline_json(), timeline)
+            return NarrationResult(
+                script=script,
+                meta=existing.model_copy(
+                    update={"tts_request_count": 0, "whisper_request_count": 0}
+                ),
+                alignment=alignment,
+                timeline=timeline,
+                tts_request_count=0,
+                whisper_request_count=0,
+                loudness=existing.loudness,
+            )
     tts_client = tts or OpenAITTSProvider(settings=cfg)
     whisper_client = whisper or OpenAIWhisperAligner(settings=cfg)
     raw_bytes, usage = tts_client.synthesize(
@@ -111,20 +148,15 @@ def generate_narration(
     raw_path.unlink(missing_ok=True)
     probe = probe_media(paths.narration_master_wav())
     script_hash = content_hash(script.text)
-    request_hash = tts_request_hash(
-        model=cfg.openai_tts_model,
-        voice=cfg.openai_tts_voice,
-        speed=cfg.openai_tts_speed,
-        instructions=DEFAULT_VOICE_INSTRUCTIONS,
-        script=script.text,
-    )
     words, language, raw_whisper = whisper_client.align_words(
         paths.narration_master_wav(),
         confirm_paid=confirm_paid,
         language="tr",
     )
     save_json(paths.whisper_alignment_json(), raw_whisper)
-    alignment = align_script_to_whisper(plan, words, language=language, require_quality=True)
+    alignment = align_script_to_whisper(
+        plan, words, language=language, require_quality=True, audio_duration=probe.duration
+    )
     save_model(paths.narration_alignment_json(), alignment)
     timeline = build_runtime_timeline(plan, alignment, audio_duration=probe.duration)
     save_model(paths.runtime_timeline_json(), timeline)

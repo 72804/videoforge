@@ -685,12 +685,111 @@ def inspect_production_plan_cmd(project_id: str = typer.Argument(...)) -> None:
         "READY_ARCHIVE",
         "NEEDS_AI_IMAGE",
         "NEEDS_AI_VIDEO",
+        "READY_AI_IMAGE",
+        "READY_AI_KEYFRAME",
         "REVIEW_REQUIRED",
         "UNRESOLVED",
     ):
         count = sum(1 for unit in asset_plan.units if unit.status == status)
         table.add_row(status, str(count))
     console.print(table)
+
+
+@app.command("inspect-runtime")
+def inspect_runtime_cmd(project_id: str = typer.Argument(...)) -> None:
+    """Show narrated runtime coverage after review-episode."""
+    from docprod.audio.models import AlignmentReport, RuntimeTimeline
+    from docprod.production import AssetPlan
+    from docprod.production.cost import strategy_counts
+
+    project_dir, _project = _load_project(project_id)
+    table = Table(title=f"runtime {project_id}", show_header=False)
+    table.add_column("k")
+    table.add_column("v")
+    if project_dir.scene_plan_json.is_file():
+        plan = load_model(project_dir.scene_plan_json, ScenePlan)
+        table.add_row("scenes", str(len(plan.scenes)))
+        table.add_row("strategies", str(strategy_counts(plan)))
+    if project_dir.asset_plan_json().is_file():
+        asset_plan = load_model(project_dir.asset_plan_json(), AssetPlan)
+        table.add_row("asset_units", str(asset_plan.asset_unit_count))
+        table.add_row(
+            "ai_keyframes",
+            str(sum(1 for unit in asset_plan.units if unit.status == "READY_AI_KEYFRAME")),
+        )
+    if project_dir.runtime_timeline_json().is_file():
+        timeline = load_model(project_dir.runtime_timeline_json(), RuntimeTimeline)
+        table.add_row("narration_duration", f"{timeline.audio_duration:.3f}")
+    if project_dir.narration_alignment_json().is_file():
+        alignment = load_model(project_dir.narration_alignment_json(), AlignmentReport)
+        table.add_row("alignment_fraction", str(alignment.match_fraction))
+        table.add_row("interpolated", str(alignment.interpolated_word_count))
+        table.add_row("unmatched", str(alignment.unmatched_word_count))
+    srt = project_dir.captions_narrated_srt()
+    if srt.is_file():
+        cues = srt.read_text().count("\n\n") + 1 if srt.stat().st_size else 0
+        table.add_row("subtitle_cues", str(cues))
+    table.add_row("placeholders", "see inspect-assets")
+    console.print(table)
+
+
+@app.command("render-review-episode")
+def render_review_episode_cmd(
+    project_id: str = typer.Argument(...),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Convert info graphics, generate review stills/keyframes, narrate, align, render."""
+    from docprod.exceptions import TtsInputLimitError
+    from docprod.pipeline.render_review_episode import (
+        execute_review_episode,
+        prepare_review_episode,
+    )
+    from docprod.production import AssetPlan
+
+    project_dir, project = _load_project(project_id)
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    asset_plan = load_model(project_dir.asset_plan_json(), AssetPlan)
+    if dry_run:
+        _plan, _assets, dry = prepare_review_episode(
+            project_dir, project=project, plan=plan, asset_plan=asset_plan
+        )
+        console.print_json(
+            data={
+                "scene_count": dry.scene_count,
+                "asset_unit_count": dry.asset_unit_count,
+                "strategy_counts": dry.strategy_counts,
+                "paid_image_requests": dry.paid_image_requests,
+                "tts_requests": dry.tts_requests,
+                "whisper_requests": dry.whisper_requests,
+                "video_model_requests": dry.video_model_requests,
+                "image_model": dry.image_model,
+                "image_quality": dry.image_quality,
+                "tts_model": dry.tts_model,
+                "tts_voice": dry.tts_voice,
+                "tts_chars": dry.tts_chars,
+                "tts_tokens": dry.tts_tokens,
+                "tts_within_limit": dry.tts_within_limit,
+                "tts_reason": dry.tts_reason,
+                "output_paths": dry.output_paths,
+            }
+        )
+        return
+    try:
+        dry, _assets = execute_review_episode(
+            project_dir,
+            project=project,
+            plan=plan,
+            asset_plan=asset_plan,
+            confirm_paid=confirm_paid,
+        )
+    except TtsInputLimitError as exc:
+        _fail(str(exc))
+    console.print(
+        f"images={dry.paid_image_requests} tts={dry.tts_requests} "
+        f"whisper={dry.whisper_requests} video_models={dry.video_model_requests}"
+    )
+    console.print(f"preview {project_dir.preview_narrated_mp4()}")
 
 
 @app.command("estimate-production-cost")

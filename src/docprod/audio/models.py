@@ -52,6 +52,7 @@ class AlignedToken(BaseModel):
     whisper_match: str | None = None
     status: str = "unmatched"
     interpolated: bool = False
+    timing_source: str | None = None
 
 
 class AlignmentReport(BaseModel):
@@ -64,6 +65,8 @@ class AlignmentReport(BaseModel):
     matched_word_count: int
     interpolated_word_count: int
     unmatched_word_count: int
+    trailing_unmatched_count: int = 0
+    leading_unmatched_count: int = 0
     match_fraction: float
     tokens: list[AlignedToken] = Field(default_factory=list)
     quality_passed: bool = False
@@ -100,6 +103,9 @@ class RuntimeSceneTiming(BaseModel):
     duration: float
     planned_duration: float
     narration: str
+    asset_unit_id: str = ""
+    source_asset: str = ""
+    runtime_strategy: str = ""
 
 
 class RuntimeTimeline(BaseModel):

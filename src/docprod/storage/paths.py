@@ -21,8 +21,11 @@ CONTACT_SHEET_REPAIRS_FILENAME = "contact_sheet_repairs.jpg"
 GRAPHICS_CONTACT_SHEET_FILENAME = "graphics_contact_sheet.jpg"
 STOCK_CANDIDATES_FILENAME = "stock_candidates.json"
 STOCK_CREDITS_FILENAME = "stock_sources.json"
-RUNTIME_TIMELINE_FILENAME = "06_runtime_timeline.json"
+RUNTIME_TIMELINE_FILENAME = "07_runtime_timeline.json"
 ASSET_PLAN_FILENAME = "06_asset_plan.json"
+PRODUCTION_COSTS_FILENAME = "production_costs.json"
+PAID_VISUALS_SHEET_FILENAME = "paid_visuals_contact_sheet.jpg"
+PROMPT_VERSION = "review-stills-v1"
 ARCHIVE_CANDIDATES_FILENAME = "archive_candidates.json"
 ARCHIVE_CREDITS_FILENAME = "archive_sources.json"
 ASSET_REVIEW_QUEUE_FILENAME = "asset_review_queue.md"
@@ -340,6 +343,27 @@ class ProjectPaths:
 
     def ai_video_spec_path(self, asset_unit_id: str) -> Path:
         return self.ai_specs_dir() / f"{asset_unit_id}.video.json"
+
+    def ai_keyframes_dir(self) -> Path:
+        return self.visuals_dir / "ai_keyframes"
+
+    def ai_keyframe_path(self, asset_unit_id: str, suffix: str = ".jpg") -> Path:
+        return self.ai_keyframes_dir() / f"{asset_unit_id}{suffix}"
+
+    def ai_keyframe_meta(self, asset_unit_id: str) -> Path:
+        return self.ai_keyframes_dir() / f"{asset_unit_id}.meta.json"
+
+    def ai_unit_still_path(self, asset_unit_id: str, suffix: str = ".jpg") -> Path:
+        return self.visuals_dir / "ai_stills" / f"{asset_unit_id}{suffix}"
+
+    def ai_unit_still_meta(self, asset_unit_id: str) -> Path:
+        return self.visuals_dir / "ai_stills" / f"{asset_unit_id}.meta.json"
+
+    def production_costs_json(self) -> Path:
+        return self.review_dir / PRODUCTION_COSTS_FILENAME
+
+    def paid_visuals_contact_sheet(self) -> Path:
+        return self.review_dir / PAID_VISUALS_SHEET_FILENAME
 
     @property
     def review_dir(self) -> Path:

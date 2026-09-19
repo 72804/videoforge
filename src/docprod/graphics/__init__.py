@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-GRAPHIC_RENDERER_VERSION = "1.0"
+GRAPHIC_RENDERER_VERSION = "1.1"
 GRAPHIC_WIDTH = 1536
 GRAPHIC_HEIGHT = 864
 TURKISH_SAMPLE = "çğıİöşü ÇĞIÖŞÜ"

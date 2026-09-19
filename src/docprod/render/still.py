@@ -9,6 +9,7 @@ from docprod.models.enums import AssetStrategy
 from docprod.models.scene import Scene
 from docprod.providers.image_config import GeneratedImageManifest
 from docprod.stock.models import StockSourceManifest
+from docprod.storage.hashing import file_sha256
 from docprod.storage.json_store import load_model
 from docprod.storage.paths import ProjectPaths
 
@@ -56,6 +57,62 @@ def still_pixel_normalize_filter() -> str:
     return "scale=in_range=full:out_range=limited:flags=bicubic,format=yuv420p"
 
 
+def resolve_archive_still(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
+    if scene.asset_strategy not in {
+        AssetStrategy.archive_image,
+        AssetStrategy.archive_video,
+    }:
+        return None
+    rel = str(scene.metadata.get("source_path") or "")
+    candidates = []
+    if rel:
+        candidates.append(Path(rel))
+        candidates.append(paths.root / rel)
+    unit = str(scene.metadata.get("asset_unit_id") or "")
+    if unit:
+        candidates.extend(
+            [
+                paths.archive_source_path(unit, ".jpg"),
+                paths.archive_source_path(unit, ".png"),
+                paths.archive_source_path(unit, ".jpeg"),
+            ]
+        )
+    from docprod.storage.hashing import file_sha256
+
+    for candidate in candidates:
+        if candidate.is_file():
+            return VisualSource(
+                path=candidate,
+                sha256=file_sha256(candidate),
+                kind="archive_still",
+                strategy_rendered="archive_image",
+            )
+    return None
+
+
+def resolve_unit_generated_still(paths: ProjectPaths, scene: Scene) -> tuple[Path, str] | None:
+    unit = str(scene.metadata.get("asset_unit_id") or "")
+    if unit:
+        for meta_path, fallback in (
+            (paths.ai_keyframe_meta(unit), paths.ai_keyframe_path(unit)),
+            (paths.ai_unit_still_meta(unit), paths.ai_unit_still_path(unit)),
+        ):
+            if meta_path.is_file():
+                try:
+                    manifest = load_model(meta_path, GeneratedImageManifest)
+                except (OSError, ValueError):
+                    manifest = None
+                if manifest and manifest.output_sha256:
+                    candidate = Path(manifest.output_path)
+                    if not candidate.is_file():
+                        candidate = (paths.root / manifest.output_path).resolve()
+                    if not candidate.is_file():
+                        candidate = fallback
+                    if candidate.is_file():
+                        return candidate, manifest.output_sha256
+    return resolve_generated_still(paths, scene.id)
+
+
 def resolve_generated_still(paths: ProjectPaths, scene_id: str) -> tuple[Path, str] | None:
     meta_path = paths.scene_image_meta(scene_id)
     if not meta_path.is_file():
@@ -81,7 +138,7 @@ def resolve_scene_still(paths: ProjectPaths, scene: Scene) -> tuple[Path, str] |
     """Return a generated still for ai_image or ai_image_to_video keyframe preview."""
     if scene.asset_strategy not in IMAGE_STRATEGIES:
         return None
-    return resolve_generated_still(paths, scene.id)
+    return resolve_unit_generated_still(paths, scene)
 
 
 def _graphic_file(paths: ProjectPaths, relative: object, fallback: Path) -> Path:
@@ -141,39 +198,52 @@ def resolve_local_graphic(paths: ProjectPaths, scene: Scene) -> VisualSource | N
 def resolve_stock_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
     if scene.asset_strategy not in STOCK_STRATEGIES:
         return None
-    meta_path = paths.stock_source_meta(scene.id)
-    if not meta_path.is_file():
-        return None
-    try:
-        meta = load_model(meta_path, StockSourceManifest)
-    except (OSError, ValueError):
-        return None
     clip = paths.stock_clip_mp4(scene.id)
-    if meta.clip_path:
-        candidate = Path(meta.clip_path)
+    if clip.is_file():
+        sha = None
+        meta_path = paths.stock_source_meta(scene.id)
+        if meta_path.is_file():
+            try:
+                meta = load_model(meta_path, StockSourceManifest)
+                sha = meta.clip_sha256
+            except (OSError, ValueError):
+                sha = None
+        return VisualSource(
+            path=clip,
+            sha256=sha or file_sha256(clip),
+            kind="stock_video",
+            strategy_rendered="stock_video",
+        )
+    rel = str(scene.metadata.get("source_path") or "")
+    candidates = []
+    if rel:
+        candidates.append(Path(rel))
+        candidates.append(paths.root / rel)
+    candidates.append(paths.stock_source_mp4(scene.id))
+    for candidate in candidates:
         if candidate.is_file():
-            clip = candidate
-        else:
-            nested = (paths.root / meta.clip_path).resolve()
-            if nested.is_file():
-                clip = nested
-    if not clip.is_file() or not meta.clip_sha256:
-        return None
-    return VisualSource(
-        path=clip,
-        sha256=meta.clip_sha256,
-        kind="stock_video",
-        strategy_rendered="stock_video",
-    )
+            return VisualSource(
+                path=candidate,
+                sha256=file_sha256(candidate),
+                kind="stock_video",
+                strategy_rendered="stock_video",
+            )
+    return None
 
 
 def resolve_scene_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
-    """AI video (later) > stock/archive clip > AI still > local graphic > placeholder."""
+    """AI video (later) > stock/archive clip > AI still > archive photo > local graphic."""
     stock = resolve_stock_visual(paths, scene)
     if stock is not None:
         return stock
+    archive = resolve_archive_still(paths, scene)
+    if archive is not None and scene.asset_strategy in {
+        AssetStrategy.archive_image,
+        AssetStrategy.archive_video,
+    }:
+        return archive
     if scene.asset_strategy in IMAGE_STRATEGIES:
-        still = resolve_generated_still(paths, scene.id)
+        still = resolve_unit_generated_still(paths, scene)
         if still is not None:
             kind = (
                 "ai_image_keyframe_preview"
@@ -187,4 +257,7 @@ def resolve_scene_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | No
                 strategy_rendered=kind,
             )
         return None
-    return resolve_local_graphic(paths, scene)
+    graphic = resolve_local_graphic(paths, scene)
+    if graphic is not None:
+        return graphic
+    return archive

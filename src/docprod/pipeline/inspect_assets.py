@@ -15,6 +15,7 @@ KIND_LABELS = {
     "generated_still": "openai_image",
     "local_graphic": "local_graphic",
     "local_map": "local_map_animation",
+    "archive_still": "archive_image",
 }
 
 

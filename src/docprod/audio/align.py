@@ -72,6 +72,7 @@ def align_script_to_whisper(
     language: str | None,
     threshold: float = ALIGNMENT_MATCH_THRESHOLD,
     require_quality: bool = True,
+    audio_duration: float | None = None,
 ) -> AlignmentReport:
     script = _script_tokens(plan)
     script_norm = [fold_token(word) for word, _ in script]
@@ -128,13 +129,74 @@ def align_script_to_whisper(
 
     canonical = len(tokens)
     fraction = matched / canonical if canonical else 0.0
+
+    trailing = 0
+    leading = 0
+    spoken_end = None
+    if whisper_words:
+        spoken_end = max(item.end for item in whisper_words)
+    if audio_duration is not None:
+        spoken_end = max(spoken_end or 0.0, float(audio_duration) - 0.02)
+
+    first_timed = next((i for i, item in enumerate(tokens) if item.start is not None), None)
+    if first_timed is not None and first_timed > 0 and first_timed <= 6:
+        lead = tokens[:first_timed]
+        if all(item.status == "unmatched" for item in lead):
+            end_at = float(tokens[first_timed].start or 0.0)
+            span = max(end_at, 0.04)
+            step = span / first_timed
+            for offset, token in enumerate(lead):
+                tokens[offset] = token.model_copy(
+                    update={
+                        "start": round(offset * step, 4),
+                        "end": round((offset + 1) * step, 4),
+                        "status": "interpolated",
+                        "interpolated": True,
+                        "timing_source": "leading_interpolation",
+                    }
+                )
+                interpolated += 1
+                leading += 1
+
+    last_timed = next(
+        (i for i, item in reversed(list(enumerate(tokens))) if item.end is not None),
+        None,
+    )
+    if (
+        last_timed is not None
+        and last_timed < len(tokens) - 1
+        and spoken_end is not None
+        and fraction >= 0.90
+    ):
+        trail = tokens[last_timed + 1 :]
+        if len(trail) <= 8 and all(item.status == "unmatched" for item in trail):
+            start_at = float(tokens[last_timed].end or 0.0)
+            remain = max(float(spoken_end) - start_at, 0.04)
+            step = remain / len(trail)
+            for offset, token in enumerate(trail):
+                index = last_timed + 1 + offset
+                tokens[index] = token.model_copy(
+                    update={
+                        "start": round(start_at + offset * step, 4),
+                        "end": round(start_at + (offset + 1) * step, 4),
+                        "status": "interpolated",
+                        "interpolated": True,
+                        "timing_source": "trailing_interpolation",
+                    }
+                )
+                interpolated += 1
+                trailing += 1
+
+    unmatched = sum(1 for token in tokens if token.status == "unmatched")
     report = AlignmentReport(
         project_id=plan.project_id,
         language=language,
         canonical_word_count=canonical,
         matched_word_count=matched,
         interpolated_word_count=interpolated,
-        unmatched_word_count=sum(1 for token in tokens if token.status == "unmatched"),
+        unmatched_word_count=unmatched,
+        trailing_unmatched_count=trailing,
+        leading_unmatched_count=leading,
         match_fraction=round(fraction, 6),
         tokens=tokens,
         quality_passed=fraction >= threshold,

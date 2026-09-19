@@ -12,6 +12,8 @@ AssetStatus = Literal[
     "READY_ARCHIVE",
     "NEEDS_AI_IMAGE",
     "NEEDS_AI_VIDEO",
+    "READY_AI_IMAGE",
+    "READY_AI_KEYFRAME",
     "REVIEW_REQUIRED",
     "UNRESOLVED",
 ]

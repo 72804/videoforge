@@ -6,6 +6,7 @@ from io import BytesIO
 from pathlib import Path
 
 from docprod.graphics import GRAPHIC_HEIGHT, GRAPHIC_RENDERER_VERSION, GRAPHIC_WIDTH
+from docprod.graphics.data import info_graphic_kind, render_info_graphic
 from docprod.graphics.document import (
     FORBIDDEN_MARKERS,
     classify_document_layout,
@@ -41,6 +42,7 @@ def graphic_source_hash(scene: Scene, *, seed: int) -> str:
             "visual_intent": scene.visual_intent,
             "strategy": scene.asset_strategy.value,
             "category": scene.metadata.get("primary_category"),
+            "graphic_kind": scene.metadata.get("graphic_kind"),
             "seed": seed,
             "renderer": GRAPHIC_RENDERER_VERSION,
             "size": [GRAPHIC_WIDTH, GRAPHIC_HEIGHT],
@@ -77,6 +79,9 @@ def _load_manifest(path: Path) -> GraphicManifest | None:
 def render_scene_graphic_image(scene: Scene, *, seed: int):
     layout = classify_document_layout(scene)
     salt = f"{seed}:{scene.id}:{GRAPHIC_RENDERER_VERSION}"
+    if info_graphic_kind(scene) is not None:
+        image, fields, variant = render_info_graphic(scene)
+        return "info_graphic", variant, image, fields, None, None, None
     if scene.asset_strategy is AssetStrategy.map:
         still, background, overlay, mask, fields = compose_map_still(scene, seed=salt)
         return "map", "schematic_map", still, fields, overlay, mask, background

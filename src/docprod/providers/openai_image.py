@@ -22,18 +22,20 @@ def image_request_hash(
     prompt: str,
     config: ImageGenerationConfig,
     seed: int | None,
+    extra: dict[str, str] | None = None,
 ) -> str:
-    return content_hash(
-        {
-            "provider": config.provider,
-            "model": config.model,
-            "prompt": prompt,
-            "size": config.size,
-            "quality": config.quality,
-            "output_format": config.output_format,
-            "seed": seed,
-        }
-    )
+    payload = {
+        "provider": config.provider,
+        "model": config.model,
+        "prompt": prompt,
+        "size": config.size,
+        "quality": config.quality,
+        "output_format": config.output_format,
+        "seed": seed,
+    }
+    if extra:
+        payload.update(extra)
+    return content_hash(payload)
 
 
 def _usage_dict(usage: object | None) -> dict[str, int | float | str] | None:
@@ -104,6 +106,7 @@ class OpenAIImageProvider:
         *,
         confirm_paid: bool,
         seed: int | None = None,
+        max_attempts: int = 2,
     ) -> OpenAIImageResult:
         require_paid_call_allowed("openai", confirm_paid=confirm_paid, settings=self.settings)
         require_openai_api_key(self.settings)
@@ -119,14 +122,14 @@ class OpenAIImageProvider:
         started = time.perf_counter()
         response = None
         last_error: BaseException | None = None
-        for attempt in range(2):
+        for attempt in range(max(1, max_attempts)):
             try:
                 response = client.images.generate(**kwargs)
                 last_error = None
                 break
             except Exception as exc:
                 last_error = exc
-                if attempt == 0 and _is_transient(exc):
+                if attempt == 0 and _is_transient(exc) and max_attempts > 1:
                     continue
                 raise
         if response is None:

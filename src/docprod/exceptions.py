@@ -26,6 +26,10 @@ class MaxPaidRequestsExceededError(RuntimeError):
     """Raised when a batch would exceed the explicit paid-request cap."""
 
 
+class TtsInputLimitError(RuntimeError):
+    """Raised when narration exceeds the TTS model's input limit."""
+
+
 class AlignmentQualityError(RuntimeError):
     """Raised when Whisper-to-script alignment is too weak to retime the film."""
 
