@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-google = ["google-genai>=1.0.0"]
+google = ["google-genai>=2.24.0"]
 
 
 [build-system]

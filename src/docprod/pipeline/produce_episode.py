@@ -197,7 +197,7 @@ def produce_episode(
     accepted: list[str] = []
     rejected: list[str] = []
     for unit_id in video_units:
-        video_budget.reserve("veo", 1)
+        video_budget.ensure_remaining("veo", 1)
         start_image = _existing_keyframe(paths, unit_id)
         motion, native, negative = SHOTS[unit_id]
         result = veo.generate_shot(
@@ -209,6 +209,7 @@ def produce_episode(
             ),
             confirm_paid=confirm_paid,
         )
+        video_budget.reserve("veo", 1)
         raw = paths.veo_raw_dir() / f"{unit_id}.mp4"
         raw.parent.mkdir(parents=True, exist_ok=True)
         raw.write_bytes(result.video_bytes)

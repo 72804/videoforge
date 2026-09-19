@@ -19,7 +19,18 @@ def _settings() -> Settings:
     )
 
 
-def test_budget_cannot_be_exceeded() -> None:
+def test_ensure_remaining_does_not_consume_successful_slots() -> None:
+    budget = ModelRequestBudget(max_requests=2)
+    budget.ensure_remaining("veo", 1)
+    assert budget.used_requests == 0
+    assert budget.remaining_requests == 2
+    budget.reserve("veo", 1)
+    assert budget.used_requests == 1
+    budget.ensure_remaining("veo", 1)
+    with pytest.raises(MaxPaidRequestsExceededError):
+        budget.ensure_remaining("veo", 2)
+    assert budget.used_requests == 1
+    assert budget.remaining_requests == 1
     budget = ModelRequestBudget(max_requests=1)
     budget.reserve("research")
     assert budget.used_requests == 1
