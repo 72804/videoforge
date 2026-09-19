@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -183,6 +184,9 @@ def test_produce_dry_run_high_value_budget(tmp_path: Path) -> None:
     assert report.openai_image == 0
     assert report.tts == 0
     assert report.whisper == 0
+    assert report.planned_paid_value_usd == report.estimated_total_usd
+    assert report.cached_paid_value_usd == 0.0
+    assert report.remaining_estimated_spend_usd == report.estimated_total_usd
     assert paths.sound_plan_json().is_file()
     assert paths.sonic_profile_json().is_file()
 
@@ -373,4 +377,86 @@ def test_paid_cache_hits_skip_budget(tmp_path: Path, monkeypatch) -> None:
     assert report.actual_spend_usd == 0.0
     assert report.reuse_hits >= 2
     assert report.generation_avoided >= 2
+
+
+def test_partial_concurrent_veo_resume(tmp_path: Path, monkeypatch) -> None:
+    import pytest
+
+    from docprod.providers.google_veo import GoogleVeoProvider
+    from docprod.providers.paid_cache import PaidArtifactCache
+
+    paths, project = _project_bundle(tmp_path / "tiny11")
+    monkeypatch.setenv("ALLOW_PAID_APIS", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    from docprod.config import get_settings
+
+    get_settings.cache_clear()
+    settings = Settings(
+        _env_file=None,
+        allow_paid_apis=True,
+        gemini_api_key="test-key",
+        enable_lyria_realtime=False,
+        sound_library_matcher="metadata",
+        phase11_max_usd=2.0,
+        video_model="veo-3.1-lite-generate-preview",
+    )
+    calls: list[str] = []
+
+    class Models:
+        def generate_videos(self, **kwargs: object) -> object:
+            source = kwargs["source"]
+            prompt = str(getattr(source, "prompt", ""))
+            kind = "au_0025" if "sampling" in prompt.lower() else "au_0005_0006"
+            calls.append(kind)
+            if kind == "au_0025" and calls.count("au_0025") == 1:
+                raise RuntimeError("`negativePrompt` isn't supported by this model.")
+            video = object()
+            generated = SimpleNamespace(video=video)
+            response = SimpleNamespace(generated_videos=[generated])
+            return SimpleNamespace(done=True, response=response)
+
+    class Files:
+        def upload(self, **_kwargs: object) -> None:
+            raise AssertionError("Files API must not be used for local start frames")
+
+        def download(self, file: object, download_path: str) -> None:
+            _mp4_with_audio(Path(download_path), 8.0)
+
+    cache = PaidArtifactCache(tmp_path / "paid")
+    veo = GoogleVeoProvider(
+        settings=settings,
+        client=SimpleNamespace(models=Models(), files=Files()),
+        cache=cache,
+    )
+    with pytest.raises(RuntimeError, match="partial failures"):
+        produce_episode(
+            paths,
+            project,
+            dry_run=False,
+            confirm_paid=True,
+            settings=settings,
+            video_provider=veo,
+            music_provider=_FakeLyria(),
+            speech_detector=lambda _p: False,
+            paid_cache=cache,
+        )
+    assert (paths.veo_raw_dir() / "au_0005_0006.mp4").is_file()
+    assert not (paths.veo_raw_dir() / "au_0025.mp4").is_file()
+    assert calls.count("au_0005_0006") == 1
+    assert calls.count("au_0025") == 1
+    report = produce_episode(
+        paths,
+        project,
+        dry_run=False,
+        confirm_paid=True,
+        settings=settings,
+        video_provider=veo,
+        music_provider=_FakeLyria(),
+        speech_detector=lambda _p: False,
+        paid_cache=cache,
+    )
+    assert calls.count("au_0005_0006") == 1
+    assert calls.count("au_0025") == 2
+    assert (paths.veo_raw_dir() / "au_0025.mp4").is_file()
+    assert report.production_path
 

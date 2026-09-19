@@ -2072,7 +2072,11 @@ def produce_episode_cmd(
     console.print(f"matcher={report.embedding_matcher}")
     console.print(f"semantic_qc={str(report.semantic_qc).lower()}")
     console.print(f"estimated_total_usd={report.estimated_total_usd}")
+    console.print(f"planned_paid_value_usd={report.planned_paid_value_usd}")
+    console.print(f"cached_paid_value_usd={report.cached_paid_value_usd}")
+    console.print(f"remaining_estimated_spend_usd={report.remaining_estimated_spend_usd}")
     console.print(f"actual_spend_usd={report.actual_spend_usd}")
+    console.print(f"actual_spend_this_run_usd={report.actual_spend_this_run_usd}")
     console.print(f"stopped={str(report.stopped).lower()}")
     if report.production_path:
         console.print(f"production={report.production_path}")

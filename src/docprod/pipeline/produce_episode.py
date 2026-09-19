@@ -21,8 +21,13 @@ from docprod.models.project import Project
 from docprod.models.scene import ScenePlan
 from docprod.pipeline.inspect_assets import require_zero_placeholders
 from docprod.providers.google_lyria import DisabledAdaptiveMusicProvider, GoogleLyriaProvider
-from docprod.providers.google_veo import GoogleVeoProvider
+from docprod.providers.google_veo import (
+    GoogleVeoProvider,
+    build_veo_prompt,
+    native_negative_for_hash,
+)
 from docprod.providers.music_base import MusicGenerateRequest, MusicGenerationProvider
+from docprod.providers.paid_cache import PaidArtifactCache, lyria_request_hash, veo_request_hash
 from docprod.providers.pricing import (
     HIGH_VALUE_VIDEO_UNITS,
     LOW_VALUE_VIDEO_UNITS,
@@ -35,7 +40,8 @@ from docprod.providers.pricing import (
     veo_cost_usd,
 )
 from docprod.providers.request_budget import ModelRequestBudget
-from docprod.providers.video_base import VideoShotProvider, VideoShotRequest
+from docprod.providers.video_base import VideoShotProvider, VideoShotRequest, VideoShotResult
+from docprod.providers.video_capabilities import capabilities_for
 from docprod.render.ffmpeg import escape_filter_path, run_ffmpeg
 from docprod.render.mux import (
     load_cached_master,
@@ -115,7 +121,11 @@ class Phase11Report:
     pexels: int = 0
     wikimedia: int = 0
     estimated_total_usd: float = 0.0
+    planned_paid_value_usd: float = 0.0
+    cached_paid_value_usd: float = 0.0
+    remaining_estimated_spend_usd: float = 0.0
     actual_spend_usd: float = 0.0
+    actual_spend_this_run_usd: float = 0.0
     production_path: str = ""
     reuse_hits: int = 0
     generation_avoided: int = 0
@@ -135,6 +145,7 @@ def produce_episode(
     music_provider: MusicGenerationProvider | None = None,
     speech_detector=None,
     force_regenerate_paid: bool = False,
+    paid_cache: PaidArtifactCache | None = None,
 ) -> Phase11Report:
     cfg = settings or get_settings()
     plan = load_model(paths.stages_dir / SCENE_PLAN_FILENAME, ScenePlan)
@@ -167,6 +178,23 @@ def produce_episode(
     music_cost = lyria_cost_usd(sound_plan.generation_required_music)
     estimated = round(video_cost + music_cost, 4)
     realtime = DisabledAdaptiveMusicProvider()
+    _fill_lyria_prompts(sound_plan, profile, paths, plan)
+    use_cache = not force_regenerate_paid
+    cache = paid_cache if paid_cache is not None else PaidArtifactCache()
+    cached_veo, cached_music = _count_paid_cache_hits(
+        paths,
+        video_units,
+        sound_plan,
+        video_model=cfg.video_model,
+        music_model=cfg.music_model,
+        cache=cache,
+        use_cache=use_cache,
+    )
+    cached_value = round(
+        veo_cost_usd(VEO_SECONDS_PER_REQUEST * cached_veo) + lyria_cost_usd(cached_music),
+        4,
+    )
+    remaining = round(max(0.0, estimated - cached_value), 4)
     report = Phase11Report(
         dry_run=dry_run,
         video_provider=cfg.video_provider,
@@ -188,10 +216,16 @@ def produce_episode(
         embedding_matcher=matcher,
         semantic_qc=cfg.enable_semantic_audio_qc,
         estimated_total_usd=estimated,
+        planned_paid_value_usd=estimated,
+        cached_paid_value_usd=cached_value,
+        remaining_estimated_spend_usd=remaining,
         notes=[
             f"LOW_VALUE remain keyframe preview: {', '.join(LOW_VALUE_VIDEO_UNITS)}",
             f"pricing={PRICING_VERSION}",
             "Lyria RealTime disabled by default",
+            f"planned_paid_value_usd={estimated}",
+            f"cached_paid_value_usd={cached_value}",
+            f"remaining_estimated_spend_usd={remaining}",
         ],
     )
     save_model(paths.sound_plan_json(), sound_plan)
@@ -206,25 +240,18 @@ def produce_episode(
     require_paid_call_allowed("google", confirm_paid=confirm_paid, settings=cfg)
     require_gemini_api_key(cfg)
 
-    veo = video_provider or GoogleVeoProvider(settings=cfg)
-    lyria = music_provider or GoogleLyriaProvider(settings=cfg)
+    veo = video_provider or GoogleVeoProvider(settings=cfg, cache=cache)
+    lyria = music_provider or GoogleLyriaProvider(settings=cfg, cache=cache)
     video_budget = ModelRequestBudget(VEO_HARD_REQUESTS)
     music_budget = ModelRequestBudget(MUSIC_HARD_MAX)
     accepted: list[str] = []
     rejected: list[str] = []
     budget_lock = Lock()
-    use_cache = not force_regenerate_paid
     reuse_hits = 0
+    failures: list[str] = []
 
-    def _one_veo(unit_id: str) -> tuple[str, object, bool]:
-        start_image = _existing_keyframe(paths, unit_id)
-        motion, native, negative = SHOTS[unit_id]
-        request = VideoShotRequest(
-            prompt=motion,
-            negative_prompt=negative,
-            image_path=start_image,
-            native_audio_prompt=native,
-        )
+    def _one_veo(unit_id: str) -> tuple[str, VideoShotResult, bool]:
+        request = _shot_request(paths, unit_id)
         result = veo.generate_shot(request, confirm_paid=confirm_paid, use_cache=use_cache)
         cache_hit = (result.metadata or {}).get("cache_hit") == "true"
         if not cache_hit:
@@ -233,37 +260,31 @@ def produce_episode(
         return unit_id, result, cache_hit
 
     with ThreadPoolExecutor(max_workers=min(2, len(video_units))) as pool:
-        futures = [pool.submit(_one_veo, unit_id) for unit_id in video_units]
+        futures = {pool.submit(_one_veo, unit_id): unit_id for unit_id in video_units}
         for future in as_completed(futures):
-            unit_id, result, cache_hit = future.result()
+            unit_id = futures[future]
+            try:
+                unit_id, result, cache_hit = future.result()
+            except Exception as exc:  # noqa: BLE001 — collect sibling outcomes
+                failures.append(f"{unit_id}: {exc}")
+                continue
             if cache_hit:
                 reuse_hits += 1
-            raw = paths.veo_raw_dir() / f"{unit_id}.mp4"
-            raw.parent.mkdir(parents=True, exist_ok=True)
-            raw.write_bytes(result.video_bytes)
-            wav = paths.veo_candidate_wav(unit_id)
-            extract_provider_audio(raw, wav)
-            timing = _unit_duration(timeline, unit_id)
-            visual = paths.veo_visual_path(unit_id)
-            mute_and_normalize_visual(raw, visual, duration=timing, generated_seconds=8.0)
-            qc = qc_sync_audio(wav, speech_detector=speech_detector)
-            meta = {
-                "asset_unit_id": unit_id,
-                "category": "GENERATED_SYNC_AUDIO",
-                "source_type": "generated",
-                "accepted": qc.accepted,
-                "reasons": qc.reasons,
-                "license_note": "generated/generic; not archival event audio",
-                "start_image": str(_existing_keyframe(paths, unit_id)),
-                "visual_sha256": file_sha256(visual),
-            }
-            save_json(paths.veo_visual_meta(unit_id), meta)
-            save_json(wav.with_suffix(".qc.json"), meta)
-            if qc.accepted:
-                accepted.append(unit_id)
-            else:
-                rejected.append(unit_id)
-            _stamp_high_value_strategy(plan, unit_id, paths)
+            _persist_veo_success(
+                paths,
+                plan,
+                timeline,
+                unit_id,
+                result,
+                accepted=accepted,
+                rejected=rejected,
+                speech_detector=speech_detector,
+            )
+    if failures:
+        raise RuntimeError(
+            "Veo stage had partial failures; successful siblings were preserved. "
+            + "; ".join(failures)
+        )
     report.veo_candidates_accepted = accepted
     report.veo_candidates_rejected = rejected
     veo_map = {unit: str(paths.veo_candidate_wav(unit)) for unit in accepted}
@@ -302,11 +323,18 @@ def produce_episode(
     )
     production = _render_production_v1(paths, timeline, video_units)
     report.production_path = str(production)
-    report.actual_spend_usd = round(
+    spent = round(
         veo_cost_usd(VEO_SECONDS_PER_REQUEST * video_budget.used_requests)
         + lyria_cost_usd(music_budget.used_requests),
         4,
     )
+    report.actual_spend_usd = spent
+    report.actual_spend_this_run_usd = spent
+    report.cached_paid_value_usd = round(
+        veo_cost_usd(VEO_SECONDS_PER_REQUEST * reuse_hits) + lyria_cost_usd(audio_reuse),
+        4,
+    )
+    report.remaining_estimated_spend_usd = 0.0
     report.music_generation_count = music_budget.used_requests
     report.sound_cues = len(sound_plan.cues)
     report.reuse_hits = reuse_hits + audio_reuse
@@ -319,8 +347,10 @@ def produce_episode(
         paths.review_dir / "phase11_costs.json",
         {
             "pricing_version": PRICING_VERSION,
-            "actual_spend_usd": report.actual_spend_usd,
-            "reference_cost_usd": estimated,
+            "planned_paid_value_usd": estimated,
+            "cached_paid_value_usd": report.cached_paid_value_usd,
+            "remaining_estimated_spend_usd": report.remaining_estimated_spend_usd,
+            "actual_spend_this_run_usd": spent,
             "optional_future_cost": {"lyria_realtime": None, "clip": 0.04},
             "loudness": loudness,
             "veo_requests": video_budget.used_requests,
@@ -343,6 +373,102 @@ def _existing_keyframe(paths: ProjectPaths, unit_id: str) -> Path:
         if candidate.is_file():
             return candidate
     raise FileNotFoundError(f"Existing keyframe missing for {unit_id}")
+
+
+def _shot_request(paths: ProjectPaths, unit_id: str) -> VideoShotRequest:
+    motion, native, negative = SHOTS[unit_id]
+    return VideoShotRequest(
+        prompt=motion,
+        negative_prompt=negative,
+        image_path=_existing_keyframe(paths, unit_id),
+        native_audio_prompt=native,
+    )
+
+
+def _count_paid_cache_hits(
+    paths: ProjectPaths,
+    video_units: list[str],
+    sound_plan: SoundPlan,
+    *,
+    video_model: str,
+    music_model: str,
+    cache: PaidArtifactCache,
+    use_cache: bool,
+) -> tuple[int, int]:
+    if not use_cache:
+        return 0, 0
+    caps = capabilities_for(video_model)
+    veo_hits = 0
+    for unit_id in video_units:
+        request = _shot_request(paths, unit_id)
+        prompt = build_veo_prompt(request, caps)
+        digest = veo_request_hash(
+            model=video_model,
+            image_sha256=file_sha256(request.image_path),
+            prompt=prompt,
+            negative_prompt=native_negative_for_hash(request, caps),
+            duration_seconds=request.duration_seconds,
+            aspect_ratio=request.aspect_ratio,
+            resolution=request.resolution,
+            count=request.count,
+        )
+        if cache.get("veo", digest) is not None:
+            veo_hits += 1
+    music_hits = 0
+    for section in sound_plan.music_sections:
+        if section.library_asset_id:
+            music_hits += 1
+            continue
+        frames = [Path(item) for item in section.visual_context_frames if Path(item).is_file()]
+        digest = lyria_request_hash(
+            model=music_model,
+            prompt=section.generation_prompt,
+            image_sha256s=[file_sha256(path) for path in frames],
+            duration_hint_seconds=section.end - section.start,
+            wav=True,
+        )
+        if cache.get("lyria", digest) is not None:
+            music_hits += 1
+    return veo_hits, music_hits
+
+
+def _persist_veo_success(
+    paths: ProjectPaths,
+    plan: ScenePlan,
+    timeline: RuntimeTimeline,
+    unit_id: str,
+    result: VideoShotResult,
+    *,
+    accepted: list[str],
+    rejected: list[str],
+    speech_detector,
+) -> None:
+    raw = paths.veo_raw_dir() / f"{unit_id}.mp4"
+    raw.parent.mkdir(parents=True, exist_ok=True)
+    raw.write_bytes(result.video_bytes)
+    wav = paths.veo_candidate_wav(unit_id)
+    extract_provider_audio(raw, wav)
+    timing = _unit_duration(timeline, unit_id)
+    visual = paths.veo_visual_path(unit_id)
+    mute_and_normalize_visual(raw, visual, duration=timing, generated_seconds=8.0)
+    qc = qc_sync_audio(wav, speech_detector=speech_detector)
+    meta = {
+        "asset_unit_id": unit_id,
+        "category": "GENERATED_SYNC_AUDIO",
+        "source_type": "generated",
+        "accepted": qc.accepted,
+        "reasons": qc.reasons,
+        "license_note": "generated/generic; not archival event audio",
+        "start_image": str(_existing_keyframe(paths, unit_id)),
+        "visual_sha256": file_sha256(visual),
+    }
+    save_json(paths.veo_visual_meta(unit_id), meta)
+    save_json(wav.with_suffix(".qc.json"), meta)
+    if qc.accepted:
+        accepted.append(unit_id)
+    else:
+        rejected.append(unit_id)
+    _stamp_high_value_strategy(plan, unit_id, paths)
 
 
 def _unit_duration(timeline: RuntimeTimeline, unit_id: str) -> float:
