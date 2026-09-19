@@ -45,7 +45,7 @@ def lyria_request_hash(
     prompt: str,
     image_sha256s: list[str],
     duration_hint_seconds: float,
-    wav: bool,
+    api: str = "interactions",
 ) -> str:
     return content_hash(
         {
@@ -55,7 +55,8 @@ def lyria_request_hash(
             "prompt": prompt,
             "image_sha256s": image_sha256s,
             "duration_hint_seconds": duration_hint_seconds,
-            "wav": wav,
+            "api": api,
+            "response_format": {"type": "audio"},
         }
     )
 

@@ -52,6 +52,6 @@ def test_paid_cache_roundtrip(tmp_path: Path) -> None:
         prompt="INSTRUMENTAL ONLY NO VOCALS",
         image_sha256s=["a"],
         duration_hint_seconds=90,
-        wav=True,
+        api="interactions",
     )
     assert cache.get("lyria", other) is None

@@ -471,6 +471,12 @@ class ProjectPaths:
     def soundtrack_dir(self) -> Path:
         return self.artifacts_dir / "audio" / "soundtrack"
 
+    def music_original_dir(self) -> Path:
+        return self.artifacts_dir / "audio" / "music" / "original"
+
+    def music_normalized_dir(self) -> Path:
+        return self.artifacts_dir / "audio" / "music" / "normalized"
+
     def episode_sound_library_json(self) -> Path:
         return self.artifacts_dir / "audio" / "library" / "library.json"
 

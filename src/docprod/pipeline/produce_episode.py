@@ -20,7 +20,13 @@ from docprod.config import Settings, get_settings, require_gemini_api_key, requi
 from docprod.models.project import Project
 from docprod.models.scene import ScenePlan
 from docprod.pipeline.inspect_assets import require_zero_placeholders
-from docprod.providers.google_lyria import DisabledAdaptiveMusicProvider, GoogleLyriaProvider
+from docprod.providers.google_lyria import (
+    DisabledAdaptiveMusicProvider,
+    GoogleLyriaProvider,
+    normalize_music_to_wav,
+    select_lyria_images,
+    sniff_audio_format,
+)
 from docprod.providers.google_veo import (
     GoogleVeoProvider,
     build_veo_prompt,
@@ -421,13 +427,15 @@ def _count_paid_cache_hits(
         if section.library_asset_id:
             music_hits += 1
             continue
-        frames = [Path(item) for item in section.visual_context_frames if Path(item).is_file()]
+        frames = select_lyria_images(
+            [Path(item) for item in section.visual_context_frames]
+        )
         digest = lyria_request_hash(
             model=music_model,
             prompt=section.generation_prompt,
             image_sha256s=[file_sha256(path) for path in frames],
             duration_hint_seconds=section.end - section.start,
-            wav=True,
+            api="interactions",
         )
         if cache.get("lyria", digest) is not None:
             music_hits += 1
@@ -547,7 +555,9 @@ def _materialize_audio(
                 assets[existing.asset_id] = Path(existing.local_path)
                 reuse += 1
                 continue
-        frames = [Path(item) for item in section.visual_context_frames if Path(item).is_file()]
+        frames = select_lyria_images(
+            [Path(item) for item in section.visual_context_frames]
+        )
         result = lyria.generate_music(
             MusicGenerateRequest(
                 prompt=section.generation_prompt,
@@ -562,10 +572,24 @@ def _materialize_audio(
             reuse += 1
         if not cache_hit:
             budget.reserve("lyria", 1)
+        suffix = (result.metadata or {}).get("original_suffix") or sniff_audio_format(
+            result.audio_bytes, result.mime
+        )[1]
+        original = paths.music_original_dir() / f"{section.music_section_id}{suffix}"
+        original.parent.mkdir(parents=True, exist_ok=True)
+        original.write_bytes(result.audio_bytes)
         dest = paths.soundtrack_dir() / f"{section.music_section_id}.wav"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(result.audio_bytes)
-        _normalize_wav(dest)
+        normalized = paths.music_normalized_dir() / f"{section.music_section_id}.wav"
+        try:
+            normalize_music_to_wav(original, dest)
+            if dest.resolve() != normalized.resolve():
+                normalized.parent.mkdir(parents=True, exist_ok=True)
+                normalized.write_bytes(dest.read_bytes())
+        except Exception as exc:
+            raise RuntimeError(
+                f"Lyria local normalize failed; original preserved at {original}"
+            ) from exc
         asset = SoundAsset(
             asset_id=section.music_section_id,
             category="MUSIC_BED",
@@ -633,28 +657,6 @@ def _materialize_audio(
         assets[cue.sound_need_id] = dest
         assets[asset.asset_id] = dest
     return assets, reuse
-
-
-def _normalize_wav(path: Path) -> None:
-    tmp = path.with_suffix(".norm.wav")
-    try:
-        run_ffmpeg(
-            [
-                "-i",
-                str(path),
-                "-ar",
-                "48000",
-                "-ac",
-                "2",
-                "-c:a",
-                "pcm_s16le",
-                str(tmp),
-            ],
-            timeout=60,
-        )
-        tmp.replace(path)
-    finally:
-        tmp.unlink(missing_ok=True)
 
 
 def _render_production_v1(
