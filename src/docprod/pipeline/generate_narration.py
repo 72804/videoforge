@@ -96,7 +96,9 @@ def prepare_narration(
     manifest = NarrationChunkPlanner().plan(script, plan)
     validate_chunk_manifest(manifest, script)
     paths.narration_chunks_dir().mkdir(parents=True, exist_ok=True)
-    save_model(paths.narration_chunk_manifest(), manifest)
+    save_model(paths.narration_proposed_chunk_plan(), manifest)
+    if not paths.narration_chunk_manifest().is_file():
+        save_model(paths.narration_chunk_manifest(), manifest)
     previews = []
     if manifest.chunks:
         first = manifest.chunks[0].text.strip()
@@ -153,6 +155,8 @@ def generate_narration(
     prepared = prepare_narration(paths, plan, settings=cfg)
     script = prepared.script
     manifest = prepared.chunk_manifest
+    if paths.narration_chunk_manifest().is_file() and paths.narration_chunk_wav(1).is_file():
+        manifest = load_model(paths.narration_chunk_manifest(), NarrationChunkManifest)
     script_hash = content_hash(script.text)
     request_hash = tts_request_hash(
         model=cfg.openai_tts_model,
@@ -267,6 +271,10 @@ def generate_narration(
             },
         )
     reused_master = wav.is_file()
+    if not reused_master:
+        from docprod.pipeline.narration_gates import gate_master_promotion, inspect_chunk_integrity
+
+        gate_master_promotion(inspect_chunk_integrity(paths, manifest, run_acoustic=True))
     join: JoinResult
     loud_in: dict[str, str]
     loud_out: dict[str, str]
@@ -316,6 +324,16 @@ def generate_narration(
         ]
         language = str(raw_whisper.get("language") or "tr")
     else:
+        from docprod.pipeline.narration_gates import (
+            assert_whisper_allowed,
+            build_whisper_preflight,
+        )
+
+        preflight = build_whisper_preflight(
+            paths,
+            canonical_word_count=len(tokenize_display(script.text)),
+        )
+        assert_whisper_allowed(preflight)
         whisper_input = paths.narration_dir / "whisper_input.mp3"
         run_ffmpeg(
             [

@@ -264,6 +264,21 @@ class ProjectPaths:
     def narration_chunk_meta(self, index: int) -> Path:
         return self.narration_chunks_dir() / f"chunk_{index:03d}.meta.json"
 
+    def narration_proposed_chunk_plan(self) -> Path:
+        return self.narration_chunks_dir() / "proposed_chunk_plan.json"
+
+    def narration_chunk_integrity(self, chunk_id: str) -> Path:
+        return self.narration_chunks_dir() / f"{chunk_id}.integrity.json"
+
+    def narration_chunk_versions_dir(self, chunk_id: str) -> Path:
+        return self.narration_chunks_dir() / "versions" / chunk_id
+
+    def narration_master_repair_json(self) -> Path:
+        return self.narration_dir / "master.repair.json"
+
+    def whisper_preflight_json(self) -> Path:
+        return self.narration_dir / "whisper_preflight.json"
+
     def whisper_alignment_json(self) -> Path:
         return self.narration_dir / "whisper_alignment.json"
 
@@ -380,6 +395,18 @@ class ProjectPaths:
     @property
     def review_dir(self) -> Path:
         return self.artifacts_dir / "review"
+
+    def full_episode_qc_md(self) -> Path:
+        return self.review_dir / "full_episode_qc.md"
+
+    def ai_video_decision_md(self) -> Path:
+        return self.review_dir / "ai_video_decision.md"
+
+    def sound_design_plan_md(self) -> Path:
+        return self.review_dir / "sound_design_plan.md"
+
+    def next_phase_cost_preview_json(self) -> Path:
+        return self.review_dir / "next_phase_cost_preview.json"
 
     def research_review_md(self) -> Path:
         return self.review_dir / RESEARCH_REVIEW_FILENAME

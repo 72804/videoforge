@@ -17,6 +17,11 @@ TTS_CONTINUATION_INSTRUCTIONS = (
     "section. Begin naturally, without sounding like a new introduction."
 )
 
+TTS_ONCE_INSTRUCTIONS = (
+    "Read the supplied narration exactly once from beginning to end. "
+    "Do not restart, repeat, summarize, or add any words."
+)
+
 ALIGNMENT_MATCH_THRESHOLD = 0.95
 SCENE_END_TAIL = 0.30
 
@@ -121,6 +126,7 @@ class NarrationChunkSpec(BaseModel):
     script_hash: str
     boundary_type: str = "end"
     instructions: str = ""
+    boundary_reason: str = ""
 
 
 class NarrationChunkManifest(BaseModel):

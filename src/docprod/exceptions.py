@@ -34,6 +34,10 @@ class AlignmentQualityError(RuntimeError):
     """Raised when Whisper-to-script alignment is too weak to retime the film."""
 
 
+class IntegrityBlockedError(RuntimeError):
+    """Raised when TTS/master integrity fails before paid alignment or promotion."""
+
+
 class UnsafeProjectIdError(ValueError):
     """Raised when a project id would escape the projects root or is not filesystem-safe."""
 

@@ -23,6 +23,7 @@ from docprod.audio.join import (
 from docprod.audio.models import (
     DEFAULT_VOICE_INSTRUCTIONS,
     TTS_CONTINUATION_INSTRUCTIONS,
+    TTS_ONCE_INSTRUCTIONS,
     CanonicalNarrationScript,
     SceneNarrationSpan,
     WhisperWord,
@@ -110,6 +111,53 @@ def _chapter_script() -> tuple[CanonicalNarrationScript, ScenePlan]:
     return script, plan
 
 
+def _two_chapter(left: str, right: str) -> tuple[CanonicalNarrationScript, ScenePlan]:
+    text = left + " " + right
+    script = CanonicalNarrationScript(
+        project_id="p",
+        text=text,
+        spans=[
+            SceneNarrationSpan(
+                scene_id="scene_0001",
+                narration=left,
+                char_start=0,
+                char_end=len(left),
+                planned_duration=1,
+            ),
+            SceneNarrationSpan(
+                scene_id="scene_0002",
+                narration=right,
+                char_start=len(left) + 1,
+                char_end=len(text),
+                planned_duration=1,
+            ),
+        ],
+    )
+    scenes = []
+    for sid, narration, chapter, start in (
+        ("scene_0001", left, "HOOK", 0.0),
+        ("scene_0002", right, "BODY", 1.0),
+    ):
+        scenes.append(
+            Scene(
+                id=sid,
+                start=start,
+                end=start + 1,
+                duration=1,
+                narration=narration,
+                visual_intent="x",
+                asset_strategy=AssetStrategy.document,
+                effect=VisualEffect.none,
+                transition=TransitionType.cut,
+                mood=Mood.neutral,
+                subtitle="x",
+                generation=GenerationSpec(),
+                metadata={"chapter": chapter},
+            )
+        )
+    return script, ScenePlan(project_id="p", scenes=scenes, total_duration=2)
+
+
 def test_short_script_one_chunk() -> None:
     script, plan = _script("Kısa belgesel cümlesi burada biter.")
     manifest = NarrationChunkPlanner().plan(script, plan)
@@ -144,7 +192,52 @@ def test_chapter_boundary_preferred() -> None:
     assert "".join(item.text for item in manifest.chunks) == script.text
 
 
-def test_sentence_not_mid_word() -> None:
+def test_date_phrase_cannot_be_split() -> None:
+    from docprod.audio.boundaries import NarrationBoundaryValidator
+
+    text = "Polis 25 Eylül 2012 de operasyon yaptı."
+    split = text.index("2012")
+    assert NarrationBoundaryValidator().reason(text, split) == "date_phrase"
+    left = ("Anlatı düzenli ilerler. " * 155) + "Operasyon 25 Eylül"
+    right = "2012 de polis geldi. " + ("Sonrası cümle burada biter. " * 90)
+    script, plan = _two_chapter(left.strip(), right.strip())
+    manifest = NarrationChunkPlanner().plan(script, plan)
+    joined = "".join(item.text for item in manifest.chunks)
+    assert joined == script.text
+    cut_at_date = manifest.chunks[0].text.rstrip().endswith("Eylül") and manifest.chunks[
+        1
+    ].text.lstrip().startswith("2012")
+    assert not cut_at_date
+    validate_chunk_manifest(manifest, script)
+
+
+def test_number_unit_cannot_be_split() -> None:
+    from docprod.audio.boundaries import NarrationBoundaryValidator
+
+    text = "Toplam 18 milyon Kanada doları kayboldu."
+    split = text.index("Kanada")
+    assert NarrationBoundaryValidator().reason(text, split) == "number_unit"
+
+
+def test_full_name_cannot_be_split() -> None:
+    from docprod.audio.boundaries import NarrationBoundaryValidator
+
+    text = "Sonra Richard Vallières ifade verdi."
+    split = text.index("Vallières")
+    assert NarrationBoundaryValidator().reason(text, split) == "full_name"
+
+
+def test_unsafe_chapter_boundary_rejected() -> None:
+    left = ("Anlatı düzenli ilerler. " * 155) + "Operasyon 25 Eylül"
+    right = "2012 de polis geldi. " + ("Sonrası cümle burada biter. " * 90)
+    script, plan = _two_chapter(left.strip(), right.strip())
+    manifest = NarrationChunkPlanner().plan(script, plan)
+    assert manifest.chunks[1].boundary_type != "chapter" or not manifest.chunks[0].text.endswith(
+        "Eylül"
+    )
+
+
+def test_safe_sentence_boundary_preferred() -> None:
     text = ("kelime " * 900 + "Son. " + "devam " * 900).strip()
     script, plan = _script(text)
     manifest = NarrationChunkPlanner().plan(script, plan)
@@ -176,8 +269,10 @@ def test_budget_equals_chunk_count() -> None:
 def test_continuation_instructions() -> None:
     script, plan = _chapter_script()
     manifest = NarrationChunkPlanner().plan(script, plan)
-    assert manifest.chunks[0].instructions == DEFAULT_VOICE_INSTRUCTIONS
+    assert DEFAULT_VOICE_INSTRUCTIONS in manifest.chunks[0].instructions
+    assert TTS_ONCE_INSTRUCTIONS in manifest.chunks[0].instructions
     assert TTS_CONTINUATION_INSTRUCTIONS in manifest.chunks[1].instructions
+    assert TTS_ONCE_INSTRUCTIONS in manifest.chunks[1].instructions
     left = manifest.chunks[0].instructions.split()[0:3]
     right = manifest.chunks[1].instructions.split()[0:3]
     assert left == right

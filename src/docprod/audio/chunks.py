@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import re
 
+from docprod.audio.boundaries import NarrationBoundaryValidator
 from docprod.audio.models import (
     DEFAULT_VOICE_INSTRUCTIONS,
     TTS_CONTINUATION_INSTRUCTIONS,
+    TTS_ONCE_INSTRUCTIONS,
     CanonicalNarrationScript,
     NarrationChunkManifest,
     NarrationChunkSpec,
@@ -75,6 +77,15 @@ def _quote_unbalanced(text: str, start: int, end: int) -> bool:
     return slice_.count('"') % 2 == 1 or slice_.count("“") != slice_.count("”")
 
 
+def _chunk_instructions(index: int) -> str:
+    if index > 1:
+        return (
+            f"{DEFAULT_VOICE_INSTRUCTIONS} {TTS_CONTINUATION_INSTRUCTIONS} "
+            f"{TTS_ONCE_INSTRUCTIONS}"
+        )
+    return f"{DEFAULT_VOICE_INSTRUCTIONS} {TTS_ONCE_INSTRUCTIONS}"
+
+
 def _boundary_candidates(
     text: str,
     start: int,
@@ -92,6 +103,9 @@ def _boundary_candidates(
             continue
         if chapter and nxt_chapter and chapter != nxt_chapter:
             found.append((span.char_end, "chapter", 0))
+    for span in script.spans:
+        if start < span.char_end <= limit and span.char_end < len(text):
+            found.append((span.char_end, "scene", 2))
     for match in re.finditer(r"\n\n+", text[start:limit]):
         found.append((start + match.end(), "paragraph", 1))
     index = start
@@ -104,8 +118,10 @@ def _boundary_candidates(
                     split += 1
                 if split <= limit:
                     found.append((split, "sentence", 2))
-        elif char in ";:—" and index > start:
+        elif char in ";:—":
             found.append((index + 1, "clause", 3))
+        elif char == "," and index > start:
+            found.append((index + 1, "punctuation", 4))
         index += 1
     return found
 
@@ -125,7 +141,11 @@ def _pick_split(
     preferred_end = min(len(text), start + preferred)
     hard_end = min(len(text), start + hard)
 
-    def choose(limit: int, *, allow_clause: bool) -> tuple[int, str] | None:
+    validator = NarrationBoundaryValidator()
+
+    def choose(
+        limit: int, *, allow_clause: bool, allow_last_resort: bool
+    ) -> tuple[int, str] | None:
         cands = [
             item
             for item in _boundary_candidates(
@@ -135,28 +155,36 @@ def _pick_split(
             and item[0] <= limit
             and not _inside_word(text, item[0])
             and not _quote_unbalanced(text, start, item[0])
+            and validator.is_safe(text, item[0])
         ]
         if not allow_clause:
-            cands = [item for item in cands if item[1] != "clause"]
+            cands = [item for item in cands if item[1] not in {"clause", "punctuation"}]
+        elif not allow_last_resort:
+            cands = [item for item in cands if item[1] != "punctuation"]
         if not cands:
             return None
         best = min(cands, key=lambda item: (item[2], -item[0]))
         return best[0], best[1]
 
-    picked = choose(preferred_end, allow_clause=False)
+    picked = choose(preferred_end, allow_clause=False, allow_last_resort=False)
     if picked is None:
-        picked = choose(hard_end, allow_clause=False)
+        picked = choose(hard_end, allow_clause=False, allow_last_resort=False)
     if picked is None:
-        picked = choose(hard_end, allow_clause=True)
+        picked = choose(hard_end, allow_clause=True, allow_last_resort=False)
+    if picked is None:
+        picked = choose(hard_end, allow_clause=True, allow_last_resort=True)
     if picked is not None:
         return picked
     cursor = hard_end
     while cursor > start and not text[cursor - 1].isspace():
         cursor -= 1
     if cursor > start:
-        return cursor, "whitespace"
+        reason = validator.reason(text, cursor)
+        if reason in {None, "mid_sentence"}:
+            return cursor, "whitespace"
     raise TtsInputLimitError(
-        f"Cannot split narration into Speech API chunks of {hard} characters."
+        f"Cannot split narration into Speech API chunks of {hard} characters "
+        "without cutting an unsafe linguistic span."
     )
 
 
@@ -211,9 +239,8 @@ class NarrationChunkPlanner:
             chapter_start = overlapping[0][1] if overlapping else ""
             chapter_end = overlapping[-1][1] if overlapping else ""
             index = len(chunks) + 1
-            instructions = DEFAULT_VOICE_INSTRUCTIONS
-            if index > 1:
-                instructions = f"{DEFAULT_VOICE_INSTRUCTIONS} {TTS_CONTINUATION_INSTRUCTIONS}"
+            instructions = _chunk_instructions(index)
+            reason = "start" if join_kind == "start" else join_kind
             chunks.append(
                 NarrationChunkSpec(
                     chunk_id=f"chunk_{index:03d}",
@@ -230,6 +257,7 @@ class NarrationChunkPlanner:
                     script_hash=content_hash(piece),
                     boundary_type=join_kind,
                     instructions=instructions,
+                    boundary_reason=reason,
                 )
             )
             join_kind = kind

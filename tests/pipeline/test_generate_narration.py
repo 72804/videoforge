@@ -265,7 +265,7 @@ def test_low_alignment_does_not_write_timeline(tmp_path: Path) -> None:
     paths.stages_dir.mkdir(parents=True, exist_ok=True)
     plan = _plan_two()
     wav = tmp_path / "n.wav"
-    payload = _write_wav(wav, 1.0)
+    payload = _write_wav(wav, 2.4)
     speech = FakeSpeech(payload)
     trans = FakeTranscriptions(
         [{"word": "hello", "start": 0.0, "end": 0.2}, {"word": "world", "start": 0.2, "end": 0.4}]

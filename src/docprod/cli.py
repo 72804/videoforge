@@ -15,6 +15,7 @@ from docprod.demo import build_demo_scene_plan
 from docprod.exceptions import (
     AlignmentQualityError,
     DossierValidationError,
+    IntegrityBlockedError,
     MaxPaidRequestsExceededError,
     MissingApiKeyError,
     PaidApiDisabledError,
@@ -1221,6 +1222,7 @@ def generate_narration_cmd(
         PaidApiNotConfirmedError,
         MissingApiKeyError,
         AlignmentQualityError,
+        IntegrityBlockedError,
         TtsInputLimitError,
         MaxPaidRequestsExceededError,
     ) as exc:
@@ -1760,6 +1762,128 @@ def inspect_narration_chunks_cmd(project_id: str = typer.Argument(...)) -> None:
         f"reconstructed_ok=true chunks={manifest.chunk_count} "
         f"canonical_chars={manifest.canonical_character_count}"
     )
+    from docprod.audio.chunks import NarrationChunkPlanner
+
+    proposed = NarrationChunkPlanner().plan(script, plan)
+    console.print("proposed_plan (dry, not synthesized):")
+    for item in proposed.chunks:
+        console.print(
+            f"  {item.chunk_id} chars={item.character_count} "
+            f"words={item.word_end - item.word_start} "
+            f"{item.char_start}:{item.char_end} boundary={item.boundary_type}"
+        )
+        if item.chunk_index > 1:
+            prev = proposed.chunks[item.chunk_index - 2]
+            tail = prev.text.strip().rsplit(".", 2)[-2:]
+            head = item.text.strip().split(".", 1)[0]
+            console.print(
+                f"  prev_tail={'.'.join(part.strip() for part in tail if part.strip())[-160:]}"
+            )
+            console.print(f"  next_head={head[:160]}")
+
+
+@app.command("align-narration")
+def align_narration_cmd(
+    project_id: str = typer.Argument(...),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Whisper preflight. Live alignment is blocked unless integrity allows it."""
+    from docprod.audio.models import NarrationChunkManifest
+    from docprod.audio.script import tokenize_display
+    from docprod.pipeline.narration_gates import (
+        assert_whisper_allowed,
+        build_whisper_preflight,
+        inspect_chunk_integrity,
+        record_historical_maple_repair,
+    )
+
+    project_dir, _project = _load_project(project_id)
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    if project_id == "maple_heist_canary":
+        record_historical_maple_repair(project_dir)
+    if project_dir.narration_chunk_manifest().is_file():
+        manifest = load_model(project_dir.narration_chunk_manifest(), NarrationChunkManifest)
+        inspect_chunk_integrity(project_dir, manifest, run_acoustic=not dry_run)
+    words = 0
+    if project_dir.scene_plan_json.is_file():
+        words = sum(len(tokenize_display(scene.narration)) for scene in plan.scenes)
+    preflight = build_whisper_preflight(project_dir, canonical_word_count=words)
+    console.print(f"audio_duration={preflight.audio_duration:.3f}")
+    console.print(f"expected_canonical_duration={preflight.expected_duration:.3f}")
+    console.print(f"estimated_transcription_minutes={preflight.estimated_minutes:.4f}")
+    console.print(f"estimated_whisper_usd={preflight.estimated_whisper_usd}")
+    console.print(f"master_status={preflight.master_status} repaired={preflight.repaired}")
+    for row in preflight.chunk_statuses:
+        console.print(f"chunk {row.get('chunk_id')} {row.get('status')} wpm={row.get('wpm')}")
+    console.print(f"allowed={preflight.allowed}")
+    if dry_run:
+        return
+    try:
+        assert_whisper_allowed(preflight)
+    except IntegrityBlockedError as exc:
+        _fail(str(exc))
+    if not confirm_paid:
+        _fail("Live alignment requires --confirm-paid after preflight PASS.")
+    _fail("Live Whisper is not invoked by this QC command; use generate-narration.")
+
+
+@app.command("retry-narration-chunk")
+def retry_narration_chunk_cmd(
+    project_id: str = typer.Argument(...),
+    chunk_id: str = typer.Argument(...),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Synthesize a new version of one TTS chunk. Never overwrites the original WAV."""
+    from docprod.audio.models import NarrationChunkManifest
+    from docprod.pipeline.narration_gates import retry_narration_chunk
+
+    project_dir, _project = _load_project(project_id)
+    manifest = load_model(project_dir.narration_chunk_manifest(), NarrationChunkManifest)
+    spec = next((item for item in manifest.chunks if item.chunk_id == chunk_id), None)
+    if spec is None:
+        _fail(f"Unknown chunk {chunk_id}")
+    try:
+        dest = retry_narration_chunk(
+            project_dir,
+            chunk_id,
+            text=spec.text,
+            instructions=spec.instructions,
+            confirm_paid=confirm_paid,
+        )
+    except (PaidApiNotConfirmedError, PaidApiDisabledError, MissingApiKeyError) as exc:
+        _fail(str(exc))
+    console.print(f"wrote_version={dest} original_preserved=true")
+
+
+@app.command("audit-episode")
+def audit_episode_cmd(project_id: str = typer.Argument(...)) -> None:
+    """Mechanical QC of the completed narrated episode. Zero paid calls."""
+    from docprod.pipeline.audit_episode import audit_episode
+
+    project_dir, _project = _load_project(project_id)
+    result = audit_episode(project_dir, paid_calls=0)
+    console.print(f"paid_calls={result['paid_calls']}")
+    console.print(f"qc={project_dir.full_episode_qc_md()}")
+    console.print(f"ai_video={project_dir.ai_video_decision_md()}")
+    console.print(f"sound={project_dir.sound_design_plan_md()}")
+    proposed = result["proposed"]
+    console.print(f"proposed_chunk_count={proposed.chunk_count}")
+    for item in proposed.chunks:
+        console.print(
+            f"{item.chunk_id} {item.char_start}:{item.char_end} "
+            f"chars={item.character_count} boundary={item.boundary_type}"
+        )
+
+
+@app.command("plan-sound-design")
+def plan_sound_design_cmd(project_id: str = typer.Argument(...)) -> None:
+    """Write the sparse music/SFX chapter plan. No audio generation."""
+    from docprod.pipeline.audit_episode import audit_episode
+
+    project_dir, _project = _load_project(project_id)
+    audit_episode(project_dir, paid_calls=0)
+    console.print(str(project_dir.sound_design_plan_md()))
 
 
 @app.command("audit-motion")
