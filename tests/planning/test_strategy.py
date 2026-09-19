@@ -10,14 +10,31 @@ from docprod.planning.strategy import allocate_ai_video, preferred_strategy
 def test_document_and_map_preferences() -> None:
     assert (
         preferred_strategy(ContentCategory.document, visual_bridge=False)
-        is AssetStrategy.document
+        is AssetStrategy.archive_image
     )
     assert (
-        preferred_strategy(ContentCategory.news, visual_bridge=False)
-        is AssetStrategy.document
+        preferred_strategy(ContentCategory.news, visual_bridge=False) is AssetStrategy.archive_image
     )
     assert (
         preferred_strategy(ContentCategory.map_or_travel, visual_bridge=False)
+        is AssetStrategy.stock_video
+    )
+    assert (
+        preferred_strategy(ContentCategory.time_establishing, visual_bridge=False)
+        is AssetStrategy.stock_video
+    )
+    assert (
+        preferred_strategy(ContentCategory.court_or_legal, visual_bridge=False)
+        is AssetStrategy.stock_video
+    )
+    assert (
+        preferred_strategy(ContentCategory.document, visual_bridge=False, explicit_explainer=True)
+        is AssetStrategy.document
+    )
+    assert (
+        preferred_strategy(
+            ContentCategory.map_or_travel, visual_bridge=False, explicit_explainer=True
+        )
         is AssetStrategy.map
     )
     assert (
@@ -25,8 +42,7 @@ def test_document_and_map_preferences() -> None:
         is AssetStrategy.stock_video
     )
     assert (
-        preferred_strategy(ContentCategory.generic, visual_bridge=True)
-        is AssetStrategy.placeholder
+        preferred_strategy(ContentCategory.generic, visual_bridge=True) is AssetStrategy.placeholder
     )
 
 
@@ -69,9 +85,7 @@ def test_ai_video_duration_budget() -> None:
     reasons = ["action"] * len(beats)
     out, out_reasons = allocate_ai_video(beats, strategies, reasons, profile)
     video_dur = sum(
-        b.duration
-        for b, s in zip(beats, out, strict=True)
-        if s is AssetStrategy.ai_image_to_video
+        b.duration for b, s in zip(beats, out, strict=True) if s is AssetStrategy.ai_image_to_video
     )
     total = sum(b.duration for b in beats)
     assert video_dur <= profile.max_ai_video_fraction * total + 1e-6
@@ -120,9 +134,7 @@ def test_high_motion_outranks_low_motion_for_scarce_budget() -> None:
         text="The man chased the suspect and ran down the street.",
         source_utterance_ids=["u2"],
         segmentation_reason="keep",
-        classification=classify_text(
-            "The man chased the suspect and ran down the street.", "en"
-        ),
+        classification=classify_text("The man chased the suspect and ran down the street.", "en"),
     )
     assert high.classification.motion_strength > low.classification.motion_strength
     out, reasons = allocate_ai_video(

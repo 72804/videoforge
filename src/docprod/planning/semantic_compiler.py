@@ -20,6 +20,10 @@ from docprod.planning.semantic_validation import (
     named_people,
     repetition_warnings,
 )
+from docprod.planning.visual_policy import (
+    cinematic_strategy_for_intent,
+    explicit_explainer_requested,
+)
 from docprod.research.models import ResearchDossier
 from docprod.writing.models import NarrationScript
 
@@ -180,6 +184,8 @@ def _validate_word_coverage(drafts: list[_Draft], word_count: int) -> None:
 
 
 def map_strategy(intent: SemanticSceneIntent) -> AssetStrategy:
+    if not explicit_explainer_requested(intent):
+        return cinematic_strategy_for_intent(intent)
     pref = intent.preferred_source_type
     if intent.historical_specificity == "exact_person_or_event":
         if pref in {"document", "newspaper"}:
@@ -207,8 +213,6 @@ def map_strategy(intent: SemanticSceneIntent) -> AssetStrategy:
         if intent.reenactment_freedom == "avoid":
             return AssetStrategy.stock_video
         return AssetStrategy.ai_image
-    if pref == "mixed":
-        return AssetStrategy.stock_video
     return AssetStrategy.stock_video
 
 
@@ -313,6 +317,7 @@ def _materialize(
             "stock_query_seed": intent.stock_query_seed,
             "archive_search_seed": intent.archive_search_seed,
             "graphic_brief": intent.graphic_brief,
+            "explicit_explainer": intent.explicit_explainer,
             "reasoning_summary": intent.reasoning_summary,
             "chapter": intent.chapter,
             "narration_start_word": draft.start_word,
@@ -321,7 +326,8 @@ def _materialize(
             "archive_unresolved": draft.strategy
             in {AssetStrategy.archive_image, AssetStrategy.archive_video},
             "stylized_graphic_not_authentic": draft.strategy
-            in {AssetStrategy.document, AssetStrategy.generated_graphic, AssetStrategy.map},
+            in {AssetStrategy.document, AssetStrategy.generated_graphic, AssetStrategy.map}
+            and explicit_explainer_requested(intent),
         }
         flags = hallucination_warnings(
             scene_id=scene_id,

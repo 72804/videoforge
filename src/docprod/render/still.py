@@ -28,6 +28,7 @@ class VisualSource:
     map_ring: Path | None = None
     map_bg: Path | None = None
     dest: tuple[int, int] | None = None
+    sequence: tuple[Path, ...] = ()
 
 
 def image_suffix_for_format(output_format: str) -> str:
@@ -231,8 +232,37 @@ def resolve_stock_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | No
     return None
 
 
+def resolve_photo_sequence(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
+    raw = scene.metadata.get("photo_sequence") or []
+    if not isinstance(raw, list) or len(raw) < 2:
+        return None
+    files: list[Path] = []
+    for item in raw:
+        candidate = Path(str(item))
+        if not candidate.is_file():
+            candidate = paths.root / str(item)
+        if candidate.is_file():
+            files.append(candidate)
+    if len(files) < 2:
+        return None
+    index = int(scene.metadata.get("photo_sequence_index") or 0)
+    chosen = files[min(max(index, 0), len(files) - 1)]
+    return VisualSource(
+        path=chosen,
+        sha256=file_sha256(chosen),
+        kind="photo_sequence",
+        strategy_rendered="ai_image",
+        sequence=tuple(files),
+    )
+
+
 def resolve_scene_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
-    """AI video (later) > stock/archive clip > AI still > archive photo > local graphic."""
+    """Prefer motion footage, then stills, then local graphics."""
+    sequence = resolve_photo_sequence(paths, scene)
+    if sequence is not None and len(sequence.sequence) >= 2:
+        # Multi-still on a single scene uses the full sequence; otherwise pick indexed still.
+        if str(scene.metadata.get("photo_sequence_split") or "") == "1":
+            return sequence
     stock = resolve_stock_visual(paths, scene)
     if stock is not None:
         return stock
@@ -242,6 +272,8 @@ def resolve_scene_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | No
         AssetStrategy.archive_video,
     }:
         return archive
+    if sequence is not None:
+        return sequence
     if scene.asset_strategy in IMAGE_STRATEGIES:
         still = resolve_unit_generated_still(paths, scene)
         if still is not None:

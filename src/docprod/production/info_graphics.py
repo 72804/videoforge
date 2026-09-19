@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from docprod.graphics.data import INFO_GRAPHIC_KINDS
 from docprod.models.enums import AssetStrategy
 from docprod.models.scene import Scene, ScenePlan
+from docprod.planning.visual_policy import explicit_explainer_requested
 from docprod.production import AssetPlan, AssetUnit
 from docprod.production.balance import NAMED, _apply_strategy
 
@@ -17,13 +17,15 @@ def is_named_person_scene(scene: Scene) -> bool:
 
 
 def is_information_graphic_unit(unit: AssetUnit, scene: Scene) -> bool:
-    return unit.asset_unit_id in INFO_GRAPHIC_UNIT_IDS
+    if explicit_explainer_requested(scene):
+        return unit.asset_unit_id in INFO_GRAPHIC_UNIT_IDS
+    return False
 
 
 def convert_info_graphic_units(
     plan: ScenePlan, asset_plan: AssetPlan
 ) -> tuple[ScenePlan, AssetPlan]:
-    """Move chart/comparison AI stills onto the local graphic engine. No API."""
+    """Keep local explainer conversion opt-in. Default is photographic."""
     scenes = {scene.id: scene for scene in plan.scenes}
     units: list[AssetUnit] = []
     for unit in asset_plan.units:
@@ -35,14 +37,11 @@ def convert_info_graphic_units(
             converted = _apply_strategy(
                 scenes[scene_id],
                 AssetStrategy.generated_graphic,
-                "review_info_graphic_local",
+                "review_info_graphic_local_explicit",
             )
             meta = dict(converted.metadata)
-            meta["graphic_kind"] = INFO_GRAPHIC_KINDS.get(
-                unit.asset_unit_id, "barrel_uncertainty"
-            )
+            meta["explicit_explainer"] = True
             meta["asset_unit_id"] = unit.asset_unit_id
-            meta["graphic_brief"] = unit.visual_concept
             scenes[scene_id] = converted.model_copy(update={"metadata": meta})
         units.append(
             unit.model_copy(
@@ -52,7 +51,6 @@ def convert_info_graphic_units(
                     "status": "READY_LOCAL",
                     "provider": "local",
                     "estimated_cost": "0",
-                    "warnings": [*unit.warnings, "converted_from_ai_image_to_local_graphic"],
                 }
             )
         )

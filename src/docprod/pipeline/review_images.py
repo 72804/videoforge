@@ -22,7 +22,8 @@ REVIEW_STYLE = (
     "Restrained documentary photograph, natural exposure, realistic materials, "
     "subtle cinematic composition, not glossy advertising, not hyper-dramatic, "
     "not obviously AI generated. Environmental storytelling. 16:9 landscape. "
-    "No fake readable text, logos, watermarks, or split panels. "
+    "No fake readable text, logos, watermarks, split panels, infographic styling, "
+    "UI, diagrams, labels, or fabricated documents. "
     "Anonymous figures only; no invented likeness of a named real person. "
     "Hands believable, no motion blur, clear composition with room for camera motion."
 )

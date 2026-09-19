@@ -61,11 +61,16 @@ def _blob(scene: Scene) -> str:
 def fallback_strategy(scene: Scene) -> AssetStrategy:
     text = _blob(scene)
     if any(name in text for name in NAMED):
-        return AssetStrategy.document
+        return AssetStrategy.archive_image
     if scene.asset_strategy in {AssetStrategy.archive_image, AssetStrategy.archive_video}:
-        if "quebec" in text or "depo" in text or "warehouse" in text:
-            return AssetStrategy.stock_video
-        return AssetStrategy.document
+        return AssetStrategy.stock_video
     if scene.asset_strategy is AssetStrategy.stock_video:
         return AssetStrategy.ai_image
+    if scene.asset_strategy in {
+        AssetStrategy.generated_graphic,
+        AssetStrategy.document,
+        AssetStrategy.map,
+        AssetStrategy.text_card,
+    }:
+        return AssetStrategy.stock_video
     return scene.asset_strategy

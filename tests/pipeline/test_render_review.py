@@ -93,10 +93,10 @@ def test_info_graphics_convert_photographic_remain() -> None:
     )
     plan, asset = convert_info_graphic_units(plan, asset)
     by_id = {scene.id: scene for scene in plan.scenes}
-    assert by_id["scene_0033"].asset_strategy is AssetStrategy.generated_graphic
-    assert by_id["scene_0034"].asset_strategy is AssetStrategy.generated_graphic
-    assert by_id["scene_0044"].asset_strategy is AssetStrategy.generated_graphic
-    assert by_id["scene_0051"].asset_strategy is AssetStrategy.generated_graphic
+    assert by_id["scene_0033"].asset_strategy is AssetStrategy.ai_image
+    assert by_id["scene_0034"].asset_strategy is AssetStrategy.ai_image
+    assert by_id["scene_0044"].asset_strategy is AssetStrategy.ai_image
+    assert by_id["scene_0051"].asset_strategy is AssetStrategy.ai_image
     assert by_id["scene_0023"].asset_strategy is AssetStrategy.ai_image
     assert by_id["scene_0060"].asset_strategy is AssetStrategy.ai_image
     assert by_id["scene_0001"].asset_strategy is not AssetStrategy.ai_image

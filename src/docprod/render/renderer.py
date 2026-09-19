@@ -338,6 +338,74 @@ def _render_one_segment(
 
                     shutil.rmtree(frame_dir, ignore_errors=True)
                 summary = "map-route-frames+perspective-cubic,libx264,yuv420p,no-audio"
+            elif visual.sequence and str(scene.metadata.get("photo_sequence_split") or "") == "1":
+                parts: list[Path] = []
+                n = max(1, len(visual.sequence))
+                remaining_frames = frames
+                for idx, still_path in enumerate(visual.sequence):
+                    chunk_frames = remaining_frames // (n - idx)
+                    remaining_frames -= chunk_frames
+                    if chunk_frames < 1:
+                        continue
+                    part = tmp.with_name(f"{scene.id}_seq{idx}.mp4")
+                    try:
+                        probe = probe_media(still_path)
+                        src_w = probe.width or canvas_w
+                        src_h = probe.height or canvas_h
+                    except FFmpegError:
+                        src_w, src_h = canvas_w, canvas_h
+                    fit = still_fit_filter(src_w, src_h, canvas_w, canvas_h)
+                    vf = fit if motion == "null" else f"{fit},{motion}"
+                    vf = f"{vf},{still_pixel_normalize_filter()}"
+                    run_ffmpeg(
+                        [
+                            "-loop",
+                            "1",
+                            "-framerate",
+                            str(profile.fps),
+                            "-i",
+                            str(still_path),
+                            "-frames:v",
+                            str(chunk_frames),
+                            "-an",
+                            "-vf",
+                            vf,
+                            "-c:v",
+                            profile.video_codec,
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-preset",
+                            profile.preset,
+                            "-crf",
+                            str(profile.crf),
+                            str(part),
+                        ],
+                        timeout=180,
+                    )
+                    parts.append(part)
+                concat_list = tmp.with_name(f"{scene.id}_seq.txt")
+                concat_list.write_text(
+                    "".join(f"file '{item.resolve().as_posix()}'\n" for item in parts),
+                    encoding="utf-8",
+                )
+                run_ffmpeg(
+                    [
+                        "-f",
+                        "concat",
+                        "-safe",
+                        "0",
+                        "-i",
+                        str(concat_list),
+                        "-c",
+                        "copy",
+                        str(tmp),
+                    ],
+                    timeout=180,
+                )
+                for item in parts:
+                    item.unlink(missing_ok=True)
+                concat_list.unlink(missing_ok=True)
+                summary = "photo-sequence-stills,libx264,yuv420p,no-audio"
             else:
                 image_path = visual.path
                 try:
@@ -434,6 +502,7 @@ def render_preview(
     narration_wav: Path | None = None,
     allow_placeholders: bool = True,
     alignment=None,
+    write_caption_files: bool = True,
 ) -> PreviewRenderResult:
     require_perspective_filter()
     if profile.burn_subtitles:
@@ -442,15 +511,16 @@ def render_preview(
     paths.preview_segments_dir.mkdir(parents=True, exist_ok=True)
     srt_path = captions_srt or paths.captions_srt
     ass_path = captions_ass or paths.captions_ass
-    write_captions(
-        plan,
-        srt_path=srt_path,
-        ass_path=ass_path,
-        play_res_x=profile.width,
-        play_res_y=profile.height,
-        font_name=_ass_font_name(font),
-        alignment=alignment,
-    )
+    if write_caption_files:
+        write_captions(
+            plan,
+            srt_path=srt_path,
+            ass_path=ass_path,
+            play_res_x=profile.width,
+            play_res_y=profile.height,
+            font_name=_ass_font_name(font),
+            alignment=alignment,
+        )
     worker_count = workers or profile.segment_workers
     records: dict[str, SegmentRecord] = {}
     lock = Lock()

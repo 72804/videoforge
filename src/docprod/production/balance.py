@@ -85,23 +85,9 @@ def _named_person(scene: Scene) -> bool:
 
 
 def _keep_information_graphic(scene: Scene) -> bool:
-    text = _blob(scene)
-    if any(token in text for token in KEEP_GRAPHIC) and not _mostly_atmosphere(text):
-        return True
-    if scene.asset_strategy is AssetStrategy.map:
-        return any(
-            token in text
-            for token in (
-                "quebec",
-                "kedgwick",
-                "ontario",
-                "blandford",
-                "laurierville",
-                "amerika",
-                "united states",
-            )
-        )
-    return False
+    from docprod.planning.visual_policy import explicit_explainer_requested
+
+    return explicit_explainer_requested(scene)
 
 
 def _mostly_atmosphere(text: str) -> bool:
@@ -114,8 +100,6 @@ def _convert_target(scene: Scene) -> AssetStrategy:
     text = _blob(scene)
     movement = str(scene.metadata.get("movement_need") or "low")
     if _named_person(scene):
-        if scene.asset_strategy is AssetStrategy.document:
-            return AssetStrategy.document
         return AssetStrategy.archive_image
     if movement == "high":
         return AssetStrategy.stock_video
@@ -144,11 +128,15 @@ def rebalance_scene_plan(plan: ScenePlan) -> ScenePlan:
         else:
             graphic_run = 0
         converted = scene
-        if strategy is AssetStrategy.generated_graphic and not _keep_information_graphic(scene):
-            converted = _apply_strategy(scene, _convert_target(scene), "balance_atmosphere_graphic")
-            graphic_run = 0
-        elif strategy is AssetStrategy.map and not _keep_information_graphic(scene):
-            converted = _apply_strategy(scene, AssetStrategy.stock_video, "balance_decorative_map")
+        if strategy in {
+            AssetStrategy.generated_graphic,
+            AssetStrategy.document,
+            AssetStrategy.map,
+            AssetStrategy.text_card,
+        } and not _keep_information_graphic(scene):
+            converted = _apply_strategy(
+                scene, _convert_target(scene), "balance_disable_explainer_default"
+            )
             graphic_run = 0
         elif (
             strategy
@@ -165,7 +153,7 @@ def rebalance_scene_plan(plan: ScenePlan) -> ScenePlan:
                 else AssetStrategy.ai_image
             )
             if _named_person(scene):
-                alt = AssetStrategy.document
+                alt = AssetStrategy.archive_image
             converted = _apply_strategy(scene, alt, "balance_break_graphic_run")
             graphic_run = 0
         scenes.append(converted)

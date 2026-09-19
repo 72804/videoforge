@@ -250,9 +250,9 @@ def test_document_stylized_not_authentic() -> None:
         script=script,
         dossier=_dossier(),
     )
-    assert plan.scenes[0].asset_strategy is AssetStrategy.document
-    assert "not a fake authentic" in plan.scenes[0].visual_intent.lower()
-    assert plan.scenes[0].metadata["stylized_graphic_not_authentic"] is True
+    assert plan.scenes[0].asset_strategy is AssetStrategy.archive_image
+    assert "not a fake authentic" not in plan.scenes[0].visual_intent.lower()
+    assert not plan.scenes[0].metadata.get("stylized_graphic_not_authentic")
 
 
 def test_ai_video_cap_and_consecutive_limit() -> None:

@@ -448,9 +448,7 @@ def inspect_research_cmd(project_id: str = typer.Argument(...)) -> None:
             evidence_ids = registry.evidence_source_ids
         table.add_row("sources_retained_evidence", str(len(evidence_ids)))
         evidence_domains = {
-            item.domain
-            for item in registry.sources
-            if item.source_id in set(evidence_ids)
+            item.domain for item in registry.sources if item.source_id in set(evidence_ids)
         }
         table.add_row("evidence_domains", str(len(evidence_domains)))
     if project_dir.research_dossier_json().is_file():
@@ -792,6 +790,81 @@ def render_review_episode_cmd(
         f"whisper={dry.whisper_requests} video_models={dry.video_model_requests}"
     )
     console.print(f"preview {project_dir.preview_narrated_mp4()}")
+
+
+@app.command("replace-explainer-visuals")
+def replace_explainer_visuals_cmd(
+    project_id: str = typer.Argument(...),
+    dry_run: bool = typer.Option(True, "--dry-run/--live"),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+    max_paid_requests: int = typer.Option(16, "--max-paid-requests"),
+    enable_pexels: bool = typer.Option(True, "--pexels/--no-pexels"),
+    enable_commons: bool = typer.Option(True, "--commons/--no-commons"),
+) -> None:
+    """Replace generated explainer graphics with photographic/stock visuals."""
+    from docprod.pipeline.replace_explainer_visuals import (
+        apply_replacement_strategies,
+        execute_free_replacements,
+        generate_replacement_stills,
+        plan_explainer_replacements,
+        render_visual_v2,
+        report_payload,
+        runtime_visual_fractions,
+        save_replacement_plan,
+        scan_existing_library,
+        write_replacement_contact_sheet,
+    )
+    from docprod.production import AssetPlan
+    from docprod.providers.request_budget import ModelRequestBudget
+
+    project_dir, project = _load_project(project_id)
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    asset_plan = load_model(project_dir.asset_plan_json(), AssetPlan)
+    library = scan_existing_library(project_dir)
+    report = plan_explainer_replacements(plan, asset_plan, library=library)
+    save_replacement_plan(project_dir, report)
+    console.print_json(data=report_payload(report))
+    if dry_run:
+        return
+    if not report.grouping_ok:
+        _fail("Grouping failed; too many AI stills. No paid calls.")
+    plan, asset_plan, report = execute_free_replacements(
+        project_dir,
+        project=project,
+        plan=plan,
+        asset_plan=asset_plan,
+        report=report,
+        enable_pexels=enable_pexels,
+        enable_commons=enable_commons,
+    )
+    if not report.grouping_ok:
+        _fail("After free-source search, AI still count still exceeds cap.")
+    if report.image_calls > max_paid_requests:
+        _fail(f"Would make {report.image_calls} image calls > {max_paid_requests}")
+    budget = ModelRequestBudget(max_paid_requests)
+    cost = 0.0
+    if report.image_calls:
+        cost = generate_replacement_stills(
+            project_dir,
+            project=project,
+            plan=plan,
+            report=report,
+            confirm_paid=confirm_paid,
+            budget=budget,
+        )
+    plan, asset_plan = apply_replacement_strategies(plan, asset_plan, report)
+    save_model(project_dir.scene_plan_json, plan)
+    save_model(project_dir.asset_plan_json(), asset_plan)
+    write_replacement_contact_sheet(project_dir, report, plan)
+    cache_hits, rendered, elapsed = render_visual_v2(
+        project_dir, project=project, plan=plan, asset_plan=asset_plan
+    )
+    console.print(
+        f"image_cost_usd={cost} cache_hits={cache_hits} rendered={rendered} elapsed={elapsed:.1f}s"
+    )
+    console.print(f"fractions={runtime_visual_fractions(plan)}")
+    console.print(f"preview {project_dir.preview_visual_v2_mp4()}")
+    console.print(f"sheet {project_dir.visual_replacement_contact_sheet()}")
 
 
 @app.command("estimate-production-cost")

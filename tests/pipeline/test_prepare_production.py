@@ -40,6 +40,7 @@ def _scene(n: int, **kwargs: object) -> Scene:
             "graphic_brief": str(kwargs.get("brief") or ""),
             "movement_need": "low",
             "image_prompt_seed": "warehouse barrels",
+            "explicit_explainer": bool(kwargs.get("explicit_explainer")),
         },
     )
 
@@ -73,6 +74,7 @@ def test_prepare_local_only_and_cost_zero_network(tmp_path, monkeypatch) -> None
             strategy=AssetStrategy.map,
             narration="Quebec ve Kedgwick soruşturma konumları.",
             subject="map",
+            explicit_explainer=True,
         ),
         _scene(
             2,
@@ -91,6 +93,7 @@ def test_prepare_local_only_and_cost_zero_network(tmp_path, monkeypatch) -> None
             strategy=AssetStrategy.document,
             narration="Mahkeme özeti.",
             subject="court summary",
+            explicit_explainer=True,
         ),
     ]
     paths = _setup(tmp_path, monkeypatch, scenes)
@@ -146,12 +149,18 @@ def test_named_person_fallback_is_document_not_ai_portrait() -> None:
         narration="Michel Gauvreau envanter kaydı.",
         subject="Michel Gauvreau",
     )
-    assert fallback_strategy(scene) is AssetStrategy.document
+    assert fallback_strategy(scene) is AssetStrategy.archive_image
 
 
 def test_inspect_production_plan_cli(tmp_path, monkeypatch) -> None:
     scenes = [
-        _scene(1, strategy=AssetStrategy.document, narration="Mahkeme.", subject="court"),
+        _scene(
+            1,
+            strategy=AssetStrategy.document,
+            narration="Mahkeme.",
+            subject="court",
+            explicit_explainer=True,
+        ),
     ]
     paths = _setup(tmp_path, monkeypatch, scenes)
     project = Project.model_validate_json(paths.project_json.read_text())

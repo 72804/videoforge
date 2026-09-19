@@ -43,8 +43,9 @@ def test_document_and_map_from_planner() -> None:
     )
     plan = plan_scenes(project_id="demo", script=script, random_seed=2, profile=PROFILE)
     strategies = [scene.asset_strategy for scene in plan.scenes]
-    assert AssetStrategy.document in strategies
-    assert AssetStrategy.map in strategies
+    assert AssetStrategy.document not in strategies
+    assert AssetStrategy.map not in strategies
+    assert AssetStrategy.archive_image in strategies or AssetStrategy.stock_video in strategies
 
 
 def test_deterministic_same_seed() -> None:
@@ -123,7 +124,7 @@ def test_variety_softens_repeated_ai_image_where_possible() -> None:
             run = 1
         prev = scene.asset_strategy
     assert longest <= PROFILE.max_consecutive_same_strategy or all(
-        scene.asset_strategy is AssetStrategy.document for scene in plan.scenes
+        scene.asset_strategy is AssetStrategy.archive_image for scene in plan.scenes
     )
 
 

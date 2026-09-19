@@ -57,8 +57,10 @@ _MAPLE_EN: dict[str, tuple[str, ...]] = {
     "depo": ("warehouse interior", "industrial warehouse"),
     "şurup": ("maple syrup production", "maple syrup"),
     "quebec": ("quebec countryside", "rural quebec"),
-    "kamyon": ("truck warehouse loading", "freight truck"),
-    "polis": ("investigators documents", "police investigation documents"),
+    "kamyon": ("freight truck highway", "warehouse loading truck"),
+    "polis": ("police investigation files", "courthouse exterior"),
+    "mahkeme": ("courthouse exterior columns", "supreme court building"),
+    "yol": ("rural canadian highway", "aerial winter road"),
 }
 _CATEGORY_QUERIES: dict[str, tuple[str, ...]] = {
     "location_establishing": ("establishing city location",),

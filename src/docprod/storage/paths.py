@@ -291,6 +291,18 @@ class ProjectPaths:
     def preview_narrated_mp4(self) -> Path:
         return self.preview_dir / NARRATED_PREVIEW_FILENAME
 
+    def preview_visual_v2_mp4(self) -> Path:
+        return self.preview_dir / "documentary_preview_visual_v2.mp4"
+
+    def preview_visual_v2_manifest(self) -> Path:
+        return self.preview_dir / "render_manifest_visual_v2.json"
+
+    def visual_replacement_contact_sheet(self) -> Path:
+        return self.review_dir / "visual_replacement_v2_contact_sheet.jpg"
+
+    def visual_replacement_plan_json(self) -> Path:
+        return self.review_dir / "visual_replacement_v2_plan.json"
+
     def preview_narrated_manifest(self) -> Path:
         return self.preview_dir / "render_manifest_narrated.json"
 

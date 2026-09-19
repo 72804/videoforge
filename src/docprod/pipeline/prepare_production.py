@@ -71,9 +71,50 @@ def prepare_production(
             AssetStrategy.map,
             AssetStrategy.text_card,
         }:
-            resolved.append(
-                _resolve_local(paths, project, scene, unit, enable=enable_local_graphics)
-            )
+            from docprod.planning.visual_policy import explicit_explainer_requested
+
+            if enable_local_graphics and explicit_explainer_requested(scene):
+                resolved.append(_resolve_local(paths, project, scene, unit, enable=True))
+            else:
+                alt = fallback_strategy(scene)
+                converted = unit.model_copy(
+                    update={
+                        "source_strategy": alt,
+                        "warnings": [*unit.warnings, "explainer_disabled_by_default"],
+                    }
+                )
+                if alt is AssetStrategy.stock_video:
+                    resolved.append(
+                        _resolve_stock(
+                            paths,
+                            project,
+                            balanced,
+                            scene,
+                            converted,
+                            enable=enable_pexels,
+                            review=review,
+                            search_already_ran=stock_searched,
+                        )
+                    )
+                elif alt in {AssetStrategy.archive_image, AssetStrategy.archive_video}:
+                    resolved.append(
+                        _resolve_archive(
+                            paths,
+                            project,
+                            scene,
+                            converted,
+                            commons_client,
+                            enable=enable_commons,
+                            review=review,
+                            scene_by_id=scene_by_id,
+                            used_titles=used_archive_titles,
+                        )
+                    )
+                else:
+                    resolved.append(
+                        _fallback_ai_still(paths, scene, converted, "explainer disabled")
+                    )
+
         elif unit.source_strategy is AssetStrategy.stock_video:
             if enable_pexels and not stock_searched:
                 try:
@@ -245,10 +286,7 @@ def _resolve_archive(
         and item.file_url
         and item.score >= 40
         and item.title not in used_titles
-        and (
-            item.mime.startswith("image/")
-            or item.media_type in {"BITMAP", "VIDEO"}
-        )
+        and (item.mime.startswith("image/") or item.media_type in {"BITMAP", "VIDEO"})
     ]
     sheet = None
     if auto:
@@ -286,9 +324,7 @@ def _resolve_archive(
         fetch_bytes=client.fetch_bytes,
     )
     if ranked and ranked[0].decision == "REVIEW_REQUIRED":
-        review.append(
-            f"{unit.asset_unit_id}: Commons license/fit review ({ranked[0].title})"
-        )
+        review.append(f"{unit.asset_unit_id}: Commons license/fit review ({ranked[0].title})")
         return unit.model_copy(
             update={
                 "status": "REVIEW_REQUIRED",
@@ -311,6 +347,10 @@ def _archive_fallback(
     alt = fallback_strategy(scene)
     review.append(f"{unit.asset_unit_id}: archive fallback ({reason}) → {alt.value}")
     if alt is AssetStrategy.document:
+        from docprod.planning.visual_policy import explicit_explainer_requested
+
+        if not explicit_explainer_requested(scene):
+            return _fallback_ai_still(paths, scene, unit, reason)
         doc_scene = scene.model_copy(update={"asset_strategy": AssetStrategy.document})
         graphic = execute_generate_graphic(paths, scene=doc_scene, seed=project.random_seed)
         return unit.model_copy(

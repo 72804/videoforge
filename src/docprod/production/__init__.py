@@ -21,6 +21,13 @@ ReuseMode = Literal["unique", "shared_trim", "shared_continue"]
 TrimPolicy = Literal["per_scene_window", "continuous"]
 
 
+class PhotoSequenceAsset(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stills: list[str] = Field(default_factory=list)
+    concept_keys: list[str] = Field(default_factory=list)
+
+
 class AssetUnit(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

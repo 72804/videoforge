@@ -3,34 +3,14 @@ from __future__ import annotations
 from docprod.models.enums import AssetStrategy
 from docprod.planning.models import ContentCategory, VisualBeat
 from docprod.planning.profile import ScenePlannerProfile
+from docprod.planning.visual_policy import CINEMATIC_PREFERRED, PREFERRED_EXPLICIT
 
-PREFERRED: dict[ContentCategory, AssetStrategy] = {
-    ContentCategory.location_establishing: AssetStrategy.stock_video,
-    ContentCategory.time_establishing: AssetStrategy.generated_graphic,
-    ContentCategory.person: AssetStrategy.ai_image,
-    ContentCategory.money: AssetStrategy.stock_video,
-    ContentCategory.police: AssetStrategy.archive_video,
-    ContentCategory.crime: AssetStrategy.ai_image,
-    ContentCategory.vehicle: AssetStrategy.stock_video,
-    ContentCategory.building: AssetStrategy.stock_video,
-    ContentCategory.document: AssetStrategy.document,
-    ContentCategory.news: AssetStrategy.document,
-    ContentCategory.map_or_travel: AssetStrategy.map,
-    ContentCategory.technology: AssetStrategy.stock_video,
-    ContentCategory.phone_or_computer: AssetStrategy.stock_video,
-    ContentCategory.court_or_legal: AssetStrategy.document,
-    ContentCategory.nature: AssetStrategy.stock_video,
-    ContentCategory.crowd: AssetStrategy.stock_video,
-    ContentCategory.interior: AssetStrategy.ai_image,
-    ContentCategory.action: AssetStrategy.ai_image,
-    ContentCategory.danger: AssetStrategy.ai_image,
-    ContentCategory.generic: AssetStrategy.ai_image,
-}
+PREFERRED = CINEMATIC_PREFERRED
 
-# Semantic-locked strategies should not be swapped merely for variety.
+# Archive photographic sources should not be swapped for fake graphics.
 LOCKED_STRATEGIES = {
-    AssetStrategy.document,
-    AssetStrategy.map,
+    AssetStrategy.archive_image,
+    AssetStrategy.archive_video,
 }
 
 ALTERNATIVES: dict[AssetStrategy, tuple[AssetStrategy, ...]] = {
@@ -46,12 +26,11 @@ ALTERNATIVES: dict[AssetStrategy, tuple[AssetStrategy, ...]] = {
     ),
     AssetStrategy.archive_image: (
         AssetStrategy.stock_image,
-        AssetStrategy.document,
+        AssetStrategy.stock_video,
         AssetStrategy.ai_image,
     ),
     AssetStrategy.stock_image: (
         AssetStrategy.stock_video,
-        AssetStrategy.generated_graphic,
         AssetStrategy.ai_image,
     ),
     AssetStrategy.ai_image: (
@@ -64,19 +43,18 @@ ALTERNATIVES: dict[AssetStrategy, tuple[AssetStrategy, ...]] = {
         AssetStrategy.stock_video,
     ),
     AssetStrategy.generated_graphic: (
-        AssetStrategy.stock_image,
-        AssetStrategy.text_card,
+        AssetStrategy.stock_video,
         AssetStrategy.ai_image,
     ),
-    AssetStrategy.document: (AssetStrategy.document,),
-    AssetStrategy.map: (AssetStrategy.map,),
+    AssetStrategy.document: (AssetStrategy.archive_image, AssetStrategy.stock_video),
+    AssetStrategy.map: (AssetStrategy.stock_video, AssetStrategy.ai_image),
     AssetStrategy.placeholder: (
-        AssetStrategy.generated_graphic,
+        AssetStrategy.stock_video,
         AssetStrategy.ai_image,
     ),
     AssetStrategy.text_card: (
-        AssetStrategy.generated_graphic,
-        AssetStrategy.placeholder,
+        AssetStrategy.stock_video,
+        AssetStrategy.ai_image,
     ),
 }
 
@@ -88,9 +66,16 @@ MOTION_CATEGORIES = {
 }
 
 
-def preferred_strategy(category: ContentCategory, *, visual_bridge: bool) -> AssetStrategy:
+def preferred_strategy(
+    category: ContentCategory,
+    *,
+    visual_bridge: bool,
+    explicit_explainer: bool = False,
+) -> AssetStrategy:
     if visual_bridge:
         return AssetStrategy.placeholder
+    if explicit_explainer:
+        return PREFERRED_EXPLICIT[category]
     return PREFERRED[category]
 
 

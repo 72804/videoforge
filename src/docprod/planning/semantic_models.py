@@ -59,6 +59,7 @@ class SemanticSceneIntent(BaseModel):
     stock_query_seed: str = ""
     archive_search_seed: str = ""
     graphic_brief: str = ""
+    explicit_explainer: bool = False
 
 
 class SemanticIntentSet(BaseModel):

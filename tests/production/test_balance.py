@@ -50,9 +50,9 @@ def test_balance_breaks_graphic_run_and_keeps_named_off_ai() -> None:
     out = rebalance_scene_plan(plan)
     assert len(out.scenes) == 6
     strategies = [scene.asset_strategy for scene in out.scenes]
-    assert strategies[0] is G
-    assert G not in strategies[1:4]
-    assert AssetStrategy.ai_image in strategies[1:4] or AssetStrategy.stock_video in strategies[1:4]
+    assert G not in strategies
+    assert AssetStrategy.document not in strategies
+    assert AssetStrategy.ai_image in strategies or AssetStrategy.stock_video in strategies
     assert out.scenes[5].asset_strategy is not AssetStrategy.ai_image
     run = 1
     max_run = 1

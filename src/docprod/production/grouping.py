@@ -40,7 +40,7 @@ def _can_coalesce(left: Scene, right: Scene) -> bool:
         AssetStrategy.document,
         AssetStrategy.generated_graphic,
         AssetStrategy.text_card,
-    }:
+    } and bool(left.metadata.get("explicit_explainer")):
         return False
     return True
 

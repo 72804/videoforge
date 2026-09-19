@@ -124,6 +124,11 @@ def _generate_missing_local_graphics(
             units.append(unit)
             continue
         scene = scenes[unit.scene_ids[0]]
+        from docprod.planning.visual_policy import explicit_explainer_requested
+
+        if not explicit_explainer_requested(scene):
+            units.append(unit)
+            continue
         manifest = execute_generate_graphic(paths, scene=scene, seed=project.random_seed)
         units.append(
             unit.model_copy(
