@@ -630,6 +630,92 @@ def inspect_scene_plan_cmd(
             console.print(f"[yellow]{item.code}[/yellow] {item.scene_id}: {item.message}")
 
 
+@app.command("prepare-production")
+def prepare_production_cmd(project_id: str = typer.Argument(...)) -> None:
+    """Rebalance, group assets, resolve free sources. No paid generation."""
+    from docprod.pipeline.prepare_production import prepare_production
+    from docprod.writing.models import NarrationScript as StoryScript
+
+    project_dir, project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail("Missing 05_scenes.json")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    script = (
+        load_model(project_dir.story_script_json(), StoryScript)
+        if project_dir.story_script_json().is_file()
+        else None
+    )
+    result = prepare_production(project_dir, project=project, plan=plan, script=script)
+    cost = result.asset_plan.cost
+    console.print(
+        f"scenes={result.asset_plan.scene_count} units={result.asset_plan.asset_unit_count} "
+        f"saved_gens={result.asset_plan.saved_generation_count}"
+    )
+    if cost:
+        console.print(
+            f"ai_still_units={cost.ai_still_units} ai_video_units={cost.ai_video_units} "
+            f"stock={cost.pexels_assets} commons={cost.commons_assets} local={cost.local_assets}"
+        )
+        console.print(f"known_total={cost.known_total}")
+    console.print(f"plan {project_dir.asset_plan_json()}")
+    console.print(f"review {project_dir.asset_review_queue_md()}")
+
+
+@app.command("inspect-production-plan")
+def inspect_production_plan_cmd(project_id: str = typer.Argument(...)) -> None:
+    """Show asset-unit coverage after prepare-production."""
+    from docprod.production import AssetPlan
+    from docprod.production.cost import strategy_counts
+
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.asset_plan_json().is_file():
+        _fail("Missing 06_asset_plan.json. Run prepare-production first.")
+    asset_plan = load_model(project_dir.asset_plan_json(), AssetPlan)
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    table = Table(title=f"production {project_id}", show_header=False)
+    table.add_column("k")
+    table.add_column("v")
+    table.add_row("scenes", str(asset_plan.scene_count))
+    table.add_row("asset_units", str(asset_plan.asset_unit_count))
+    table.add_row("saved_generations", str(asset_plan.saved_generation_count))
+    table.add_row("strategies", str(strategy_counts(plan)))
+    for status in (
+        "READY_LOCAL",
+        "READY_STOCK",
+        "READY_ARCHIVE",
+        "NEEDS_AI_IMAGE",
+        "NEEDS_AI_VIDEO",
+        "REVIEW_REQUIRED",
+        "UNRESOLVED",
+    ):
+        count = sum(1 for unit in asset_plan.units if unit.status == status)
+        table.add_row(status, str(count))
+    console.print(table)
+
+
+@app.command("estimate-production-cost")
+def estimate_production_cost_cmd(project_id: str = typer.Argument(...)) -> None:
+    """Print a zero-network cost preview from the production plan."""
+    from docprod.production import AssetPlan
+    from docprod.production.cost import build_cost_preview
+    from docprod.writing.models import NarrationScript as StoryScript
+
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.asset_plan_json().is_file():
+        _fail("Missing 06_asset_plan.json")
+    asset_plan = load_model(project_dir.asset_plan_json(), AssetPlan)
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    script = (
+        load_model(project_dir.story_script_json(), StoryScript)
+        if project_dir.story_script_json().is_file()
+        else None
+    )
+    cost = asset_plan.cost or build_cost_preview(
+        project_id=project_id, plan=plan, asset_plan=asset_plan, script=script
+    )
+    console.print_json(data=cost.model_dump(mode="json"))
+
+
 @app.command("show-project")
 def show_project(
     project_id: str = typer.Argument(...),

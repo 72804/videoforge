@@ -22,6 +22,14 @@ DEST = ROUTE[-1]
 
 
 def map_labels(scene: Scene) -> dict[str, str]:
+    if use_story_geography(scene):
+        return {
+            "title": "Soruşturma coğrafyası",
+            "origin": "Quebec",
+            "destination": "Bölgesel ilişki",
+            "fact": scene.narration.strip(),
+            "note": "Konumlar yaklaşıktır. Kesin sevkiyat güzergahı bilinmiyor; rota uydurulmadı.",
+        }
     return {
         "title": "Şematik rota",
         "origin": "A",
@@ -29,6 +37,22 @@ def map_labels(scene: Scene) -> dict[str, str]:
         "fact": scene.narration.strip(),
         "note": "Kesin coğrafya bilinmiyor; şema anlatıya bağlıdır.",
     }
+
+
+def use_story_geography(scene: Scene) -> bool:
+    blob = f"{scene.narration} {scene.visual_intent} {scene.metadata.get('graphic_brief') or ''}"
+    lowered = blob.casefold()
+    return any(
+        token in lowered
+        for token in (
+            "quebec",
+            "kedgwick",
+            "blandford",
+            "ontario",
+            "laurierville",
+            "new brunswick",
+        )
+    )
 
 
 def _draw_grid(draw: ImageDraw.ImageDraw, *, width: int, height: int) -> None:
@@ -88,6 +112,8 @@ def draw_route_overlay(size: tuple[int, int]) -> Image.Image:
 
 def draw_map_background(scene: Scene, *, seed: str) -> tuple[Image.Image, dict[str, str]]:
     labels = map_labels(scene)
+    if use_story_geography(scene):
+        return _draw_relationship_map(scene, labels, seed=seed)
     image = Image.new("RGB", (GRAPHIC_WIDTH, GRAPHIC_HEIGHT), (18, 24, 28))
     draw = ImageDraw.Draw(image)
     _draw_grid(draw, width=GRAPHIC_WIDTH, height=GRAPHIC_HEIGHT)
@@ -115,10 +141,48 @@ def draw_map_background(scene: Scene, *, seed: str) -> tuple[Image.Image, dict[s
     return image, labels
 
 
+STORY_NODES = (
+    ("Quebec", 520, 420),
+    ("Saint-Louis-de-Blandford", 380, 480),
+    ("Kedgwick", 820, 220),
+    ("Ontario", 240, 360),
+    ("ABD", 980, 520),
+)
+
+
+def _draw_relationship_map(
+    scene: Scene, labels: dict[str, str], *, seed: str
+) -> tuple[Image.Image, dict[str, str]]:
+    image = Image.new("RGB", (GRAPHIC_WIDTH, GRAPHIC_HEIGHT), (18, 24, 28))
+    draw = ImageDraw.Draw(image)
+    _draw_grid(draw, width=GRAPHIC_WIDTH, height=GRAPHIC_HEIGHT)
+    sans = load_font(discover_sans_font(), 20)
+    small = load_font(discover_sans_font(), 16)
+    title = load_font(discover_sans_font(), 28)
+    draw.text((40, 28), labels["title"], font=title, fill=(214, 208, 196))
+    draw.text((40, 68), labels["note"], font=small, fill=(140, 148, 154))
+    blob = f"{scene.narration} {scene.visual_intent}".casefold()
+    for name, x, y in STORY_NODES:
+        if name == "ABD" and "amerika" not in blob and "united" not in blob and "abd" not in blob:
+            continue
+        if name == "Kedgwick" and "kedgwick" not in blob and "brunswick" not in blob:
+            continue
+        if name == "Ontario" and "ontario" not in blob:
+            continue
+        draw.ellipse((x - 8, y - 8, x + 8, y + 8), fill=(196, 92, 62))
+        draw.text((x + 14, y - 12), name, font=sans, fill=(230, 224, 214))
+    image = blend_grain(image, f"{seed}:geomap", alpha=0.05)
+    return image, labels
+
+
 def compose_map_still(
     scene: Scene, *, seed: str
 ) -> tuple[Image.Image, Image.Image, Image.Image, Image.Image, dict[str, str]]:
     background, labels = draw_map_background(scene, seed=seed)
+    if use_story_geography(scene):
+        empty = Image.new("RGBA", background.size, (0, 0, 0, 0))
+        mask = Image.new("L", background.size, 0)
+        return background, background, empty, mask, labels
     overlay = draw_route_overlay(background.size)
     mask = draw_route_mask(background.size)
     still = background.convert("RGBA")

@@ -24,7 +24,12 @@ from docprod.storage.paths import ProjectPaths
 ProgressFn = Callable[[str], None]
 
 GRAPHIC_STRATEGIES = frozenset(
-    {AssetStrategy.document, AssetStrategy.map, AssetStrategy.generated_graphic}
+    {
+        AssetStrategy.document,
+        AssetStrategy.map,
+        AssetStrategy.generated_graphic,
+        AssetStrategy.text_card,
+    }
 )
 
 

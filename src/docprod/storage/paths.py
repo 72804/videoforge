@@ -22,6 +22,10 @@ GRAPHICS_CONTACT_SHEET_FILENAME = "graphics_contact_sheet.jpg"
 STOCK_CANDIDATES_FILENAME = "stock_candidates.json"
 STOCK_CREDITS_FILENAME = "stock_sources.json"
 RUNTIME_TIMELINE_FILENAME = "06_runtime_timeline.json"
+ASSET_PLAN_FILENAME = "06_asset_plan.json"
+ARCHIVE_CANDIDATES_FILENAME = "archive_candidates.json"
+ARCHIVE_CREDITS_FILENAME = "archive_sources.json"
+ASSET_REVIEW_QUEUE_FILENAME = "asset_review_queue.md"
 NARRATED_PREVIEW_FILENAME = "documentary_preview_narrated.mp4"
 TOPIC_FILENAME = "00_topic.json"
 RESEARCH_REPORT_FILENAME = "01_research_report.md"
@@ -296,6 +300,47 @@ class ProjectPaths:
     def scene_plan_review_md(self) -> Path:
         return self.review_dir / SCENE_PLAN_REVIEW_FILENAME
 
+    def asset_plan_json(self) -> Path:
+        return self.stages_dir / ASSET_PLAN_FILENAME
+
+    @property
+    def archive_dir(self) -> Path:
+        return self.artifacts_dir / "archive"
+
+    @property
+    def archive_candidates_dir(self) -> Path:
+        return self.archive_dir / "candidates"
+
+    def archive_candidates_json(self) -> Path:
+        return self.archive_candidates_dir / ARCHIVE_CANDIDATES_FILENAME
+
+    def archive_unit_dir(self, asset_unit_id: str) -> Path:
+        return self.archive_dir / asset_unit_id
+
+    def archive_source_path(self, asset_unit_id: str, suffix: str) -> Path:
+        return self.archive_unit_dir(asset_unit_id) / f"source{suffix}"
+
+    def archive_source_meta(self, asset_unit_id: str) -> Path:
+        return self.archive_unit_dir(asset_unit_id) / "source.meta.json"
+
+    def archive_candidates_sheet(self, asset_unit_id: str) -> Path:
+        return self.archive_candidates_dir / f"{asset_unit_id}.jpg"
+
+    def archive_credits_json(self) -> Path:
+        return self.credits_dir / ARCHIVE_CREDITS_FILENAME
+
+    def asset_review_queue_md(self) -> Path:
+        return self.review_dir / ASSET_REVIEW_QUEUE_FILENAME
+
+    def ai_specs_dir(self) -> Path:
+        return self.stages_dir / "ai_specs"
+
+    def ai_still_spec_path(self, asset_unit_id: str) -> Path:
+        return self.ai_specs_dir() / f"{asset_unit_id}.still.json"
+
+    def ai_video_spec_path(self, asset_unit_id: str) -> Path:
+        return self.ai_specs_dir() / f"{asset_unit_id}.video.json"
+
     @property
     def review_dir(self) -> Path:
         return self.artifacts_dir / "review"
@@ -319,6 +364,7 @@ class ProjectPaths:
             self.visuals_dir,
             self.graphics_dir,
             self.stock_dir,
+            self.archive_dir,
             self.credits_dir,
             self.subtitles_dir,
             self.render_dir,

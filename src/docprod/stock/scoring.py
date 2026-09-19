@@ -8,6 +8,25 @@ PREFERRED_AUTO_REASONS = frozenset(
 )
 
 
+def pick_documentary_auto_candidate(
+    candidates: list[StockVideoCandidate],
+    *,
+    min_score: float = 40.0,
+) -> StockVideoCandidate | None:
+    usable = [item for item in candidates if not item.rejected]
+    if not usable:
+        return None
+    best = max(usable, key=lambda item: item.score)
+    if best.score < min_score:
+        return None
+    hay = " ".join(
+        [best.source_page_url, str(best.extra.get("title") or ""), best.query]
+    ).lower()
+    if any(token in hay for token in ("nypd", "berlin polizei", "tokyo station")):
+        return None
+    return best
+
+
 def pick_auto_candidate(
     candidates: list[StockVideoCandidate],
 ) -> StockVideoCandidate | None:

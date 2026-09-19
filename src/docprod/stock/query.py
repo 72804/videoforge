@@ -52,6 +52,14 @@ _VEHICLE_STATION_QUERIES = (
     "vehicle stopping outside station",
 )
 
+_MAPLE_EN: dict[str, tuple[str, ...]] = {
+    "fıçı": ("maple syrup barrels", "steel barrels warehouse"),
+    "depo": ("warehouse interior", "industrial warehouse"),
+    "şurup": ("maple syrup production", "maple syrup"),
+    "quebec": ("quebec countryside", "rural quebec"),
+    "kamyon": ("truck warehouse loading", "freight truck"),
+    "polis": ("investigators documents", "police investigation documents"),
+}
 _CATEGORY_QUERIES: dict[str, tuple[str, ...]] = {
     "location_establishing": ("establishing city location",),
     "vehicle": ("car driving city",),
@@ -84,6 +92,11 @@ def _english_phrases(scene: Scene) -> list[str]:
             for item in english:
                 if item not in phrases:
                     phrases.append(item)
+    for term, english in sorted(_MAPLE_EN.items(), key=lambda item: -len(item[0])):
+        if _fold(term) in lowered:
+            for item in english:
+                if item not in phrases:
+                    phrases.append(item)
     return phrases
 
 
@@ -98,6 +111,11 @@ def generate_stock_queries(scene: Scene, *, max_queries: int = 6) -> list[str]:
         if cleaned and cleaned.lower() not in {item.lower() for item in queries}:
             if len(queries) < max_queries:
                 queries.append(cleaned)
+
+    seed = str(scene.metadata.get("stock_query_seed") or "").strip()
+    if seed:
+        add(seed)
+        add(f"{seed} documentary")
 
     vehicle = any(term in phrases for term in ("car", "automobile", "braking", "car stopping"))
     motion = any(term in phrases for term in ("walking", "running", "phone", "station exit"))
@@ -120,6 +138,10 @@ def generate_stock_queries(scene: Scene, *, max_queries: int = 6) -> list[str]:
         add("train station platform")
         add("railway station")
         add("commuter train platform")
+    else:
+        for phrase in phrases:
+            if "barrel" in phrase or "warehouse" in phrase or "maple" in phrase:
+                add(phrase)
 
     category = str(scene.metadata.get("primary_category") or "")
     for extra in _CATEGORY_QUERIES.get(category, ()):

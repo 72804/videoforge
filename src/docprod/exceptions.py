@@ -14,6 +14,10 @@ class StockProviderError(RuntimeError):
     """Raised when a stock provider request fails without leaking secrets."""
 
 
+class ArchiveProviderError(RuntimeError):
+    """Raised when an archive/Commons request fails without leaking secrets."""
+
+
 class ZeroPlaceholderError(RuntimeError):
     """Raised when a scene still resolves to a debug placeholder visual."""
 
