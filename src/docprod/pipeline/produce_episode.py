@@ -38,6 +38,7 @@ from docprod.providers.pricing import (
     HIGH_VALUE_VIDEO_UNITS,
     LOW_VALUE_VIDEO_UNITS,
     LYRIA_IMAGE_LIMIT,
+    MUSIC_DUCK_DB,
     MUSIC_HARD_MAX,
     PRICING_VERSION,
     VEO_HARD_REQUESTS,
@@ -548,9 +549,19 @@ def _materialize_audio(
     assets: dict[str, Path] = {}
     reuse = 0
     for section in sound_plan.music_sections:
+        section_wav = paths.soundtrack_dir() / f"{section.music_section_id}.wav"
+        if section_wav.is_file():
+            assets[section.music_section_id] = section_wav
+            reuse += 1
+            for cue in sound_plan.cues:
+                if cue.sound_need_id == section.music_section_id:
+                    cue.asset_id = section.music_section_id
+                    cue.generated_or_reused = "reused"
+                    cue.status = "ready"
+            continue
         if section.library_asset_id:
             existing = library.get(section.library_asset_id)
-            if existing and existing.local_path:
+            if existing and existing.local_path and Path(existing.local_path).is_file():
                 assets[section.music_section_id] = Path(existing.local_path)
                 assets[existing.asset_id] = Path(existing.local_path)
                 reuse += 1
@@ -692,6 +703,85 @@ def _render_production_v1(
         write_master_meta(master_meta, digest, master)
     mux_audio_copy_video(master, paths.production_mix_wav(), dest)
     return dest
+
+
+def bind_existing_soundtrack_assets(
+    paths: ProjectPaths, sound_plan: SoundPlan, library: SoundLibrary
+) -> dict[str, Path]:
+    assets: dict[str, Path] = {}
+    soundtrack = paths.soundtrack_dir()
+    for section in sound_plan.music_sections:
+        wav = soundtrack / f"{section.music_section_id}.wav"
+        if wav.is_file():
+            assets[section.music_section_id] = wav
+            for cue in sound_plan.cues:
+                if cue.sound_need_id == section.music_section_id:
+                    cue.asset_id = section.music_section_id
+                    cue.status = "ready"
+                    cue.generated_or_reused = "reused"
+            continue
+        existing = library.get(section.library_asset_id) if section.library_asset_id else None
+        if existing and existing.local_path and Path(existing.local_path).is_file():
+            path = Path(existing.local_path)
+            assets[section.music_section_id] = path
+            assets[existing.asset_id] = path
+    for cue in sound_plan.cues:
+        if cue.type in {"silence", "music"}:
+            continue
+        found: Path | None = None
+        for name in (cue.cue_id, cue.sound_need_id, cue.asset_id):
+            if not name:
+                continue
+            candidate = soundtrack / f"{name}.wav"
+            if candidate.is_file():
+                found = candidate
+                break
+        if found is None and cue.generated_or_reused == "veo_candidate" and cue.asset_id:
+            veo = paths.veo_candidate_wav(cue.asset_id)
+            if veo.is_file():
+                found = veo
+        if found is None:
+            kind = (
+                "ambience"
+                if cue.type == "ambience"
+                else "sting"
+                if cue.type == "transition_sting"
+                else "metal"
+            )
+            dest = soundtrack / f"{cue.cue_id}.wav"
+            synthesize_generic(kind, dest, duration=max(0.3, cue.end - cue.start))
+            found = dest
+        cue.asset_id = cue.asset_id or cue.sound_need_id or cue.cue_id
+        cue.status = "ready"
+        assets[cue.cue_id] = found
+        assets[cue.sound_need_id] = found
+        assets[cue.asset_id] = found
+    return assets
+
+
+def remix_episode_audio(paths: ProjectPaths, *, dest: Path | None = None) -> Path:
+    """Rebuild mix + mux from local assets. Never calls paid APIs."""
+    sound_plan = load_model(paths.sound_plan_json(), SoundPlan)
+    timeline = load_model(paths.runtime_timeline_json(), RuntimeTimeline)
+    library = SoundLibrary(paths.episode_sound_library_json())
+    for cue in sound_plan.cues:
+        if cue.type == "music":
+            cue.gain_db = MUSIC_DUCK_DB
+    assets = bind_existing_soundtrack_assets(paths, sound_plan, library)
+    mix_soundtrack(
+        narration=paths.narration_master_wav(),
+        plan=sound_plan,
+        assets=assets,
+        dest=paths.production_mix_wav(),
+        timeline=timeline,
+    )
+    master = paths.production_dir() / "visual_master_v1.mp4"
+    if not master.is_file():
+        raise FileNotFoundError("visual_master_v1.mp4 is required for audio remix")
+    output = dest or paths.production_v2_mp4()
+    mux_audio_copy_video(master, paths.production_mix_wav(), output)
+    save_model(paths.sound_plan_json(), sound_plan)
+    return output
 
 
 def _encode_visual_master(

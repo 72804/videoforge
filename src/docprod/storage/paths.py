@@ -465,6 +465,9 @@ class ProjectPaths:
     def production_v1_mp4(self) -> Path:
         return self.production_dir() / "documentary_production_v1.mp4"
 
+    def production_v2_mp4(self) -> Path:
+        return self.production_dir() / "documentary_production_v2.mp4"
+
     def production_mix_wav(self) -> Path:
         return self.artifacts_dir / "audio" / "mix" / "production_mix.wav"
 

@@ -49,6 +49,7 @@ class SoundLibrary:
         matcher: str = "metadata",
         embeddings: dict[str, list[float]] | None = None,
         query_vector: list[float] | None = None,
+        exclude_ids: set[str] | None = None,
     ) -> SoundAsset | None:
         category = {
             "music": "MUSIC_BED",
@@ -58,15 +59,20 @@ class SoundLibrary:
         }.get(need.type)
         if category is None:
             return None
+        skip = exclude_ids or set()
         candidates = [
             asset
             for asset in self.assets.values()
             if asset.reuse_allowed
             and asset.category == category
             and asset.reuse_class != "episode_specific"
+            and asset.asset_id not in skip
         ]
         if not candidates:
             return None
+        exact = [asset for asset in candidates if asset.asset_id == need.sound_need_id]
+        if exact:
+            return exact[0]
         if matcher == "gemini_embedding_2" and len(self.assets) < 50:
             matcher = "metadata"
         if matcher == "gemini_embedding_2" and embeddings and query_vector:

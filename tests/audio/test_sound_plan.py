@@ -140,6 +140,53 @@ def test_library_reuse_before_generation(tmp_path: Path) -> None:
     assert empty.match(need) is None
 
 
+def test_music_match_prefers_section_id_and_excludes_used_beds(tmp_path: Path) -> None:
+    lib = SoundLibrary(tmp_path / "library.json")
+    lib.add(
+        SoundAsset(
+            asset_id="music_00",
+            category="MUSIC_BED",
+            source_type="generated",
+            moods=["investigative"],
+            reuse_allowed=True,
+            reuse_class="channel_reusable",
+        )
+    )
+    lib.add(
+        SoundAsset(
+            asset_id="music_04",
+            category="MUSIC_BED",
+            source_type="generated",
+            moods=["investigative"],
+            reuse_allowed=True,
+            reuse_class="channel_reusable",
+        )
+    )
+    first = lib.match(
+        SoundNeed(
+            sound_need_id="music_00",
+            start=0,
+            end=10,
+            type="music",
+            story_reason="a",
+            mood="investigative",
+        )
+    )
+    second = lib.match(
+        SoundNeed(
+            sound_need_id="music_04",
+            start=20,
+            end=40,
+            type="music",
+            story_reason="b",
+            mood="investigative",
+        ),
+        exclude_ids={first.asset_id} if first else set(),
+    )
+    assert first is not None and first.asset_id == "music_00"
+    assert second is not None and second.asset_id == "music_04"
+
+
 def test_embedding_cache_optional(tmp_path: Path) -> None:
     lib = SoundLibrary(tmp_path / "library.json")
     lib.add(

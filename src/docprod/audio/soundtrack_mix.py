@@ -4,7 +4,7 @@ from pathlib import Path
 
 from docprod.audio.models import RuntimeTimeline
 from docprod.audio.sound_models import SoundPlan
-from docprod.providers.pricing import MUSIC_DUCK_DB, TARGET_LUFS, TRUE_PEAK_DBTP
+from docprod.providers.pricing import MUSIC_GAP_LIFT_DB, TARGET_LUFS, TRUE_PEAK_DBTP
 from docprod.render.ffmpeg import run_ffmpeg
 
 
@@ -60,8 +60,6 @@ def mix_soundtrack(
     filters: list[str] = []
     mix_labels = ["[0:a]"]
     index = 1
-    duck = 10 ** (MUSIC_DUCK_DB / 20)
-    rise = 10 ** ((MUSIC_DUCK_DB + 6) / 20)
     speech_windows = [(item.start, item.end) for item in timeline.scenes if item.narration.strip()]
     for cue in plan.cues:
         if cue.type == "silence":
@@ -69,15 +67,19 @@ def mix_soundtrack(
         source = assets.get(cue.asset_id) or assets.get(cue.sound_need_id)
         if source is None or not source.is_file():
             continue
-        inputs.extend(["-i", str(source)])
+        if cue.type == "music":
+            inputs.extend(["-stream_loop", "-1", "-i", str(source)])
+        else:
+            inputs.extend(["-i", str(source)])
         duration = max(0.05, cue.end - cue.start)
         delay_ms = int(round(cue.start * 1000))
-        vol = 10 ** (cue.gain_db / 20)
+        ducked = 10 ** (cue.gain_db / 20)
         if cue.duck_under_voice and cue.type == "music":
-            vol_expr = _duck_expr(speech_windows, duck * vol, rise * vol)
+            open_level = 10 ** ((cue.gain_db + MUSIC_GAP_LIFT_DB) / 20)
+            vol_expr = duck_volume_expr(speech_windows, ducked=ducked, open_level=open_level)
             volume = f"volume='{vol_expr}':eval=frame"
         else:
-            volume = f"volume={vol:.5f}"
+            volume = f"volume={ducked:.5f}"
         fade = (
             f"afade=t=in:st=0:d={cue.fade_in},afade=t=out:st={max(0.0, duration - cue.fade_out)}:"
             f"d={cue.fade_out}"
@@ -135,15 +137,12 @@ def mix_soundtrack(
     return measure_loudnorm(dest)
 
 
-def _duck_expr(windows: list[tuple[float, float]], duck: float, rise: float) -> str:
+def duck_volume_expr(
+    windows: list[tuple[float, float]], *, ducked: float, open_level: float
+) -> str:
+    """Under speech use `ducked`; otherwise `open_level`. Never default to 0."""
     if not windows:
-        return str(duck)
-    parts: list[str] = []
-    cursor = 0.0
-    for start, end in windows:
-        if start - cursor >= 0.7:
-            parts.append(f"between(t,{cursor:.3f},{start:.3f})*{rise:.5f}")
-        parts.append(f"between(t,{start:.3f},{end:.3f})*{duck:.5f}")
-        cursor = end
-    parts.append(f"gte(t,{cursor:.3f})*{rise:.5f}")
-    return "+".join(parts)
+        return f"{open_level:.5f}"
+    speech = "+".join(f"between(t,{start:.3f},{end:.3f})" for start, end in windows)
+    delta = ducked - open_level
+    return f"{open_level:.5f}+min(1,{speech})*{delta:.5f}"

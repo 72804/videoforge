@@ -12,7 +12,7 @@ from docprod.audio.sound_models import (
     TimeSpan,
 )
 from docprod.models.scene import ScenePlan
-from docprod.providers.pricing import MUSIC_HARD_MAX
+from docprod.providers.pricing import MUSIC_DUCK_DB, MUSIC_HARD_MAX
 from docprod.writing.models import NarrationScript
 
 
@@ -48,7 +48,12 @@ def build_sound_plan(
             (item for item in needs if item.sound_need_id == section.music_section_id),
             None,
         )
-        match = lib.match(need, matcher=matcher) if need and need.reuse_allowed else None
+        exclude = set(reused)
+        match = (
+            lib.match(need, matcher=matcher, exclude_ids=exclude)
+            if need and need.reuse_allowed
+            else None
+        )
         if match is not None:
             section.library_asset_id = match.asset_id
             section.generation_required = False
@@ -73,7 +78,7 @@ def build_sound_plan(
                 asset_id=asset_id,
                 source_type="MUSIC_BED",
                 generated_or_reused=generated_or_reused,
-                gain_db=-22.0,
+                gain_db=MUSIC_DUCK_DB,
                 fade_in=1.6,
                 fade_out=2.0,
                 duck_under_voice=True,

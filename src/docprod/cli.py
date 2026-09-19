@@ -2032,11 +2032,20 @@ def produce_episode_cmd(
     dry_run: bool = typer.Option(False, "--dry-run"),
     confirm_paid: bool = typer.Option(False, "--confirm-paid"),
     force_regenerate_paid: bool = typer.Option(False, "--force-regenerate-paid"),
+    remix_audio: bool = typer.Option(
+        False,
+        "--remix-audio",
+        help="Rebuild mix + mux from cached local assets. No paid APIs.",
+    ),
 ) -> None:
     """Selective Veo motion + script-aware soundtrack + production_v1."""
-    from docprod.pipeline.produce_episode import produce_episode
+    from docprod.pipeline.produce_episode import produce_episode, remix_episode_audio
 
     project_dir, project = _load_project(project_id)
+    if remix_audio:
+        dest = remix_episode_audio(project_dir)
+        console.print(f"remix_audio=true paid_calls=0 production={dest}")
+        return
     try:
         report = produce_episode(
             project_dir,
