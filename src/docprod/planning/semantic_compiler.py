@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-from docprod.audio.script import tokenize_display
+from docprod.audio.script import slice_punctuated_words, tokenize_display
 from docprod.exceptions import SemanticPlannerError
 from docprod.models.enums import AssetStrategy, Mood, TransitionType, VisualEffect
 from docprod.models.scene import GenerationSpec, Scene, ScenePlan
@@ -59,8 +59,8 @@ def compile_semantic_plan(
     if not words:
         raise SemanticPlannerError("Script has no words to plan")
     repaired = _repair_spans(intent_set.intents, len(words))
-    drafts = _split_and_time(repaired, words, words_per_minute)
-    drafts = _merge_short(drafts, words, words_per_minute)
+    drafts = _split_and_time(repaired, words, words_per_minute, script.full_narration)
+    drafts = _merge_short(drafts, words, words_per_minute, script.full_narration)
     if not drafts:
         raise SemanticPlannerError("Compiler produced no scenes")
     _validate_word_coverage(drafts, len(words))
@@ -103,6 +103,7 @@ def _split_and_time(
     intents: list[SemanticSceneIntent],
     words: list[str],
     wpm: float,
+    full_narration: str,
 ) -> list[_Draft]:
     drafts: list[_Draft] = []
     for intent in intents:
@@ -129,7 +130,7 @@ def _split_and_time(
                 if 0 < leftover < min_keep:
                     take = remaining // 2
             chunk_end = cursor + take
-            narration = " ".join(words[cursor:chunk_end])
+            narration = slice_punctuated_words(full_narration, cursor, chunk_end)
             duration = round(take / wpm * 60.0, 4)
             strategy = map_strategy(intent)
             drafts.append(
@@ -148,7 +149,9 @@ def _split_and_time(
     return drafts
 
 
-def _merge_short(drafts: list[_Draft], words: list[str], wpm: float) -> list[_Draft]:
+def _merge_short(
+    drafts: list[_Draft], words: list[str], wpm: float, full_narration: str
+) -> list[_Draft]:
     if not drafts:
         return drafts
     merged: list[_Draft] = []
@@ -161,7 +164,7 @@ def _merge_short(drafts: list[_Draft], words: list[str], wpm: float) -> list[_Dr
         ):
             prev = merged[-1]
             end = draft.end_word
-            narration = " ".join(words[prev.start_word : end])
+            narration = slice_punctuated_words(full_narration, prev.start_word, end)
             duration = round((end - prev.start_word) / wpm * 60.0, 4)
             merged[-1] = replace(prev, end_word=end, narration=narration, duration=duration)
         else:

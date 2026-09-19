@@ -432,6 +432,48 @@ class ProjectPaths:
     def sound_design_plan_md(self) -> Path:
         return self.review_dir / "sound_design_plan.md"
 
+    def sound_plan_json(self) -> Path:
+        return self.stages_dir / "08_sound_plan.json"
+
+    def sound_plan_review_md(self) -> Path:
+        return self.review_dir / "sound_plan_v1.md"
+
+    def sonic_profile_json(self) -> Path:
+        return self.stages_dir / "sonic_profile.json"
+
+    def veo_raw_dir(self) -> Path:
+        return self.artifacts_dir / "video" / "veo_raw"
+
+    def veo_visual_dir(self) -> Path:
+        return self.visuals_dir / "ai_video"
+
+    def veo_visual_path(self, asset_unit_id: str) -> Path:
+        return self.veo_visual_dir() / f"{asset_unit_id}.mp4"
+
+    def veo_visual_meta(self, asset_unit_id: str) -> Path:
+        return self.veo_visual_dir() / f"{asset_unit_id}.meta.json"
+
+    def veo_candidate_dir(self) -> Path:
+        return self.artifacts_dir / "audio" / "veo_candidates"
+
+    def veo_candidate_wav(self, asset_unit_id: str) -> Path:
+        return self.veo_candidate_dir() / f"{asset_unit_id}.wav"
+
+    def production_dir(self) -> Path:
+        return self.artifacts_dir / "render" / "final"
+
+    def production_v1_mp4(self) -> Path:
+        return self.production_dir() / "documentary_production_v1.mp4"
+
+    def production_mix_wav(self) -> Path:
+        return self.artifacts_dir / "audio" / "mix" / "production_mix.wav"
+
+    def soundtrack_dir(self) -> Path:
+        return self.artifacts_dir / "audio" / "soundtrack"
+
+    def episode_sound_library_json(self) -> Path:
+        return self.artifacts_dir / "audio" / "library" / "library.json"
+
     def next_phase_cost_preview_json(self) -> Path:
         return self.review_dir / "next_phase_cost_preview.json"
 

@@ -256,8 +256,28 @@ def resolve_photo_sequence(paths: ProjectPaths, scene: Scene) -> VisualSource | 
     )
 
 
+def resolve_ai_video_clip(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
+    unit = str(scene.metadata.get("asset_unit_id") or "")
+    if not unit:
+        return None
+    if str(scene.metadata.get("runtime_preview_strategy") or "") == "ai_keyframe_preview":
+        return None
+    clip = paths.veo_visual_path(unit)
+    if not clip.is_file():
+        return None
+    return VisualSource(
+        path=clip,
+        sha256=file_sha256(clip),
+        kind="ai_video",
+        strategy_rendered="ai_image_to_video",
+    )
+
+
 def resolve_scene_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
     """Prefer motion footage, then stills, then local graphics."""
+    motion = resolve_ai_video_clip(paths, scene)
+    if motion is not None:
+        return motion
     sequence = resolve_photo_sequence(paths, scene)
     if sequence is not None and len(sequence.sequence) >= 2:
         # Multi-still on a single scene uses the full sequence; otherwise pick indexed still.

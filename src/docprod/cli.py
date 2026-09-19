@@ -127,6 +127,16 @@ def doctor() -> None:
         "PEXELS_API_KEY_configured",
         str(settings.pexels_key_configured()).lower(),
     )
+    table.add_row(
+        "GEMINI_API_KEY_configured",
+        str(settings.gemini_key_configured()).lower(),
+    )
+    table.add_row("VIDEO_PROVIDER", settings.video_provider)
+    table.add_row("VIDEO_MODEL", settings.video_model)
+    table.add_row("MUSIC_PROVIDER", settings.music_provider)
+    table.add_row("MUSIC_MODEL", settings.music_model)
+    table.add_row("SOUND_LIBRARY_MATCHER", settings.sound_library_matcher)
+    table.add_row("ENABLE_LYRIA_REALTIME", str(settings.enable_lyria_realtime).lower())
     table.add_row("OPENAI_IMAGE_MODEL", settings.openai_image_model)
     table.add_row("OPENAI_TTS_MODEL", settings.openai_tts_model)
     table.add_row("OPENAI_TTS_VOICE", settings.openai_tts_voice)
@@ -2014,6 +2024,58 @@ def plan_sound_design_cmd(project_id: str = typer.Argument(...)) -> None:
     project_dir, _project = _load_project(project_id)
     audit_episode(project_dir, paid_calls=0)
     console.print(str(project_dir.sound_design_plan_md()))
+
+
+@app.command("produce-episode")
+def produce_episode_cmd(
+    project_id: str = typer.Argument(...),
+    dry_run: bool = typer.Option(False, "--dry-run"),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Selective Veo motion + script-aware soundtrack + production_v1."""
+    from docprod.pipeline.produce_episode import produce_episode
+
+    project_dir, project = _load_project(project_id)
+    try:
+        report = produce_episode(
+            project_dir,
+            project,
+            dry_run=dry_run,
+            confirm_paid=confirm_paid,
+        )
+    except (
+        PaidApiDisabledError,
+        PaidApiNotConfirmedError,
+        MissingApiKeyError,
+        MaxPaidRequestsExceededError,
+        ZeroPlaceholderError,
+        FileNotFoundError,
+        RuntimeError,
+    ) as exc:
+        _fail(str(exc))
+    console.print(f"dry_run={str(report.dry_run).lower()}")
+    console.print(f"video_model={report.video_model}")
+    console.print(f"video_units={','.join(report.video_units)}")
+    console.print(f"video_seconds={report.video_seconds}")
+    console.print(f"video_cost_usd={report.video_cost_usd}")
+    console.print(f"music_sections={report.music_sections}")
+    console.print(f"music_generation_count={report.music_generation_count}")
+    console.print(f"music_cost_usd={report.music_cost_usd}")
+    console.print(f"ambience_cues={report.ambience_cues}")
+    console.print(f"event_sfx={report.event_sfx}")
+    console.print(f"transition_stings={report.transition_stings}")
+    console.print(f"silence_spans={report.silence_spans}")
+    console.print(f"sound_cues={report.sound_cues}")
+    console.print(f"realtime={str(report.realtime_enabled).lower()}")
+    console.print(f"matcher={report.embedding_matcher}")
+    console.print(f"semantic_qc={str(report.semantic_qc).lower()}")
+    console.print(f"estimated_total_usd={report.estimated_total_usd}")
+    console.print(f"actual_spend_usd={report.actual_spend_usd}")
+    console.print(f"stopped={str(report.stopped).lower()}")
+    if report.production_path:
+        console.print(f"production={report.production_path}")
+    for note in report.notes:
+        console.print(note)
 
 
 @app.command("audit-motion")

@@ -60,7 +60,7 @@ Deferred:
 - per-project overrides UI
 - per-scene overrides
 
-Phase 8 exposes **config defaults only** (`RESEARCH_MODEL`, `DOSSIER_MODEL`, `WRITER_MODEL`, and existing image/TTS settings). There is no chooser UI.
+Phase 8 exposes **config defaults only** (`RESEARCH_MODEL`, `DOSSIER_MODEL`, `WRITER_MODEL`, `VIDEO_MODEL`, `MUSIC_MODEL`, and existing image/TTS settings). There is no chooser UI. Google media adapters remain provider-neutral config, not a UI picker.
 
 ### 4. Versioning / manual override safety
 

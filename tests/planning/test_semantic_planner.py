@@ -304,3 +304,39 @@ def test_planner_demo_profile_untouched() -> None:
     profile = get_profile("documentary_v1")
     assert profile.max_ai_video_fraction == DOCUMENTARY_V1.max_ai_video_fraction
     assert get_profile("documentary_v1").name == "documentary_v1"
+
+
+def test_punctuation_survives_compile_into_scene_narration() -> None:
+    text = "Quebec'te bir depo. Envanter, rapor; 'şurup' kayıptı."
+    words = tokenize_display(text)
+    script = NarrationScript(
+        project_id="maple_heist_canary",
+        language="tr",
+        outline=StoryOutline(),
+        beats=[
+            NarrationBeat(
+                beat_id="B001",
+                narration=text,
+                claim_ids=["F001"],
+                source_ids=["S001"],
+                chapter="HOOK",
+            )
+        ],
+        full_narration=text,
+        word_count=len(words),
+    )
+    intent = _intent(narration_end_word=len(words), narration_span=text)
+    plan, _diag = compile_semantic_plan(
+        SemanticIntentSet(project_id=script.project_id, intents=[intent]),
+        script=script,
+        dossier=_dossier(),
+    )
+    joined = " ".join(scene.narration for scene in plan.scenes)
+    assert "." in joined
+    assert "," in joined
+    assert ";" in joined
+    assert "'" in joined
+    from docprod.audio.script import build_canonical_script, tts_input_text
+
+    tts = tts_input_text(build_canonical_script(plan))
+    assert "." in tts and "," in tts and ";" in tts

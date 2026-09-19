@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     writer_model: str = Field(default="gpt-5.6-terra")
     scene_planner_model: str = Field(default="gpt-5.6-luna")
     research_max_tool_calls: int = Field(default=8)
+    gemini_api_key: SecretStr | None = Field(default=None)
+    video_provider: str = Field(default="google")
+    video_model: str = Field(default="veo-3.1-lite-generate-preview")
+    music_provider: str = Field(default="google")
+    music_model: str = Field(default="lyria-3.5")
+    music_preview_model: str = Field(default="lyria-3-clip-preview")
+    adaptive_music_model: str = Field(default="lyria-realtime-exp")
+    audio_embedding_model: str = Field(default="gemini-embedding-2")
+    sound_library_matcher: str = Field(default="metadata")
+    enable_lyria_realtime: bool = Field(default=False)
+    enable_semantic_audio_qc: bool = Field(default=False)
+    phase11_max_usd: float = Field(default=2.0)
 
     def openai_key_configured(self) -> bool:
         secret = self.openai_api_key
@@ -46,6 +58,12 @@ class Settings(BaseSettings):
 
     def pexels_key_configured(self) -> bool:
         secret = self.pexels_api_key
+        if secret is None:
+            return False
+        return bool(secret.get_secret_value().strip())
+
+    def gemini_key_configured(self) -> bool:
+        secret = self.gemini_api_key
         if secret is None:
             return False
         return bool(secret.get_secret_value().strip())
@@ -101,3 +119,12 @@ def require_openai_api_key(settings: Settings | None = None) -> str:
             "OPENAI_API_KEY is not set. Add it to .env (never commit the file)."
         )
     return cfg.openai_api_key.get_secret_value()  # type: ignore[union-attr]
+
+
+def require_gemini_api_key(settings: Settings | None = None) -> str:
+    cfg = settings if settings is not None else get_settings()
+    if not cfg.gemini_key_configured():
+        raise MissingApiKeyError(
+            "GEMINI_API_KEY is not set. Add it to .env (never commit the file)."
+        )
+    return cfg.gemini_api_key.get_secret_value()  # type: ignore[union-attr]

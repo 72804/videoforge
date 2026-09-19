@@ -24,7 +24,7 @@ from docprod.audio.models import (
     RuntimeTimeline,
     WhisperWord,
 )
-from docprod.audio.script import build_canonical_script, tokenize_display
+from docprod.audio.script import build_canonical_script, tokenize_display, tts_input_text
 from docprod.audio.timeline import apply_runtime_timeline, build_runtime_timeline
 from docprod.config import Settings, get_settings
 from docprod.models.project import Project
@@ -80,7 +80,7 @@ class NarrationResult:
 
 def persist_canonical_script(paths: ProjectPaths, script: CanonicalNarrationScript) -> None:
     paths.narration_dir.mkdir(parents=True, exist_ok=True)
-    atomic_write_text(paths.narration_script_txt(), script.text + "\n")
+    atomic_write_text(paths.narration_script_txt(), tts_input_text(script) + "\n")
     save_model(paths.narration_script_spans(), script)
 
 

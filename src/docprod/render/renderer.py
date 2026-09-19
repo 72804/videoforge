@@ -129,7 +129,7 @@ def _render_one_segment(
     visual = resolve_scene_visual(paths, scene)
     effect = scene.effect
     effect_override_reason = None
-    if visual is not None and visual.kind == "stock_video":
+    if visual is not None and visual.kind in {"stock_video", "ai_video"}:
         effect = VisualEffect.none
         effect_override_reason = "native_video_motion"
     params = effect_params(
@@ -249,7 +249,7 @@ def _render_one_segment(
                 and visual.map_mask.is_file()
                 and visual.map_ring.is_file()
             )
-            if visual.kind == "stock_video":
+            if visual.kind in {"stock_video", "ai_video"}:
                 try:
                     probe = probe_media(visual.path)
                     src_w = probe.width or canvas_w

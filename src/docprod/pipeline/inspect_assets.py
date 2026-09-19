@@ -16,6 +16,7 @@ KIND_LABELS = {
     "local_graphic": "local_graphic",
     "local_map": "local_map_animation",
     "archive_still": "archive_image",
+    "ai_video": "google_veo",
 }
 
 
@@ -38,6 +39,8 @@ def _provider_for(paths: ProjectPaths, scene: Scene, kind: str) -> str:
     if kind != "stock_video":
         if kind == "generated_still":
             return "openai"
+        if kind == "ai_video":
+            return "google"
         if kind in {"local_graphic", "local_map"}:
             return "local"
         return ""

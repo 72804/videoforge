@@ -13,8 +13,9 @@ dependencies = [
     "pillow>=12.3.0",
 ]
 
-[project.scripts]
-docprod = "docprod.cli:app"
+[project.optional-dependencies]
+google = ["google-genai>=1.0.0"]
+
 
 [build-system]
 requires = ["hatchling"]

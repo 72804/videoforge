@@ -14,6 +14,7 @@ def isolate_settings(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALLOW_PAID_APIS", "false")
     monkeypatch.setenv("OPENAI_API_KEY", "")
     monkeypatch.setenv("PEXELS_API_KEY", "")
+    monkeypatch.setenv("GEMINI_API_KEY", "")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()

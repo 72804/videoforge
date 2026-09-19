@@ -42,6 +42,32 @@ def tokenize_display(text: str) -> list[str]:
     return _WORD_RE.findall(text)
 
 
+def word_spans(text: str) -> list[tuple[int, int]]:
+    return [(match.start(), match.end()) for match in _WORD_RE.finditer(text)]
+
+
+def slice_punctuated_words(text: str, start_word: int, end_word: int) -> str:
+    """Slice original narration so commas/periods/semicolons/apostrophes survive.
+
+    Word indices match tokenize_display. Trailing punctuation after the last
+    included word is kept until the next word (or end of text).
+    """
+    spans = word_spans(text)
+    if start_word < 0 or end_word > len(spans) or start_word >= end_word:
+        raise ValueError("Invalid narration word slice")
+    start = spans[start_word][0]
+    if end_word < len(spans):
+        stop = spans[end_word][0]
+    else:
+        stop = len(text)
+    return normalize_whitespace(text[start:stop])
+
+
+def tts_input_text(script: CanonicalNarrationScript) -> str:
+    """Text sent to TTS. Punctuation is preserved; do not strip here."""
+    return script.text
+
+
 def build_canonical_script(plan: ScenePlan) -> CanonicalNarrationScript:
     spans: list[SceneNarrationSpan] = []
     pieces: list[str] = []
