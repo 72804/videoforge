@@ -80,6 +80,20 @@ def test_low_alignment_blocks() -> None:
     assert report.match_fraction < 0.95
 
 
+def test_leading_interpolation() -> None:
+    plan = _plan("Merhaba dünya bugün açık.")
+    whisper = _words(
+        [
+            ("dünya", 0.4, 0.6),
+            ("bugün", 0.6, 0.8),
+            ("açık", 0.8, 1.0),
+        ]
+    )
+    report = align_script_to_whisper(plan, whisper, language="tr", require_quality=False)
+    assert report.tokens[0].timing_source == "leading_interpolation"
+    assert report.tokens[0].start is not None
+
+
 def test_isolated_missing_word_interpolates() -> None:
     plan = _plan("Bir adam yürüdü.")
     whisper = _words([("Bir", 0.0, 0.2), ("yürüdü", 0.5, 0.8)])

@@ -11,6 +11,12 @@ DEFAULT_VOICE_INSTRUCTIONS = (
     "Maintain continuous storytelling flow and natural sentence rhythm."
 )
 
+TTS_CONTINUATION_INSTRUCTIONS = (
+    "This is a continuation of the same documentary narration. Maintain the same "
+    "voice character, pacing, energy, seriousness, and delivery as the preceding "
+    "section. Begin naturally, without sounding like a new introduction."
+)
+
 ALIGNMENT_MATCH_THRESHOLD = 0.95
 SCENE_END_TAIL = 0.30
 
@@ -92,6 +98,50 @@ class NarrationMasterMeta(BaseModel):
     generation_status: str = "success"
     tts_request_count: int = 1
     whisper_request_count: int = 0
+    chunk_count: int = 1
+    chunk_durations: list[float] = Field(default_factory=list)
+    join_silences: list[float] = Field(default_factory=list)
+    loudness_input: dict[str, str] | None = None
+
+
+class NarrationChunkSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    chunk_id: str
+    chunk_index: int
+    text: str
+    char_start: int
+    char_end: int
+    word_start: int
+    word_end: int
+    chapter_start: str = ""
+    chapter_end: str = ""
+    character_count: int
+    estimated_token_count: int
+    script_hash: str
+    boundary_type: str = "end"
+    instructions: str = ""
+
+
+class NarrationChunkManifest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "1.0"
+    project_id: str
+    canonical_character_count: int
+    canonical_word_count: int
+    chunk_count: int
+    canonical_script_hash: str
+    chunks: list[NarrationChunkSpec] = Field(default_factory=list)
+
+
+class ChunkAudioWindow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    word_start: int
+    word_end: int
+    audio_start: float
+    audio_end: float
 
 
 class RuntimeSceneTiming(BaseModel):

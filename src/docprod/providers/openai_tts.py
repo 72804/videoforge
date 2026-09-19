@@ -74,6 +74,7 @@ class OpenAITTSProvider:
         *,
         confirm_paid: bool,
         instructions: str = DEFAULT_VOICE_INSTRUCTIONS,
+        max_attempts: int = 1,
     ) -> tuple[bytes, dict[str, Any] | None]:
         require_paid_call_allowed("openai", confirm_paid=confirm_paid, settings=self.settings)
         require_openai_api_key(self.settings)
@@ -87,14 +88,27 @@ class OpenAITTSProvider:
             "speed": self.settings.openai_tts_speed,
         }
         last_error: BaseException | None = None
-        for attempt in range(2):
+        attempts = max(1, max_attempts)
+        for attempt in range(attempts):
             try:
                 self.request_count += 1
                 response = client.audio.speech.create(**kwargs)
-                return _audio_bytes(response), None
+                usage = None
+                raw_usage = getattr(response, "usage", None)
+                if isinstance(raw_usage, dict):
+                    usage = raw_usage
+                elif raw_usage is not None and hasattr(raw_usage, "model_dump"):
+                    dumped = raw_usage.model_dump()
+                    if isinstance(dumped, dict):
+                        usage = {
+                            str(k): v
+                            for k, v in dumped.items()
+                            if isinstance(v, (int, float, str))
+                        }
+                return _audio_bytes(response), usage
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                if attempt == 0 and _is_transient(exc):
+                if attempt + 1 < attempts and _is_transient(exc):
                     time.sleep(0.4)
                     continue
                 raise

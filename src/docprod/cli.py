@@ -23,6 +23,7 @@ from docprod.exceptions import (
     ScriptValidationError,
     SemanticPlannerError,
     StockProviderError,
+    TtsInputLimitError,
     UnsafeProjectIdError,
     ZeroPlaceholderError,
 )
@@ -1186,12 +1187,26 @@ def generate_narration_cmd(
     console.print(f"model={prepared.model}")
     console.print(f"voice={prepared.voice}")
     console.print(f"speed={prepared.speed}")
-    console.print(f"character_count={prepared.character_count}")
+    console.print(f"canonical_chars={prepared.character_count}")
+    console.print(f"canonical_words={prepared.word_count}")
+    console.print(f"chunk_count={prepared.chunk_manifest.chunk_count}")
+    for chunk in prepared.chunk_manifest.chunks:
+        console.print(
+            f"{chunk.chunk_id} chars={chunk.character_count} "
+            f"words={chunk.word_end - chunk.word_start} "
+            f"boundary={chunk.boundary_type} tokens~{chunk.estimated_token_count}"
+        )
+    console.print(f"tts_calls_expected={prepared.tts_requests}")
+    console.print(f"whisper_calls_expected={prepared.whisper_requests}")
+    console.print(f"image_calls_expected={prepared.image_requests}")
+    console.print(f"video_calls_expected={prepared.video_requests}")
+    if prepared.chunk_previews:
+        console.print(f"chunk1_tail={prepared.chunk_previews[0]}")
+    if len(prepared.chunk_previews) > 1:
+        console.print(f"chunk2_head={prepared.chunk_previews[1]}")
     console.print(f"output_path={prepared.output_wav}")
-    console.print(f"instructions={prepared.instructions}")
     console.print(f"script_path={project_dir.narration_script_txt()}")
     if dry_run:
-        console.print(prepared.script.text)
         return
     try:
         result = generate_narration(
@@ -1206,6 +1221,8 @@ def generate_narration_cmd(
         PaidApiNotConfirmedError,
         MissingApiKeyError,
         AlignmentQualityError,
+        TtsInputLimitError,
+        MaxPaidRequestsExceededError,
     ) as exc:
         _fail(str(exc))
     console.print(
@@ -1695,6 +1712,54 @@ def inspect_narration_cmd(
                 item.narration[:48],
             )
         console.print(scenes)
+
+
+@app.command("inspect-narration-chunks")
+def inspect_narration_chunks_cmd(project_id: str = typer.Argument(...)) -> None:
+    """Validate long-form TTS chunks and join metadata."""
+    from docprod.audio.chunks import validate_chunk_manifest
+    from docprod.audio.models import NarrationChunkManifest, NarrationMasterMeta
+    from docprod.audio.script import build_canonical_script
+    from docprod.render.ffmpeg import probe_media
+
+    project_dir, _project = _load_project(project_id)
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    script = build_canonical_script(plan)
+    if not project_dir.narration_chunk_manifest().is_file():
+        _fail("Missing chunk_manifest.json. Run generate-narration first.")
+    manifest = load_model(project_dir.narration_chunk_manifest(), NarrationChunkManifest)
+    try:
+        validate_chunk_manifest(manifest, script)
+    except Exception as exc:  # noqa: BLE001
+        _fail(str(exc))
+    table = Table(title=f"narration chunks {project_id}")
+    table.add_column("chunk")
+    table.add_column("chars")
+    table.add_column("words")
+    table.add_column("boundary")
+    table.add_column("duration")
+    table.add_column("model")
+    joins = []
+    if project_dir.narration_master_meta().is_file():
+        meta = load_model(project_dir.narration_master_meta(), NarrationMasterMeta)
+        joins = meta.join_silences
+    for item in manifest.chunks:
+        wav = project_dir.narration_chunk_wav(item.chunk_index)
+        duration = f"{probe_media(wav).duration:.3f}" if wav.is_file() else "-"
+        table.add_row(
+            item.chunk_id,
+            str(item.character_count),
+            str(item.word_end - item.word_start),
+            item.boundary_type,
+            duration,
+            "gpt-4o-mini-tts / cedar",
+        )
+    console.print(table)
+    console.print(f"join_silences={joins}")
+    console.print(
+        f"reconstructed_ok=true chunks={manifest.chunk_count} "
+        f"canonical_chars={manifest.canonical_character_count}"
+    )
 
 
 @app.command("audit-motion")

@@ -56,6 +56,35 @@ def measure_loudnorm(path: Path) -> dict[str, str]:
     return {str(key): str(value) for key, value in payload.items()}
 
 
+def apply_loudnorm_wav(source: Path, dest: Path) -> tuple[dict[str, str], dict[str, str]]:
+    """Single-pass loudness normalize after concatenation. Returns (input, output) stats."""
+    before = measure_loudnorm(source)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp.wav")
+    try:
+        run_ffmpeg(
+            [
+                "-i",
+                str(source),
+                "-af",
+                "loudnorm=I=-16:TP=-1.5:LRA=11",
+                "-ar",
+                "48000",
+                "-ac",
+                "1",
+                "-c:a",
+                "pcm_s16le",
+                str(tmp),
+            ],
+            timeout=180,
+        )
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    after = measure_loudnorm(dest)
+    return before, after
+
+
 def mix_narration_stereo(wav: Path, dest: Path) -> dict[str, str]:
     stats = measure_loudnorm(wav)
     dest.parent.mkdir(parents=True, exist_ok=True)

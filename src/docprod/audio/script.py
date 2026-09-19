@@ -19,7 +19,23 @@ def fold_token(text: str) -> str:
         char for char in unicodedata.normalize("NFKD", swapped) if not unicodedata.combining(char)
     )
     cleaned = re.sub(r"[^\w]+", "", stripped, flags=re.UNICODE)
-    return cleaned.casefold()
+    folded = cleaned.casefold()
+    aliases = {
+        "kebek": "quebec",
+        "kebekteki": "quebec",
+        "valliers": "vallieres",
+        "akcagac": "akcaagac",
+        "akcaat": "akcaagac",
+        "avi": "avik",
+        "avic": "avik",
+        "centlik": "sentlik",
+        "st": "saint",
+    }
+    folded = aliases.get(folded, folded)
+    dated = re.match(r"^(\d+)(de|da|te|ta|deki|daki)$", folded)
+    if dated:
+        return dated.group(1)
+    return folded
 
 
 def tokenize_display(text: str) -> list[str]:

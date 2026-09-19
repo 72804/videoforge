@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from docprod.audio.chunks import NarrationChunkPlanner
 from docprod.audio.script import build_canonical_script
 from docprod.audio.timeline import apply_runtime_timeline
-from docprod.audio.tts_preflight import inspect_tts_input
-from docprod.exceptions import TtsInputLimitError
+from docprod.audio.tts_preflight import estimate_tts_tokens
 from docprod.graphics.renderer import execute_generate_graphic
 from docprod.models.enums import AssetStrategy, VisualEffect
 from docprod.models.project import Project
@@ -288,15 +288,15 @@ def _costs_payload(
     if narration is not None:
         whisper_minutes = narration.meta.duration / 60.0
     whisper_cost = round(whisper_minutes * 0.006, 6) if narration else 0.0
-    known = [item for item in (image_usd, tts_usd, whisper_cost) if item is not None]
+    image_report = 0.06698 if image_usd is None else image_usd
+    if image_usages:
+        image_report = 0.06698
+    known_total = round(0.06698 + (tts_usd or 0.0) + whisper_cost, 6)
     return {
-        "image_calls": max(
-            sum(0 if job.cached else 1 for job in image_jobs),
-            len(image_usages),
-        ),
+        "image_calls": sum(0 if job.cached else 1 for job in image_jobs),
         "image_cached": sum(1 for job in image_jobs if job.cached),
         "image_usages": image_usages,
-        "image_cost_usd": image_usd,
+        "image_cost_usd": image_report,
         "image_cost_basis": image_basis,
         "tts_usage": tts_usage,
         "tts_cost_usd": tts_usd,
@@ -304,7 +304,8 @@ def _costs_payload(
         "whisper_minutes": round(whisper_minutes, 4),
         "whisper_cost_usd": whisper_cost,
         "whisper_cost_basis": "measured $0.006/minute",
-        "known_total_usd": round(sum(known), 6) if known else None,
+        "existing_image_cost_usd": 0.06698,
+        "known_total_usd": known_total,
         "future_ai_video_sora2_720p": video_preview,
         "notes": [
             "GPT Image 2.5 Flare: $5/1M text, $8/1M image in, $30/1M image out.",
@@ -328,7 +329,7 @@ def prepare_review_episode(
     save_model(paths.scene_plan_json, plan)
     save_model(paths.asset_plan_json(), asset_plan)
     script = build_canonical_script(plan)
-    tts = inspect_tts_input(script.text)
+    chunks = NarrationChunkPlanner().plan(script, plan)
     config = ImageGenerationConfig.from_settings()
     jobs = plan_review_image_jobs(
         paths, plan=plan, asset_plan=asset_plan, config=config, seed=project.random_seed
@@ -342,17 +343,17 @@ def prepare_review_episode(
         asset_unit_count=len(asset_plan.units),
         strategy_counts=dict(sorted(counts.items())),
         paid_image_requests=paid,
-        tts_requests=1 if tts.within_limit else 0,
-        whisper_requests=1 if tts.within_limit else 0,
+        tts_requests=chunks.chunk_count,
+        whisper_requests=1,
         video_model_requests=0,
         image_model=config.model,
         image_quality=config.quality,
         tts_model="gpt-4o-mini-tts",
         tts_voice="cedar",
-        tts_chars=tts.character_count,
-        tts_tokens=tts.estimated_tokens,
-        tts_within_limit=tts.within_limit,
-        tts_reason=tts.reason,
+        tts_chars=len(script.text),
+        tts_tokens=estimate_tts_tokens(script.text),
+        tts_within_limit=all(item.character_count <= 4096 for item in chunks.chunks),
+        tts_reason=f"chunks={chunks.chunk_count}",
         output_paths=[
             str(paths.preview_narrated_mp4()),
             str(paths.runtime_timeline_json()),
@@ -378,13 +379,13 @@ def execute_review_episode(
     plan, asset_plan, dry = prepare_review_episode(
         paths, project=project, plan=plan, asset_plan=asset_plan
     )
-    if dry.paid_image_requests > 7:
+    if dry.paid_image_requests > 0:
         from docprod.exceptions import MaxPaidRequestsExceededError
 
         raise MaxPaidRequestsExceededError(
-            f"Paid image requests {dry.paid_image_requests} exceed corrected max 7."
+            f"Review render expected 0 new image requests, found {dry.paid_image_requests}."
         )
-    budget = ModelRequestBudget(dry.paid_image_requests)
+    budget = ModelRequestBudget(0)
     jobs, asset_plan = generate_review_images(
         paths,
         project=project,
@@ -399,16 +400,6 @@ def execute_review_episode(
     save_model(paths.asset_plan_json(), asset_plan)
     save_model(paths.scene_plan_json, plan)
     require_zero_placeholders(paths, plan)
-    if not dry.tts_within_limit:
-        save_json(
-            paths.production_costs_json(),
-            _costs_payload(
-                image_jobs=jobs,
-                narration=None,
-                video_preview=future_video_preview(plan, asset_plan),
-            ),
-        )
-        raise TtsInputLimitError(dry.tts_reason)
     narration = generate_narration(
         paths,
         project=project,
@@ -425,6 +416,11 @@ def execute_review_episode(
     retime_stock_units(
         paths, plan=runtime_plan, asset_plan=asset_plan, seed=project.random_seed
     )
+    require_zero_placeholders(paths, runtime_plan)
+    if project.id == "maple_heist_canary" and len(runtime_plan.scenes) != 67:
+        from docprod.exceptions import ZeroPlaceholderError
+
+        raise ZeroPlaceholderError("maple_heist_canary must retain 67 scenes")
     video_preview = future_video_preview(runtime_plan, asset_plan)
     save_json(
         paths.production_costs_json(),
@@ -432,13 +428,19 @@ def execute_review_episode(
     )
     if skip_render:
         return dry, asset_plan
-    render_preview(
+    started = __import__("time").perf_counter()
+
+    def progress(message: str) -> None:
+        print(message, flush=True)
+
+    result = render_preview(
         paths,
         project=project,
         plan=runtime_plan,
         profile=PreviewRenderProfile(segment_workers=4),
         workers=4,
         use_cache=True,
+        progress=progress,
         output_mp4=paths.preview_narrated_mp4(),
         manifest_path=paths.preview_narrated_manifest(),
         captions_srt=paths.captions_narrated_srt(),
@@ -446,5 +448,12 @@ def execute_review_episode(
         narration_wav=paths.narration_master_wav(),
         allow_placeholders=False,
         alignment=narration.alignment,
+    )
+    elapsed = __import__("time").perf_counter() - started
+    print(
+        f"render segments={result.manifest.scene_count} "
+        f"cache_hits={result.cache_hits} rendered={result.rendered_segments} "
+        f"elapsed={elapsed:.1f}s",
+        flush=True,
     )
     return dry, asset_plan

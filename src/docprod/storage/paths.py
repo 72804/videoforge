@@ -252,6 +252,18 @@ class ProjectPaths:
     def narration_master_meta(self) -> Path:
         return self.narration_dir / "master.meta.json"
 
+    def narration_chunks_dir(self) -> Path:
+        return self.narration_dir / "chunks"
+
+    def narration_chunk_manifest(self) -> Path:
+        return self.narration_chunks_dir() / "chunk_manifest.json"
+
+    def narration_chunk_wav(self, index: int) -> Path:
+        return self.narration_chunks_dir() / f"chunk_{index:03d}.wav"
+
+    def narration_chunk_meta(self, index: int) -> Path:
+        return self.narration_chunks_dir() / f"chunk_{index:03d}.meta.json"
+
     def whisper_alignment_json(self) -> Path:
         return self.narration_dir / "whisper_alignment.json"
 
