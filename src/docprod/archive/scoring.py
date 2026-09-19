@@ -67,6 +67,9 @@ def score_archive_candidate(
     if "quebec" in intent and "quebec" in hay:
         score += 8
         reasons.append("place_match")
+    if "supreme court of canada" in hay or "cour suprême du canada" in hay:
+        score += 18
+        reasons.append("scc_match")
     if "acer" in hay or "botanical" in hay:
         if any(
             token in intent for token in ("warehouse", "depo", "barrel", "fıçı", "court", "mahkeme")

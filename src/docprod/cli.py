@@ -867,6 +867,63 @@ def replace_explainer_visuals_cmd(
     console.print(f"sheet {project_dir.visual_replacement_contact_sheet()}")
 
 
+@app.command("improve-visual-diversity")
+def improve_visual_diversity_cmd(
+    project_id: str = typer.Argument(...),
+    dry_run: bool = typer.Option(True, "--dry-run/--live"),
+    enable_pexels: bool = typer.Option(True, "--pexels/--no-pexels"),
+    enable_commons: bool = typer.Option(True, "--commons/--no-commons"),
+) -> None:
+    """Replace repetitive/mismatched visuals using free Pexels and Commons only."""
+    from docprod.pipeline.improve_visual_diversity import (
+        backup_plans,
+        execute_diversity,
+        plan_diversity_replacements,
+        render_visual_v3,
+        report_payload,
+        write_diversity_contact_sheet,
+        write_diversity_markdown,
+    )
+    from docprod.production import AssetPlan
+    from docprod.storage.json_store import save_json, save_model
+
+    project_dir, project = _load_project(project_id)
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    asset_plan = load_model(project_dir.asset_plan_json(), AssetPlan)
+    report = plan_diversity_replacements(project_dir, plan, asset_plan)
+    save_json(project_dir.visual_diversity_v3_plan_json(), report_payload(report))
+    write_diversity_markdown(project_dir, report)
+    console.print_json(data=report_payload(report))
+    if dry_run:
+        return
+    backup_plans(project_dir)
+    plan, asset_plan, report, stats = execute_diversity(
+        project_dir,
+        project=project,
+        plan=plan,
+        asset_plan=asset_plan,
+        report=report,
+        enable_pexels=enable_pexels,
+        enable_commons=enable_commons,
+    )
+    if stats.paid_api_calls != 0:
+        _fail("paid_api_calls must stay 0")
+    save_model(project_dir.scene_plan_json, plan)
+    save_model(project_dir.asset_plan_json(), asset_plan)
+    write_diversity_contact_sheet(project_dir, report)
+    write_diversity_markdown(project_dir, report)
+    cache_hits, rendered, elapsed = render_visual_v3(
+        project_dir, project=project, plan=plan, asset_plan=asset_plan
+    )
+    console.print(
+        f"paid_api_calls={stats.paid_api_calls} new_stock={stats.new_stock_downloads} "
+        f"new_archive={stats.new_archive_downloads} cache_hits={cache_hits} "
+        f"rendered={rendered} elapsed={elapsed:.1f}s"
+    )
+    console.print(f"preview {project_dir.preview_visual_v3_mp4()}")
+    console.print(f"sheet {project_dir.visual_diversity_v3_contact_sheet()}")
+
+
 @app.command("estimate-production-cost")
 def estimate_production_cost_cmd(project_id: str = typer.Argument(...)) -> None:
     """Print a zero-network cost preview from the production plan."""

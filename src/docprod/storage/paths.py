@@ -297,6 +297,21 @@ class ProjectPaths:
     def preview_visual_v2_manifest(self) -> Path:
         return self.preview_dir / "render_manifest_visual_v2.json"
 
+    def preview_visual_v3_mp4(self) -> Path:
+        return self.preview_dir / "documentary_preview_visual_v3.mp4"
+
+    def preview_visual_v3_manifest(self) -> Path:
+        return self.preview_dir / "render_manifest_visual_v3.json"
+
+    def visual_diversity_v3_contact_sheet(self) -> Path:
+        return self.review_dir / "visual_diversity_v3_contact_sheet.jpg"
+
+    def visual_diversity_v3_md(self) -> Path:
+        return self.review_dir / "visual_diversity_v3.md"
+
+    def visual_diversity_v3_plan_json(self) -> Path:
+        return self.review_dir / "visual_diversity_v3_plan.json"
+
     def visual_replacement_contact_sheet(self) -> Path:
         return self.review_dir / "visual_replacement_v2_contact_sheet.jpg"
 
