@@ -1,0 +1,125 @@
+{
+  "phase": "10F_before",
+  "generated_at": "2026-09-19T16:22:00+03:00",
+  "pricing_version": "2026-09-19",
+  "zero_paid_calls": true,
+  "project": "maple_heist_canary",
+  "full_project": {
+    "source_py_modules": {"value": 153, "bytes": 936199, "label": "MEASURED"},
+    "maple_files": {"value": 538, "bytes": 1018706200, "label": "MEASURED"},
+    "repo_cache_files": {"value": 1, "bytes": 0, "label": "MEASURED"},
+    "duplicate_groups": {"value": 34, "extra_bytes": 284412377, "label": "MEASURED"},
+    "visual_v3": {
+      "path": "projects/maple_heist_canary/artifacts/render/preview/documentary_preview_visual_v3.mp4",
+      "bytes": 64528124,
+      "duration_s": 430.866667,
+      "codec": "h264",
+      "pix_fmt": "yuv420p",
+      "size": "1280x720",
+      "scenes": 67,
+      "cache_hits": 43,
+      "cache_misses": 24,
+      "segment_workers_in_manifest": 4,
+      "label": "MEASURED"
+    }
+  },
+  "stage_table": [
+    {
+      "stage": "research/script/tts/whisper",
+      "current_runtime": "frozen; not rerun",
+      "current_paid_cost": 0.0,
+      "API_requests": 0,
+      "CPU_time": "n/a",
+      "I/O": "read-only",
+      "cacheability": "high",
+      "parallelizable": false,
+      "quality_sensitivity": "high",
+      "optimization_candidate": false,
+      "label": "REFERENCE"
+    },
+    {
+      "stage": "visual_v3 scene render",
+      "current_runtime": "unknown wall; 67 scenes, 43 hits / 24 miss last pass",
+      "current_paid_cost": 0.0,
+      "API_requests": 0,
+      "CPU_time": "dominant local",
+      "I/O": "high",
+      "cacheability": "high",
+      "parallelizable": true,
+      "quality_sensitivity": "high",
+      "optimization_candidate": false,
+      "label": "MEASURED_manifest"
+    },
+    {
+      "stage": "Phase11 Veo 2x8s",
+      "current_runtime": "serial ESTIMATED 2 * provider_latency (~2-6 min each)",
+      "current_paid_cost": 0.8,
+      "API_requests": 2,
+      "CPU_time": "low local",
+      "I/O": "download 2 clips",
+      "cacheability": "none_before",
+      "parallelizable": true,
+      "quality_sensitivity": "high",
+      "optimization_candidate": true,
+      "label": "REFERENCE_cost ESTIMATED_time"
+    },
+    {
+      "stage": "Phase11 Lyria 2 songs",
+      "current_runtime": "serial ESTIMATED",
+      "current_paid_cost": 0.16,
+      "API_requests": 2,
+      "CPU_time": "low",
+      "I/O": "audio write",
+      "cacheability": "none_before",
+      "parallelizable": "maybe",
+      "quality_sensitivity": "high",
+      "optimization_candidate": true,
+      "label": "REFERENCE_cost ESTIMATED_time"
+    },
+    {
+      "stage": "soundtrack mix + loudnorm",
+      "current_runtime": "ESTIMATED 5-20s; loudnorm narration MEASURED 4.599s first pass",
+      "current_paid_cost": 0.0,
+      "API_requests": 0,
+      "CPU_time": "medium",
+      "I/O": "wav",
+      "cacheability": "analysis_not_cached_before",
+      "parallelizable": false,
+      "quality_sensitivity": "high",
+      "optimization_candidate": true,
+      "label": "ESTIMATED/MEASURED"
+    },
+    {
+      "stage": "final mux",
+      "current_runtime": "MEASURED analog full reencode 8.896s for 430.87s 720p",
+      "current_paid_cost": 0.0,
+      "API_requests": 0,
+      "CPU_time": "encode",
+      "I/O": "64MB",
+      "cacheability": "n/a",
+      "parallelizable": false,
+      "quality_sensitivity": "high_if_reencoded",
+      "optimization_candidate": true,
+      "label": "MEASURED"
+    }
+  ],
+  "phase11_paid": {
+    "veo_usd": 0.8,
+    "lyria_usd": 0.16,
+    "total_usd": 0.96,
+    "identical_rerun_usd": 0.96,
+    "music_generations": 2,
+    "veo_seconds": 16,
+    "label": "REFERENCE"
+  },
+  "failed_request_risk": {
+    "before": "malformed Veo image type could reach network",
+    "locally_detectable_failures_stopped": 0,
+    "label": "REFERENCE"
+  },
+  "polling": {
+    "strategy": "unbounded ~1s implied / done-check tight loop",
+    "http_polls_per_900s_cap": 900,
+    "label": "ESTIMATED"
+  }
+}

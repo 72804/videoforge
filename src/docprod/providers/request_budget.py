@@ -31,3 +31,11 @@ class ModelRequestBudget:
         self.ensure_remaining(stage, n)
         self.used_requests += n
         self.stage_counts[stage] = self.stage_counts.get(stage, 0) + n
+
+    def release(self, stage: str, n: int = 1) -> None:
+        if n < 1:
+            raise ValueError("release count must be >= 1")
+        used = self.stage_counts.get(stage, 0)
+        drop = min(n, used, self.used_requests)
+        self.used_requests -= drop
+        self.stage_counts[stage] = used - drop

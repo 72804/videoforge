@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import subprocess
+import threading
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -163,6 +164,27 @@ def run_ffmpeg(args: list[str], *, timeout: int = 120) -> None:
 
 
 def probe_media(path: Path) -> ProbeInfo:
+    return _cached_probe_media(path)
+
+
+_PROBE_LOCK = threading.Lock()
+_PROBE_CACHE: dict[tuple[str, int, int], ProbeInfo] = {}
+
+
+def _cached_probe_media(path: Path) -> ProbeInfo:
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, int(stat.st_mtime_ns))
+    with _PROBE_LOCK:
+        hit = _PROBE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    info = _probe_media_uncached(path)
+    with _PROBE_LOCK:
+        _PROBE_CACHE[key] = info
+    return info
+
+
+def _probe_media_uncached(path: Path) -> ProbeInfo:
     completed = subprocess.run(
         [
             ffprobe_path(),

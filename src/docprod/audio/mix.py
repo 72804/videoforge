@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 
 from docprod.render.ffmpeg import FFmpegError, ffmpeg_path, run_ffmpeg
-from docprod.storage.hashing import file_sha256
+from docprod.storage.hashing import content_hash, file_sha256
 
 
 def normalize_master_wav(source: Path, dest: Path) -> None:
@@ -32,6 +32,18 @@ def normalize_master_wav(source: Path, dest: Path) -> None:
 
 
 def measure_loudnorm(path: Path) -> dict[str, str]:
+    cache_dir = path.parent / ".loudnorm_cache"
+    key = content_hash(
+        {"file": file_sha256(path), "filter": "loudnorm=I=-16:TP=-1.5:LRA=11:print_format=json"}
+    )
+    cache_path = cache_dir / f"{key}.json"
+    if cache_path.is_file():
+        try:
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            payload = None
+        if isinstance(payload, dict):
+            return {str(k): str(v) for k, v in payload.items()}
     command = [
         ffmpeg_path(),
         "-hide_banner",
@@ -53,7 +65,13 @@ def measure_loudnorm(path: Path) -> dict[str, str]:
         payload = json.loads(text[start : end + 1])
     except json.JSONDecodeError:
         return {}
-    return {str(key): str(value) for key, value in payload.items()}
+    result = {str(key): str(value) for key, value in payload.items()}
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(json.dumps(result), encoding="utf-8")
+    except OSError:
+        pass
+    return result
 
 
 def apply_loudnorm_wav(source: Path, dest: Path) -> tuple[dict[str, str], dict[str, str]]:

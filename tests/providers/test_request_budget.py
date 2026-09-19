@@ -40,6 +40,15 @@ def test_ensure_remaining_does_not_consume_successful_slots() -> None:
         budget.reserve("research")
 
 
+def test_release_returns_budget_slot() -> None:
+    budget = ModelRequestBudget(max_requests=1)
+    budget.reserve("veo")
+    budget.release("veo", 1)
+    assert budget.used_requests == 0
+    budget.reserve("veo")
+    assert budget.used_requests == 1
+
+
 def test_retry_consumes_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("docprod.research.openai_web._is_transient", lambda _exc: True)
     calls = {"n": 0}

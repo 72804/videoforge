@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
+from threading import Lock
 
 from docprod.audio.models import RuntimeTimeline
 from docprod.audio.music_prompt import lyria_prompt
@@ -34,7 +36,13 @@ from docprod.providers.pricing import (
 )
 from docprod.providers.request_budget import ModelRequestBudget
 from docprod.providers.video_base import VideoShotProvider, VideoShotRequest
-from docprod.render.ffmpeg import run_ffmpeg
+from docprod.render.ffmpeg import escape_filter_path, run_ffmpeg
+from docprod.render.mux import (
+    load_cached_master,
+    mux_audio_copy_video,
+    visual_master_hash,
+    write_master_meta,
+)
 from docprod.storage.hashing import file_sha256
 from docprod.storage.json_store import load_model, save_json, save_model
 from docprod.storage.paths import SCENE_PLAN_FILENAME, ProjectPaths
@@ -109,6 +117,9 @@ class Phase11Report:
     estimated_total_usd: float = 0.0
     actual_spend_usd: float = 0.0
     production_path: str = ""
+    reuse_hits: int = 0
+    generation_avoided: int = 0
+    estimated_cost_avoided_usd: float = 0.0
     notes: list[str] = field(default_factory=list)
     stopped: bool = False
 
@@ -123,6 +134,7 @@ def produce_episode(
     video_provider: VideoShotProvider | None = None,
     music_provider: MusicGenerationProvider | None = None,
     speech_detector=None,
+    force_regenerate_paid: bool = False,
 ) -> Phase11Report:
     cfg = settings or get_settings()
     plan = load_model(paths.stages_dir / SCENE_PLAN_FILENAME, ScenePlan)
@@ -138,13 +150,16 @@ def produce_episode(
     library = SoundLibrary(paths.episode_sound_library_json())
     profile = SonicProfile()
     save_model(paths.sonic_profile_json(), profile)
+    matcher = cfg.sound_library_matcher
+    if matcher == "gemini_embedding_2" and len(library.assets) < 50:
+        matcher = "metadata"
     sound_plan = build_sound_plan(
         project_id=project.id,
         timeline=timeline,
         scenes=plan,
         script=script,
         library=library,
-        matcher=cfg.sound_library_matcher,
+        matcher=matcher,
         profile=profile,
     )
     if sound_plan.generation_required_music > MUSIC_HARD_MAX:
@@ -170,7 +185,7 @@ def produce_episode(
         silence_spans=len(sound_plan.silence_spans),
         sound_cues=len(sound_plan.cues),
         realtime_enabled=bool(cfg.enable_lyria_realtime and realtime.is_available()),
-        embedding_matcher=cfg.sound_library_matcher,
+        embedding_matcher=matcher,
         semantic_qc=cfg.enable_semantic_audio_qc,
         estimated_total_usd=estimated,
         notes=[
@@ -190,52 +205,65 @@ def produce_episode(
         return report
     require_paid_call_allowed("google", confirm_paid=confirm_paid, settings=cfg)
     require_gemini_api_key(cfg)
+
     veo = video_provider or GoogleVeoProvider(settings=cfg)
     lyria = music_provider or GoogleLyriaProvider(settings=cfg)
     video_budget = ModelRequestBudget(VEO_HARD_REQUESTS)
     music_budget = ModelRequestBudget(MUSIC_HARD_MAX)
     accepted: list[str] = []
     rejected: list[str] = []
-    for unit_id in video_units:
-        video_budget.ensure_remaining("veo", 1)
+    budget_lock = Lock()
+    use_cache = not force_regenerate_paid
+    reuse_hits = 0
+
+    def _one_veo(unit_id: str) -> tuple[str, object, bool]:
         start_image = _existing_keyframe(paths, unit_id)
         motion, native, negative = SHOTS[unit_id]
-        result = veo.generate_shot(
-            VideoShotRequest(
-                prompt=motion,
-                negative_prompt=negative,
-                image_path=start_image,
-                native_audio_prompt=native,
-            ),
-            confirm_paid=confirm_paid,
+        request = VideoShotRequest(
+            prompt=motion,
+            negative_prompt=negative,
+            image_path=start_image,
+            native_audio_prompt=native,
         )
-        video_budget.reserve("veo", 1)
-        raw = paths.veo_raw_dir() / f"{unit_id}.mp4"
-        raw.parent.mkdir(parents=True, exist_ok=True)
-        raw.write_bytes(result.video_bytes)
-        wav = paths.veo_candidate_wav(unit_id)
-        extract_provider_audio(raw, wav)
-        timing = _unit_duration(timeline, unit_id)
-        visual = paths.veo_visual_path(unit_id)
-        mute_and_normalize_visual(raw, visual, duration=timing, generated_seconds=8.0)
-        qc = qc_sync_audio(wav, speech_detector=speech_detector)
-        meta = {
-            "asset_unit_id": unit_id,
-            "category": "GENERATED_SYNC_AUDIO",
-            "source_type": "generated",
-            "accepted": qc.accepted,
-            "reasons": qc.reasons,
-            "license_note": "generated/generic; not archival event audio",
-            "start_image": str(start_image),
-            "visual_sha256": file_sha256(visual),
-        }
-        save_json(paths.veo_visual_meta(unit_id), meta)
-        save_json(wav.with_suffix(".qc.json"), meta)
-        if qc.accepted:
-            accepted.append(unit_id)
-        else:
-            rejected.append(unit_id)
-        _stamp_high_value_strategy(plan, unit_id, paths)
+        result = veo.generate_shot(request, confirm_paid=confirm_paid, use_cache=use_cache)
+        cache_hit = (result.metadata or {}).get("cache_hit") == "true"
+        if not cache_hit:
+            with budget_lock:
+                video_budget.reserve("veo", 1)
+        return unit_id, result, cache_hit
+
+    with ThreadPoolExecutor(max_workers=min(2, len(video_units))) as pool:
+        futures = [pool.submit(_one_veo, unit_id) for unit_id in video_units]
+        for future in as_completed(futures):
+            unit_id, result, cache_hit = future.result()
+            if cache_hit:
+                reuse_hits += 1
+            raw = paths.veo_raw_dir() / f"{unit_id}.mp4"
+            raw.parent.mkdir(parents=True, exist_ok=True)
+            raw.write_bytes(result.video_bytes)
+            wav = paths.veo_candidate_wav(unit_id)
+            extract_provider_audio(raw, wav)
+            timing = _unit_duration(timeline, unit_id)
+            visual = paths.veo_visual_path(unit_id)
+            mute_and_normalize_visual(raw, visual, duration=timing, generated_seconds=8.0)
+            qc = qc_sync_audio(wav, speech_detector=speech_detector)
+            meta = {
+                "asset_unit_id": unit_id,
+                "category": "GENERATED_SYNC_AUDIO",
+                "source_type": "generated",
+                "accepted": qc.accepted,
+                "reasons": qc.reasons,
+                "license_note": "generated/generic; not archival event audio",
+                "start_image": str(_existing_keyframe(paths, unit_id)),
+                "visual_sha256": file_sha256(visual),
+            }
+            save_json(paths.veo_visual_meta(unit_id), meta)
+            save_json(wav.with_suffix(".qc.json"), meta)
+            if qc.accepted:
+                accepted.append(unit_id)
+            else:
+                rejected.append(unit_id)
+            _stamp_high_value_strategy(plan, unit_id, paths)
     report.veo_candidates_accepted = accepted
     report.veo_candidates_rejected = rejected
     veo_map = {unit: str(paths.veo_candidate_wav(unit)) for unit in accepted}
@@ -245,12 +273,12 @@ def produce_episode(
         scenes=plan,
         script=script,
         library=library,
-        matcher=cfg.sound_library_matcher,
+        matcher=matcher,
         veo_candidates=veo_map,
         profile=profile,
     )
     _fill_lyria_prompts(sound_plan, profile, paths, plan)
-    assets = _materialize_audio(
+    assets, audio_reuse = _materialize_audio(
         paths,
         sound_plan,
         library,
@@ -259,6 +287,7 @@ def produce_episode(
         confirm_paid=confirm_paid,
         project_id=project.id,
         veo_map=veo_map,
+        use_cache=use_cache,
     )
     save_model(paths.sound_plan_json(), sound_plan)
     review = render_sound_plan_markdown(sound_plan)
@@ -280,6 +309,12 @@ def produce_episode(
     )
     report.music_generation_count = music_budget.used_requests
     report.sound_cues = len(sound_plan.cues)
+    report.reuse_hits = reuse_hits + audio_reuse
+    report.generation_avoided = reuse_hits + audio_reuse
+    report.estimated_cost_avoided_usd = round(
+        veo_cost_usd(VEO_SECONDS_PER_REQUEST * reuse_hits) + lyria_cost_usd(audio_reuse),
+        4,
+    )
     save_json(
         paths.review_dir / "phase11_costs.json",
         {
@@ -372,16 +407,18 @@ def _materialize_audio(
     confirm_paid: bool,
     project_id: str,
     veo_map: dict[str, str],
-) -> dict[str, Path]:
+    use_cache: bool = True,
+) -> tuple[dict[str, Path], int]:
     assets: dict[str, Path] = {}
+    reuse = 0
     for section in sound_plan.music_sections:
         if section.library_asset_id:
             existing = library.get(section.library_asset_id)
             if existing and existing.local_path:
                 assets[section.music_section_id] = Path(existing.local_path)
                 assets[existing.asset_id] = Path(existing.local_path)
+                reuse += 1
                 continue
-        budget.reserve("lyria", 1)
         frames = [Path(item) for item in section.visual_context_frames if Path(item).is_file()]
         result = lyria.generate_music(
             MusicGenerateRequest(
@@ -390,7 +427,13 @@ def _materialize_audio(
                 image_paths=frames[:LYRIA_IMAGE_LIMIT],
             ),
             confirm_paid=confirm_paid,
+            use_cache=use_cache,
         )
+        cache_hit = (result.metadata or {}).get("cache_hit") == "true"
+        if cache_hit:
+            reuse += 1
+        if not cache_hit:
+            budget.reserve("lyria", 1)
         dest = paths.soundtrack_dir() / f"{section.music_section_id}.wav"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(result.audio_bytes)
@@ -461,7 +504,7 @@ def _materialize_audio(
         cue.status = "ready"
         assets[cue.sound_need_id] = dest
         assets[asset.asset_id] = dest
-    return assets
+    return assets, reuse
 
 
 def _normalize_wav(path: Path) -> None:
@@ -505,10 +548,32 @@ def _render_production_v1(
         start = min(item.start for item in members)
         end = max(item.end for item in members)
         overlays.append((clip, start, end))
+    overlay_paths = [clip for clip, _s, _e in overlays]
+    subtitle = paths.captions_narrated_ass()
+    master = paths.production_dir() / "visual_master_v1.mp4"
+    master_meta = paths.production_dir() / "visual_master_v1.meta.json"
+    digest = visual_master_hash(
+        base=base,
+        overlay_paths=overlay_paths,
+        captions=subtitle if subtitle.is_file() else None,
+    )
+    if not load_cached_master(master_meta, digest, master):
+        _encode_visual_master(base, overlays, subtitle, master)
+        write_master_meta(master_meta, digest, master)
+    mux_audio_copy_video(master, paths.production_mix_wav(), dest)
+    return dest
+
+
+def _encode_visual_master(
+    base: Path,
+    overlays: list[tuple[Path, float, float]],
+    subtitle: Path,
+    dest: Path,
+) -> None:
+    dest.parent.mkdir(parents=True, exist_ok=True)
     args: list[str] = ["-i", str(base)]
     for clip, _s, _e in overlays:
         args.extend(["-i", str(clip)])
-    args.extend(["-i", str(paths.production_mix_wav())])
     filter_parts: list[str] = []
     last = "[0:v]"
     for index, (_clip, start, end) in enumerate(overlays, start=1):
@@ -521,54 +586,34 @@ def _render_production_v1(
             f"{last}[{label}]overlay=enable='between(t,{start:.4f},{end:.4f})'[{out}]"
         )
         last = f"[{out}]"
-    audio_index = 1 + len(overlays)
-    subtitle = paths.captions_narrated_ass()
     vf_end = last
     if subtitle.is_file():
-        from docprod.render.ffmpeg import escape_filter_path
-
         filter_parts.append(f"{last}subtitles='{escape_filter_path(subtitle)}'[vout]")
         vf_end = "[vout]"
     tmp = dest.with_suffix(".tmp.mp4")
     try:
-        cmd = [
-            *args,
-            "-filter_complex",
-            ";".join(filter_parts) if filter_parts else "null",
-            "-map",
-            vf_end,
-            "-map",
-            f"{audio_index}:a",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "192k",
-            "-shortest",
-            str(tmp),
-        ]
-        if not overlays and not subtitle.is_file():
+        if overlays or subtitle.is_file():
             cmd = [
-                "-i",
-                str(base),
-                "-i",
-                str(paths.production_mix_wav()),
+                *args,
+                "-filter_complex",
+                ";".join(filter_parts),
+                "-map",
+                vf_end,
+                "-an",
                 "-c:v",
-                "copy",
-                "-map",
-                "0:v:0",
-                "-map",
-                "1:a:0",
-                "-c:a",
-                "aac",
-                "-shortest",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "medium",
+                "-crf",
+                "20",
                 str(tmp),
             ]
+        else:
+            cmd = ["-i", str(base), "-map", "0:v:0", "-an", "-c:v", "copy", str(tmp)]
         run_ffmpeg(cmd, timeout=600)
         tmp.replace(dest)
     finally:
         tmp.unlink(missing_ok=True)
-    return dest
+

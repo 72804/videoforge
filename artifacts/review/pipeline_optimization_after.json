@@ -1,0 +1,210 @@
+{
+  "phase": "10F_after",
+  "generated_at": "2026-09-19T16:25:00+03:00",
+  "pricing_version": "2026-09-19",
+  "zero_paid_calls_this_audit": true,
+  "dry_run_produce_episode": {
+    "estimated_total_usd": 0.96,
+    "video_seconds": 16,
+    "video_cost_usd": 0.8,
+    "music_generation_count": 2,
+    "music_cost_usd": 0.16,
+    "matcher": "metadata",
+    "semantic_qc": false,
+    "actual_spend_usd": 0.0,
+    "wall_s": 2.962,
+    "label": "MEASURED"
+  },
+  "phase11_paid": {
+    "before_usd": 0.96,
+    "after_first_run_usd": 0.96,
+    "absolute_savings_first_run_usd": 0.0,
+    "pct_savings_first_run": 0.0,
+    "identical_rerun_before_usd": 0.96,
+    "identical_rerun_after_usd": 0.0,
+    "cost_avoided_via_paid_cache_on_rerun_usd": 0.96,
+    "music_generations_before": 2,
+    "music_generations_after": 2,
+    "veo_seconds_before": 16,
+    "veo_seconds_after": 16,
+    "label": "REFERENCE first-run; ESTIMATED identical-rerun with cache"
+  },
+  "time": {
+    "final_mux_reencode_s": {"value": 8.896, "label": "MEASURED analog 430.87s 720p"},
+    "final_mux_copy_s": {"value": 0.752, "label": "MEASURED analog"},
+    "mux_speedup": 11.83,
+    "mux_seconds_saved": 8.144,
+    "loudnorm_first_s": {"value": 4.599, "label": "MEASURED narration master.wav"},
+    "loudnorm_cached_s": {"value": 0.0, "label": "MEASURED"},
+    "sha256_v3_cold_s": {"value": 0.0229, "label": "MEASURED"},
+    "sha256_v3_warm_s": {"value": 0.0001, "label": "MEASURED"},
+    "tiny_scene_workers": {
+      "label": "MEASURED 8x0.4s placeholders",
+      "w1_cold_s": 0.668,
+      "w2_cold_s": 0.431,
+      "w4_cold_s": 0.35,
+      "w4_warm_s": 0.334
+    },
+    "veo_wall_before_s": {"value": "2 * T_veo", "label": "ESTIMATED"},
+    "veo_wall_after_s": {"value": "max(T_veo1, T_veo2)", "label": "ESTIMATED concurrent max_workers=2"},
+    "phase11_cold_before_s": {"value": "T_veo1+T_veo2+T_lyria+T_mix+T_overlay+8.9", "label": "ESTIMATED"},
+    "phase11_cold_after_s": {"value": "max(T_veo)+T_lyria+T_mix+T_overlay+0.75", "label": "ESTIMATED"},
+    "phase11_warm_after_s": {"value": "~mix_if_needed + 0.75 mux if audio-only; 0 paid", "label": "ESTIMATED"}
+  },
+  "requests": {
+    "paid_first_run_before": 4,
+    "paid_first_run_after": 4,
+    "paid_identical_rerun_before": 4,
+    "paid_identical_rerun_after": 0,
+    "polling_per_900s_cap_before": 900,
+    "polling_per_900s_cap_after": 47,
+    "polling_reduction_at_cap": 853,
+    "label": "ESTIMATED polls; REFERENCE paid counts"
+  },
+  "cache": {
+    "visual_v3_hit_rate_before": 0.6418,
+    "visual_v3_hit_rate_after": 0.6418,
+    "phase11_scene_rerenders": 0,
+    "phase11_overlay_encode_first": 1,
+    "phase11_overlay_encode_warm": 0,
+    "audio_regen_warm": 0,
+    "label": "MEASURED v3; ESTIMATED phase11 warm"
+  },
+  "storage": {
+    "maple_bytes_before": 1018706200,
+    "maple_bytes_after": 1018706200,
+    "duplicate_bytes_found": 284412377,
+    "safe_bytes_removed": 0,
+    "label": "MEASURED; dedup DEFERRED"
+  },
+  "scaling": {
+    "file_sha256": {"before": "O(bytes) every call", "after": "O(1) if size+mtime hit else O(bytes)"},
+    "ffprobe": {"before": "O(probe) every call", "after": "O(1) identity cache"},
+    "sound_library_match": {"before": "O(A)", "after": "O(A) metadata if A<50; skip embeddings"},
+    "duplicate_audit_script": {"before": "naive O(A^2) compare", "after": "O(n) size bucket + hash"}
+  },
+  "reliability": {
+    "preflight_veo_mime": true,
+    "preflight_lyria_prompt_and_images": true,
+    "paid_cache_immutable": true,
+    "force_regenerate_paid_flag": true,
+    "resumable_stages": ["veo_raw", "lyria_wav", "sound_plan", "mix", "visual_master", "final_mux"],
+    "identical_run_paid_calls": 0
+  },
+  "quality_impact": "NO change to resolution, fps, codec quality, models, timing, or sound-design semantics",
+  "tests": {"pytest": "309 passed", "ruff": "All checks passed"},
+  "decisions": [
+    {
+      "id": "paid_artifact_cache",
+      "class": "IMPLEMENTED",
+      "reason": "identical Veo/Lyria must not rebill",
+      "estimated_benefit": "$0.96 on identical rerun",
+      "measured_benefit": "unit tests cache_hit; no live paid",
+      "quality_impact": "none"
+    },
+    {
+      "id": "provider_preflight",
+      "class": "IMPLEMENTED",
+      "reason": "previous Veo malformed image reached network",
+      "estimated_benefit": "avoid billed/failed ops",
+      "measured_benefit": "tests fail before client",
+      "quality_impact": "none"
+    },
+    {
+      "id": "stream_copy_mux",
+      "class": "IMPLEMENTED",
+      "reason": "audio/subtitle remix must not reencode h264 master",
+      "estimated_benefit": "lossless + faster",
+      "measured_benefit": "8.896s -> 0.752s analog (11.83x)",
+      "quality_impact": "none (copy)"
+    },
+    {
+      "id": "visual_master_split",
+      "class": "IMPLEMENTED",
+      "reason": "music must not invalidate visual encode",
+      "estimated_benefit": "skip overlay encode on audio-only",
+      "measured_benefit": "hash includes base+overlays+captions only",
+      "quality_impact": "none"
+    },
+    {
+      "id": "concurrent_veo",
+      "class": "IMPLEMENTED",
+      "reason": "independent shots; budget skip on cache_hit",
+      "estimated_benefit": "wall ~max not sum",
+      "measured_benefit": "fake provider tests pass",
+      "quality_impact": "none"
+    },
+    {
+      "id": "poll_delays",
+      "class": "IMPLEMENTED",
+      "reason": "avoid 1Hz forever",
+      "estimated_benefit": "853 fewer HTTP polls at 900s cap",
+      "measured_benefit": "delay series 5..20s, 47 steps/900s",
+      "quality_impact": "none"
+    },
+    {
+      "id": "sha_probe_loudnorm_json_noop",
+      "class": "IMPLEMENTED",
+      "reason": "repeat I/O and mtime invalidation",
+      "estimated_benefit": "loudnorm 4.599s -> 0s; sha 0.0229s -> 0.0001s on v3",
+      "measured_benefit": "as listed",
+      "quality_impact": "none"
+    },
+    {
+      "id": "embedding_threshold",
+      "class": "IMPLEMENTED",
+      "reason": "empty/tiny library must not pay embeddings",
+      "estimated_benefit": "$0 embedding this episode",
+      "measured_benefit": "dry-run matcher=metadata",
+      "quality_impact": "none"
+    },
+    {
+      "id": "lyria_1_song",
+      "class": "REJECTED_QUALITY_RISK",
+      "reason": "two story arcs over 7 min; one bed would repeat",
+      "estimated_benefit": "$0.08 / 8.3% of $0.96",
+      "measured_benefit": null,
+      "quality_impact": "coherence/repetition risk"
+    },
+    {
+      "id": "veo_6s",
+      "class": "REJECTED_QUALITY_RISK",
+      "reason": "au_0025 8.38s / 6s > 1.07 retime cap",
+      "estimated_benefit": "$0.20",
+      "measured_benefit": null,
+      "quality_impact": "visible speedup"
+    },
+    {
+      "id": "videotoolbox_final",
+      "class": "REJECTED_QUALITY_RISK",
+      "reason": "final quality precedence; no equivalence evidence",
+      "estimated_benefit": "faster encode",
+      "measured_benefit": null,
+      "quality_impact": "possible bitrate/compatibility drift"
+    },
+    {
+      "id": "stock_hardlink_dedup",
+      "class": "DEFERRED",
+      "reason": "284MB extras are originals per scene; portability/hardlink policy",
+      "estimated_benefit": "284MB",
+      "measured_benefit": "found not removed",
+      "quality_impact": "none if hardlink-only"
+    },
+    {
+      "id": "poll_overlap_lyria",
+      "class": "DEFERRED",
+      "reason": "dependency-aware async orchestrator would add complexity for one episode",
+      "estimated_benefit": "hide T_lyria under T_veo",
+      "measured_benefit": null,
+      "quality_impact": "none if sequenced correctly"
+    },
+    {
+      "id": "change_default_segment_workers",
+      "class": "REJECTED_LOW_VALUE",
+      "reason": "profile is in visual cache hash; maple v3 already used 4; default 2 keeps tests stable",
+      "estimated_benefit": "tiny-bench 0.668s -> 0.35s",
+      "measured_benefit": "tiny only",
+      "quality_impact": "none but would bust caches if profile dumped"
+    }
+  ]
+}

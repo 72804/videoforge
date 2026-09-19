@@ -62,6 +62,16 @@ TINY_TEST_PROFILE = PreviewRenderProfile(
 )
 
 
+class FinalRenderProfile(PreviewRenderProfile):
+    """Same geometry as preview; slower encode for optional finals. Not used by Phase 11."""
+
+    name: str = "final_720p_v1"
+    preset: str = "medium"
+    crf: int = 20
+    audio_bitrate: str = "192k"
+    segment_workers: int = 2
+
+
 class SegmentRecord(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

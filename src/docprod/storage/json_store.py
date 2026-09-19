@@ -26,6 +26,12 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
 
 def atomic_write_text(path: Path, text: str) -> None:
     """Write UTF-8 text atomically via a temp file in the same directory."""
+    if path.is_file():
+        try:
+            if path.read_text(encoding="utf-8") == text:
+                return
+        except OSError:
+            pass
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
     tmp_path = Path(tmp_name)

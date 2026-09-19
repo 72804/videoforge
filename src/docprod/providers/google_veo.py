@@ -6,7 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from docprod.config import Settings, get_settings, require_gemini_api_key, require_paid_call_allowed
+from docprod.providers.paid_cache import PaidArtifactCache, veo_request_hash
+from docprod.providers.pricing import veo_cost_usd
 from docprod.providers.video_base import VideoShotRequest, VideoShotResult
+from docprod.storage.hashing import file_sha256
+from docprod.storage.identity import poll_delays
 
 ALLOWED_START_MIME = frozenset({"image/jpeg", "image/png", "image/webp"})
 _SUFFIX_MIME = {
@@ -58,10 +62,17 @@ def combined_veo_prompt(request: VideoShotRequest) -> str:
 class GoogleVeoProvider:
     name = "google"
 
-    def __init__(self, *, settings: Settings | None = None, client: Any = None) -> None:
+    def __init__(
+        self,
+        *,
+        settings: Settings | None = None,
+        client: Any = None,
+        cache: PaidArtifactCache | None = None,
+    ) -> None:
         self._settings = settings or get_settings()
         self.model = self._settings.video_model
         self._client = client
+        self._cache = cache if cache is not None else PaidArtifactCache()
 
     def _client_or_create(self) -> Any:
         if self._client is not None:
@@ -74,10 +85,43 @@ class GoogleVeoProvider:
         self._client = genai.Client(api_key=key)
         return self._client
 
-    def generate_shot(self, request: VideoShotRequest, *, confirm_paid: bool) -> VideoShotResult:
-        require_paid_call_allowed(self.name, confirm_paid=confirm_paid, settings=self._settings)
+    def generate_shot(
+        self,
+        request: VideoShotRequest,
+        *,
+        confirm_paid: bool,
+        use_cache: bool = True,
+    ) -> VideoShotResult:
         image = load_local_start_image(request.image_path)
         prompt = combined_veo_prompt(request)
+        digest = veo_request_hash(
+            model=self.model,
+            image_sha256=file_sha256(request.image_path),
+            prompt=prompt,
+            negative_prompt=request.negative_prompt,
+            duration_seconds=request.duration_seconds,
+            aspect_ratio=request.aspect_ratio,
+            resolution=request.resolution,
+            count=request.count,
+        )
+        if use_cache:
+            cached = self._cache.get("veo", digest)
+            if cached is not None:
+                path, _meta = cached
+                return VideoShotResult(
+                    video_bytes=path.read_bytes(),
+                    provider=self.name,
+                    model=self.model,
+                    duration_seconds=float(request.duration_seconds),
+                    prompt=prompt,
+                    has_native_audio=True,
+                    metadata={
+                        "start_image": request.image_path.name,
+                        "cache_hit": "true",
+                        "request_hash": digest,
+                    },
+                )
+        require_paid_call_allowed(self.name, confirm_paid=confirm_paid, settings=self._settings)
         from google.genai import types
 
         source = types.GenerateVideosSource(prompt=prompt, image=image)
@@ -93,9 +137,13 @@ class GoogleVeoProvider:
                 negative_prompt=request.negative_prompt or None,
             ),
         )
-        while not getattr(operation, "done", True):
-            time.sleep(8)
+        for delay in poll_delays():
+            if getattr(operation, "done", True):
+                break
+            time.sleep(delay)
             operation = client.operations.get(operation)
+        if not getattr(operation, "done", True):
+            raise RuntimeError("Veo operation timed out")
         response = getattr(operation, "response", None) or getattr(operation, "result", None)
         videos = getattr(response, "generated_videos", None) if response is not None else None
         if not videos:
@@ -106,6 +154,20 @@ class GoogleVeoProvider:
         client.files.download(file=video_file, download_path=str(dest))
         payload = dest.read_bytes()
         dest.unlink(missing_ok=True)
+        self._cache.put(
+            "veo",
+            digest,
+            payload,
+            suffix=".mp4",
+            meta={
+                "provider": self.name,
+                "model": self.model,
+                "prompt_hash": digest,
+                "start_image": request.image_path.name,
+                "status": "ok",
+                "cost_usd": veo_cost_usd(request.duration_seconds),
+            },
+        )
         return VideoShotResult(
             video_bytes=payload,
             provider=self.name,
@@ -113,5 +175,5 @@ class GoogleVeoProvider:
             duration_seconds=float(request.duration_seconds),
             prompt=prompt,
             has_native_audio=True,
-            metadata={"start_image": request.image_path.name},
+            metadata={"start_image": request.image_path.name, "request_hash": digest},
         )

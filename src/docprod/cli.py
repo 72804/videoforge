@@ -2031,6 +2031,7 @@ def produce_episode_cmd(
     project_id: str = typer.Argument(...),
     dry_run: bool = typer.Option(False, "--dry-run"),
     confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+    force_regenerate_paid: bool = typer.Option(False, "--force-regenerate-paid"),
 ) -> None:
     """Selective Veo motion + script-aware soundtrack + production_v1."""
     from docprod.pipeline.produce_episode import produce_episode
@@ -2042,6 +2043,7 @@ def produce_episode_cmd(
             project,
             dry_run=dry_run,
             confirm_paid=confirm_paid,
+            force_regenerate_paid=force_regenerate_paid,
         )
     except (
         PaidApiDisabledError,

@@ -67,6 +67,8 @@ class SoundLibrary:
         ]
         if not candidates:
             return None
+        if matcher == "gemini_embedding_2" and len(self.assets) < 50:
+            matcher = "metadata"
         if matcher == "gemini_embedding_2" and embeddings and query_vector:
             scored = sorted(
                 candidates,

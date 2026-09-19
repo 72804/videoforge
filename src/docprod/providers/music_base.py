@@ -29,7 +29,7 @@ class MusicGenerationProvider(Protocol):
     model: str
 
     def generate_music(
-        self, request: MusicGenerateRequest, *, confirm_paid: bool
+        self, request: MusicGenerateRequest, *, confirm_paid: bool, use_cache: bool = True
     ) -> MusicGenerateResult: ...
 
 

@@ -33,5 +33,5 @@ class VideoShotProvider(Protocol):
     model: str
 
     def generate_shot(
-        self, request: VideoShotRequest, *, confirm_paid: bool
+        self, request: VideoShotRequest, *, confirm_paid: bool, use_cache: bool = True
     ) -> VideoShotResult: ...

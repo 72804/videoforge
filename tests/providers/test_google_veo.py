@@ -14,6 +14,7 @@ from docprod.providers.google_veo import (
     load_local_start_image,
     start_image_mime,
 )
+from docprod.providers.paid_cache import PaidArtifactCache
 from docprod.providers.video_base import VideoShotRequest
 from docprod.storage.paths import ProjectPaths, default_projects_root
 
@@ -100,6 +101,7 @@ def test_generate_videos_uses_source_image_not_file(tmp_path: Path) -> None:
     provider = GoogleVeoProvider(
         settings=settings,
         client=SimpleNamespace(models=Models(), files=Files()),
+        cache=PaidArtifactCache(tmp_path / "paid"),
     )
     result = provider.generate_shot(_request(path), confirm_paid=True)
     assert result.video_bytes == b"fake-mp4"
@@ -124,6 +126,8 @@ def test_generate_videos_uses_source_image_not_file(tmp_path: Path) -> None:
     aliased = source.model_dump(mode="python", by_alias=True)
     assert aliased["image"]["mimeType"].startswith("image/")
     assert aliased["image"]["imageBytes"]
+    second = provider.generate_shot(_request(path), confirm_paid=True)
+    assert second.metadata and second.metadata.get("cache_hit") == "true"
 
 
 def test_existing_maple_keyframes_are_valid_jpegs() -> None:

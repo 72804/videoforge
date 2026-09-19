@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import threading
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -55,6 +56,20 @@ def content_hash(value: Any) -> str:
 
 def file_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
     """Streaming SHA-256 of a file. Does not load the whole file into memory."""
+    return _cached_file_sha256(path, chunk_size=chunk_size)
+
+
+_SHA_LOCK = threading.Lock()
+_SHA_CACHE: dict[tuple[str, int, int], str] = {}
+
+
+def _cached_file_sha256(path: Path, *, chunk_size: int) -> str:
+    stat = path.stat()
+    key = (str(path.resolve()), stat.st_size, int(stat.st_mtime_ns))
+    with _SHA_LOCK:
+        hit = _SHA_CACHE.get(key)
+    if hit:
+        return hit
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         while True:
@@ -62,4 +77,7 @@ def file_sha256(path: Path, *, chunk_size: int = 1024 * 1024) -> str:
             if not chunk:
                 break
             digest.update(chunk)
-    return digest.hexdigest()
+    value = digest.hexdigest()
+    with _SHA_LOCK:
+        _SHA_CACHE[key] = value
+    return value

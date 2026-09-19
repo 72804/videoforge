@@ -214,7 +214,9 @@ class _FakeVeo:
     name = "google"
     model = "veo-3.1-lite-generate-preview"
 
-    def generate_shot(self, request: VideoShotRequest, *, confirm_paid: bool) -> VideoShotResult:
+    def generate_shot(
+        self, request: VideoShotRequest, *, confirm_paid: bool, **_kwargs: object
+    ) -> VideoShotResult:
         assert confirm_paid
         assert request.image_path.is_file()
         dest = request.image_path.with_suffix(".fake.mp4")
@@ -236,7 +238,7 @@ class _FakeLyria:
     calls = 0
 
     def generate_music(
-        self, request: MusicGenerateRequest, *, confirm_paid: bool
+        self, request: MusicGenerateRequest, *, confirm_paid: bool, **_kwargs: object
     ) -> MusicGenerateResult:
         assert confirm_paid
         assert "INSTRUMENTAL ONLY" in request.prompt
@@ -292,3 +294,83 @@ def test_live_produce_with_fakes(tmp_path: Path, monkeypatch) -> None:
     assert paths.production_v1_mp4().is_file()
     assert lyria.calls <= 4
     assert paths.preview_visual_v3_mp4().is_file()
+
+
+class _CachedVeo:
+    name = "google"
+    model = "veo-3.1-lite-generate-preview"
+    calls = 0
+
+    def generate_shot(
+        self, request: VideoShotRequest, *, confirm_paid: bool, **_kwargs: object
+    ) -> VideoShotResult:
+        self.calls += 1
+        dest = request.image_path.with_suffix(".fake.mp4")
+        _mp4_with_audio(dest, 8.0)
+        payload = dest.read_bytes()
+        dest.unlink(missing_ok=True)
+        return VideoShotResult(
+            video_bytes=payload,
+            provider="google",
+            model=self.model,
+            duration_seconds=8.0,
+            prompt=request.prompt,
+            metadata={"cache_hit": "true"},
+        )
+
+
+class _CachedLyria:
+    name = "google"
+    model = "lyria-3.5"
+    calls = 0
+
+    def generate_music(
+        self, request: MusicGenerateRequest, *, confirm_paid: bool, **_kwargs: object
+    ) -> MusicGenerateResult:
+        self.calls += 1
+        from tempfile import NamedTemporaryFile
+
+        tmp = NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp.close()
+        _wav(Path(tmp.name), 2.0)
+        data = Path(tmp.name).read_bytes()
+        Path(tmp.name).unlink(missing_ok=True)
+        return MusicGenerateResult(
+            audio_bytes=data,
+            provider="google",
+            model=self.model,
+            mime="audio/wav",
+            prompt=request.prompt,
+            metadata={"cache_hit": "true"},
+        )
+
+
+def test_paid_cache_hits_skip_budget(tmp_path: Path, monkeypatch) -> None:
+    paths, project = _project_bundle(tmp_path / "tiny11")
+    monkeypatch.setenv("ALLOW_PAID_APIS", "true")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    from docprod.config import get_settings
+
+    get_settings.cache_clear()
+    settings = Settings(
+        _env_file=None,
+        allow_paid_apis=True,
+        gemini_api_key="test-key",
+        enable_lyria_realtime=False,
+        sound_library_matcher="metadata",
+        phase11_max_usd=2.0,
+    )
+    report = produce_episode(
+        paths,
+        project,
+        dry_run=False,
+        confirm_paid=True,
+        settings=settings,
+        video_provider=_CachedVeo(),
+        music_provider=_CachedLyria(),
+        speech_detector=lambda _p: False,
+    )
+    assert report.actual_spend_usd == 0.0
+    assert report.reuse_hits >= 2
+    assert report.generation_avoided >= 2
+

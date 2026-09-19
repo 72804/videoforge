@@ -605,19 +605,22 @@ def render_preview(
             )
         if vf_parts:
             args.extend(["-vf", ",".join(vf_parts)])
+        video_codec = ["-c:v", "copy"] if not vf_parts else [
+            "-c:v",
+            profile.video_codec,
+            "-pix_fmt",
+            profile.pixel_format,
+            "-preset",
+            profile.preset,
+            "-crf",
+            str(profile.crf),
+        ]
         encode = [
                 "-map",
                 "0:v:0",
                 "-map",
                 "1:a:0",
-                "-c:v",
-                profile.video_codec,
-                "-pix_fmt",
-                profile.pixel_format,
-                "-preset",
-                profile.preset,
-                "-crf",
-                str(profile.crf),
+                *video_codec,
                 "-c:a",
                 profile.audio_codec,
                 "-b:a",
