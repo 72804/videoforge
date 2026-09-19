@@ -3,12 +3,26 @@ from __future__ import annotations
 import mimetypes
 import re
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from docprod.config import Settings, get_settings, require_gemini_api_key, require_paid_call_allowed
 from docprod.providers.paid_cache import PaidArtifactCache, veo_request_hash
 from docprod.providers.pricing import veo_cost_usd
+from docprod.providers.veo_journal import (
+    CACHE_COMMITTED,
+    DOWNLOAD_FAILED,
+    DOWNLOAD_SUCCEEDED,
+    DOWNLOADABLE_STATES,
+    GENERATION_IN_PROGRESS,
+    GENERATION_SUCCEEDED_REMOTE,
+    REMOTE_ARTIFACT_EXPIRED,
+    REQUEST_SUBMITTED,
+    load_journal,
+    remote_expired,
+    write_journal,
+)
 from docprod.providers.video_base import VideoShotRequest, VideoShotResult
 from docprod.providers.video_capabilities import VideoModelCapabilities, capabilities_for
 from docprod.storage.hashing import file_sha256
@@ -152,6 +166,48 @@ def native_negative_for_hash(
     return ""
 
 
+def request_digest(
+    request: VideoShotRequest,
+    *,
+    model: str,
+    capabilities: VideoModelCapabilities,
+    prompt: str,
+) -> str:
+    return veo_request_hash(
+        model=model,
+        image_sha256=file_sha256(request.image_path),
+        prompt=prompt,
+        negative_prompt=native_negative_for_hash(request, capabilities),
+        duration_seconds=request.duration_seconds,
+        aspect_ratio=request.aspect_ratio,
+        resolution=request.resolution,
+        count=request.count,
+    )
+
+
+def file_resource_name(video: object) -> str:
+    for attr in ("name", "uri", "download_uri"):
+        value = getattr(video, attr, None)
+        if value:
+            return str(value)
+    return ""
+
+
+def download_generated_file(client: Any, file_obj: object, dest: Path) -> None:
+    """Python google-genai 2.24+ uses destination=, never download_path=."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.parent / f".{dest.name}.part.mp4"
+    try:
+        result = client.files.download(file=file_obj, destination=str(tmp))
+        if (not tmp.is_file() or tmp.stat().st_size == 0) and isinstance(result, bytes):
+            tmp.write_bytes(result)
+        if not tmp.is_file() or tmp.stat().st_size == 0:
+            raise RuntimeError("Veo download produced no bytes")
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
 class GoogleVeoProvider:
     name = "google"
 
@@ -187,15 +243,8 @@ class GoogleVeoProvider:
         use_cache: bool = True,
     ) -> VideoShotResult:
         prompt = preflight_veo_request(request, self.capabilities)
-        digest = veo_request_hash(
-            model=self.model,
-            image_sha256=file_sha256(request.image_path),
-            prompt=prompt,
-            negative_prompt=native_negative_for_hash(request, self.capabilities),
-            duration_seconds=request.duration_seconds,
-            aspect_ratio=request.aspect_ratio,
-            resolution=request.resolution,
-            count=request.count,
+        digest = request_digest(
+            request, model=self.model, capabilities=self.capabilities, prompt=prompt
         )
         if use_cache:
             cached = self._cache.get("veo", digest)
@@ -212,7 +261,16 @@ class GoogleVeoProvider:
                         "start_image": request.image_path.name,
                         "cache_hit": "true",
                         "request_hash": digest,
+                        "billed_this_run": "false",
                     },
+                )
+            journal = load_journal(self._cache.root, digest)
+            if journal and journal.get("state") in DOWNLOADABLE_STATES:
+                return self._download_existing(
+                    request,
+                    prompt=prompt,
+                    digest=digest,
+                    journal=journal,
                 )
         require_paid_call_allowed(self.name, confirm_paid=confirm_paid, settings=self._settings)
         from google.genai import types
@@ -226,9 +284,29 @@ class GoogleVeoProvider:
             source=source,
             config=config,
         )
+        write_journal(
+            self._cache.root,
+            digest,
+            {
+                "provider": self.name,
+                "model": self.model,
+                "unit_id": request.asset_unit_id,
+                "operation_name": getattr(operation, "name", None) or "",
+                "submitted_at": datetime.now(UTC).isoformat(),
+                "state": REQUEST_SUBMITTED,
+            },
+        )
         for delay in poll_delays():
             if getattr(operation, "done", True):
                 break
+            write_journal(
+                self._cache.root,
+                digest,
+                {
+                    **(load_journal(self._cache.root, digest) or {}),
+                    "state": GENERATION_IN_PROGRESS,
+                },
+            )
             time.sleep(delay)
             operation = client.operations.get(operation)
         if not getattr(operation, "done", True):
@@ -237,12 +315,86 @@ class GoogleVeoProvider:
         videos = getattr(response, "generated_videos", None) if response is not None else None
         if not videos:
             raise RuntimeError("Veo returned no video")
-        generated = videos[0]
-        video_file = generated.video
+        video_file = videos[0].video
+        resource = file_resource_name(video_file)
+        prior = load_journal(self._cache.root, digest) or {}
+        write_journal(
+            self._cache.root,
+            digest,
+            {
+                **prior,
+                "state": GENERATION_SUCCEEDED_REMOTE,
+                "generated_file_name": resource,
+                "finished_at": datetime.now(UTC).isoformat(),
+                "remote_generated": True,
+            },
+        )
+        try:
+            return self._commit_download(
+                request,
+                prompt=prompt,
+                digest=digest,
+                file_obj=video_file,
+                billed_this_run=True,
+            )
+        except Exception:
+            failed = load_journal(self._cache.root, digest) or {}
+            write_journal(
+                self._cache.root,
+                digest,
+                {**failed, "state": DOWNLOAD_FAILED, "generated_file_name": resource},
+            )
+            raise
+
+    def _download_existing(
+        self,
+        request: VideoShotRequest,
+        *,
+        prompt: str,
+        digest: str,
+        journal: dict,
+    ) -> VideoShotResult:
+        if remote_expired(journal):
+            write_journal(
+                self._cache.root,
+                digest,
+                {**journal, "state": REMOTE_ARTIFACT_EXPIRED},
+            )
+            raise RuntimeError(
+                "REMOTE_ARTIFACT_EXPIRED: existing Veo output expired; "
+                "fresh generation requires --confirm-paid"
+            )
+        resource = str(journal.get("generated_file_name") or "")
+        if not resource:
+            raise RuntimeError("Veo journal is missing generated_file_name")
+        return self._commit_download(
+            request,
+            prompt=prompt,
+            digest=digest,
+            file_obj=resource,
+            billed_this_run=False,
+        )
+
+    def _commit_download(
+        self,
+        request: VideoShotRequest,
+        *,
+        prompt: str,
+        digest: str,
+        file_obj: object,
+        billed_this_run: bool,
+    ) -> VideoShotResult:
         dest = Path(str(request.image_path) + ".veo.tmp.mp4")
-        client.files.download(file=video_file, download_path=str(dest))
+        client = self._client_or_create()
+        download_generated_file(client, file_obj, dest)
         payload = dest.read_bytes()
         dest.unlink(missing_ok=True)
+        prior = load_journal(self._cache.root, digest) or {}
+        write_journal(
+            self._cache.root,
+            digest,
+            {**prior, "state": DOWNLOAD_SUCCEEDED},
+        )
         self._cache.put(
             "veo",
             digest,
@@ -253,9 +405,17 @@ class GoogleVeoProvider:
                 "model": self.model,
                 "prompt_hash": digest,
                 "start_image": request.image_path.name,
-                "status": "ok",
+                "unit_id": request.asset_unit_id,
+                "status": CACHE_COMMITTED,
                 "cost_usd": veo_cost_usd(request.duration_seconds),
+                "remote_generation_succeeded": True,
+                "recovered_after_download_failure": not billed_this_run,
             },
+        )
+        write_journal(
+            self._cache.root,
+            digest,
+            {**(load_journal(self._cache.root, digest) or {}), "state": CACHE_COMMITTED},
         )
         return VideoShotResult(
             video_bytes=payload,
@@ -264,5 +424,11 @@ class GoogleVeoProvider:
             duration_seconds=float(request.duration_seconds),
             prompt=prompt,
             has_native_audio=True,
-            metadata={"start_image": request.image_path.name, "request_hash": digest},
+            metadata={
+                "start_image": request.image_path.name,
+                "request_hash": digest,
+                "billed_this_run": "true" if billed_this_run else "false",
+                "download_only": "false" if billed_this_run else "true",
+                "cache_hit": "false",
+            },
         )

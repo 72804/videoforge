@@ -85,8 +85,7 @@ def test_generate_videos_uses_source_image_not_file(tmp_path: Path) -> None:
     class Models:
         def generate_videos(self, **kwargs: object) -> object:
             captured.update(kwargs)
-            video = object()
-            generated = SimpleNamespace(video=video)
+            generated = SimpleNamespace(video=SimpleNamespace(name="files/abc", uri="files/abc"))
             response = SimpleNamespace(generated_videos=[generated])
             return SimpleNamespace(done=True, response=response)
 
@@ -94,8 +93,10 @@ def test_generate_videos_uses_source_image_not_file(tmp_path: Path) -> None:
         def upload(self, **_kwargs: object) -> None:
             raise AssertionError("Files API must not be used for local start frames")
 
-        def download(self, file: object, download_path: str) -> None:
-            Path(download_path).write_bytes(b"fake-mp4")
+        def download(self, file: object, destination: str | None = None, **kwargs: object) -> None:
+            assert "download_path" not in kwargs
+            assert destination is not None
+            Path(destination).write_bytes(b"fake-mp4")
 
     settings = Settings(
         _env_file=None,
@@ -248,3 +249,166 @@ def test_maple_lite_requests_serialize_without_negative_prompt() -> None:
         aliased_source = source.model_dump(mode="python", by_alias=True)
         assert "imageBytes" in aliased_source["image"]
         assert aliased_source["image"]["mimeType"].startswith("image/")
+
+
+def test_download_retry_does_not_regenerate(tmp_path: Path) -> None:
+    path = tmp_path / "start.jpg"
+    _write_image(path, "JPEG")
+    generate_calls = {"n": 0}
+    download_calls: list[dict[str, object]] = []
+
+    class Models:
+        def generate_videos(self, **kwargs: object) -> object:
+            generate_calls["n"] += 1
+            video = SimpleNamespace(name="files/recov", uri="files/recov")
+            generated = SimpleNamespace(video=video)
+            return SimpleNamespace(
+                done=True,
+                name="operations/recov",
+                response=SimpleNamespace(generated_videos=[generated]),
+            )
+
+    class Files:
+        def download(self, file: object, destination: str | None = None, **kwargs: object) -> None:
+            assert "download_path" not in kwargs
+            download_calls.append({"file": file, "destination": destination, **kwargs})
+            if len(download_calls) == 1:
+                raise TypeError("got an unexpected keyword argument 'download_path'")
+            assert destination is not None
+            Path(destination).write_bytes(b"recovered-mp4")
+
+    settings = Settings(
+        _env_file=None,
+        allow_paid_apis=True,
+        gemini_api_key="unused",
+        video_model="veo-3.1-lite-generate-preview",
+    )
+    cache = PaidArtifactCache(tmp_path / "paid")
+    provider = GoogleVeoProvider(
+        settings=settings,
+        client=SimpleNamespace(models=Models(), files=Files()),
+        cache=cache,
+    )
+    request = _request(path)
+    request.asset_unit_id = "au_0005_0006"
+    with pytest.raises(TypeError, match="download_path"):
+        provider.generate_shot(request, confirm_paid=True)
+    assert generate_calls["n"] == 1
+    from docprod.providers.google_veo import request_digest
+    from docprod.providers.veo_journal import DOWNLOAD_FAILED, load_journal
+
+    prompt = combined_veo_prompt(request)
+    digest = request_digest(
+        request,
+        model="veo-3.1-lite-generate-preview",
+        capabilities=capabilities_for("veo-3.1-lite-generate-preview"),
+        prompt=prompt,
+    )
+    journal = load_journal(cache.root, digest)
+    assert journal is not None
+    assert journal["state"] == DOWNLOAD_FAILED
+    assert journal["generated_file_name"] == "files/recov"
+    result = provider.generate_shot(request, confirm_paid=False)
+    assert generate_calls["n"] == 1
+    assert len(download_calls) == 2
+    assert result.video_bytes == b"recovered-mp4"
+    assert result.metadata and result.metadata.get("download_only") == "true"
+    assert result.metadata.get("billed_this_run") == "false"
+    assert cache.get("veo", digest) is not None
+
+
+def test_expired_remote_artifact_does_not_generate(tmp_path: Path) -> None:
+    path = tmp_path / "start.jpg"
+    _write_image(path, "JPEG")
+    request = _request(path)
+    prompt = combined_veo_prompt(request)
+    caps = capabilities_for("veo-3.1-lite-generate-preview")
+    from docprod.providers.google_veo import request_digest
+    from docprod.providers.veo_journal import DOWNLOAD_FAILED, write_journal
+
+    digest = request_digest(
+        request, model="veo-3.1-lite-generate-preview", capabilities=caps, prompt=prompt
+    )
+    cache = PaidArtifactCache(tmp_path / "paid")
+    write_journal(
+        cache.root,
+        digest,
+        {
+            "state": DOWNLOAD_FAILED,
+            "generated_file_name": "files/old",
+            "expiration_time": "2020-01-01T00:00:00+00:00",
+        },
+    )
+
+    class Boom:
+        def generate_videos(self, **_kwargs: object) -> None:
+            raise AssertionError("must not generate")
+
+        def download(self, **_kwargs: object) -> None:
+            raise AssertionError("must not download expired")
+
+    provider = GoogleVeoProvider(
+        settings=Settings(_env_file=None, allow_paid_apis=True, gemini_api_key="unused"),
+        client=SimpleNamespace(models=Boom(), files=Boom(), operations=SimpleNamespace()),
+        cache=cache,
+    )
+    with pytest.raises(RuntimeError, match="REMOTE_ARTIFACT_EXPIRED"):
+        provider.generate_shot(request, confirm_paid=True)
+
+
+def test_concurrent_download_failures_recover(tmp_path: Path) -> None:
+    failures = {"n": 0}
+    gens = {"n": 0}
+
+    class Models:
+        def generate_videos(self, **kwargs: object) -> object:
+            gens["n"] += 1
+            source = kwargs["source"]
+            token = "a" if "Warehouse" in source.prompt else "b"
+            generated = SimpleNamespace(video=SimpleNamespace(name=f"files/{token}"))
+            return SimpleNamespace(
+                done=True, response=SimpleNamespace(generated_videos=[generated])
+            )
+
+    class Files:
+        def download(self, file: object, destination: str | None = None, **kwargs: object) -> None:
+            assert "download_path" not in kwargs
+            failures["n"] += 1
+            if failures["n"] <= 2:
+                raise OSError("download failed")
+            assert destination is not None
+            Path(destination).write_bytes(b"ok")
+
+    settings = Settings(
+        _env_file=None,
+        allow_paid_apis=True,
+        gemini_api_key="unused",
+        video_model="veo-3.1-lite-generate-preview",
+    )
+    cache = PaidArtifactCache(tmp_path / "paid")
+    provider = GoogleVeoProvider(
+        settings=settings,
+        client=SimpleNamespace(models=Models(), files=Files()),
+        cache=cache,
+    )
+    a = tmp_path / "a.jpg"
+    b = tmp_path / "b.jpg"
+    _write_image(a, "JPEG")
+    PILImage.new("RGB", (32, 18), (200, 10, 10)).save(b, "JPEG")
+    req_a = _request(a)
+    req_b = VideoShotRequest(
+        prompt="Other inspection scene.",
+        negative_prompt="logos",
+        image_path=b,
+        native_audio_prompt="quiet room",
+    )
+    with pytest.raises(OSError):
+        provider.generate_shot(req_a, confirm_paid=True)
+    with pytest.raises(OSError):
+        provider.generate_shot(req_b, confirm_paid=True)
+    assert gens["n"] == 2
+    provider.generate_shot(req_a, confirm_paid=False)
+    provider.generate_shot(req_b, confirm_paid=False)
+    assert gens["n"] == 2
+    assert failures["n"] == 4
+

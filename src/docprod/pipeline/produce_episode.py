@@ -254,7 +254,8 @@ def produce_episode(
         request = _shot_request(paths, unit_id)
         result = veo.generate_shot(request, confirm_paid=confirm_paid, use_cache=use_cache)
         cache_hit = (result.metadata or {}).get("cache_hit") == "true"
-        if not cache_hit:
+        billed = (result.metadata or {}).get("billed_this_run") == "true"
+        if billed:
             with budget_lock:
                 video_budget.reserve("veo", 1)
         return unit_id, result, cache_hit
@@ -382,6 +383,7 @@ def _shot_request(paths: ProjectPaths, unit_id: str) -> VideoShotRequest:
         negative_prompt=negative,
         image_path=_existing_keyframe(paths, unit_id),
         native_audio_prompt=native,
+        asset_unit_id=unit_id,
     )
 
 

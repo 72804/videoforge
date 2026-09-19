@@ -15,6 +15,7 @@ class VideoShotRequest:
     resolution: str = "720p"
     count: int = 1
     native_audio_prompt: str = ""
+    asset_unit_id: str = ""
 
 
 @dataclass

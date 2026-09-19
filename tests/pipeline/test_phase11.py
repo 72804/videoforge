@@ -410,17 +410,19 @@ def test_partial_concurrent_veo_resume(tmp_path: Path, monkeypatch) -> None:
             calls.append(kind)
             if kind == "au_0025" and calls.count("au_0025") == 1:
                 raise RuntimeError("`negativePrompt` isn't supported by this model.")
-            video = object()
+            video = SimpleNamespace(name=f"files/{kind}", uri=f"files/{kind}")
             generated = SimpleNamespace(video=video)
             response = SimpleNamespace(generated_videos=[generated])
-            return SimpleNamespace(done=True, response=response)
+            return SimpleNamespace(done=True, name=f"operations/{kind}", response=response)
 
     class Files:
         def upload(self, **_kwargs: object) -> None:
             raise AssertionError("Files API must not be used for local start frames")
 
-        def download(self, file: object, download_path: str) -> None:
-            _mp4_with_audio(Path(download_path), 8.0)
+        def download(self, file: object, destination: str | None = None, **kwargs: object) -> None:
+            assert "download_path" not in kwargs
+            assert destination is not None
+            _mp4_with_audio(Path(destination), 8.0)
 
     cache = PaidArtifactCache(tmp_path / "paid")
     veo = GoogleVeoProvider(
