@@ -86,7 +86,7 @@ def create_app(
     app.state.ctx = ctx
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=ctx.cors_origins or ["http://127.0.0.1:3000", "http://localhost:3000"],
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type", "Idempotency-Key", "X-Request-ID"],
@@ -235,18 +235,18 @@ def create_app(
 
 
 def app_from_settings() -> FastAPI:
-    from docprod.config import get_settings, validate_runtime_settings
+    from docprod.config import cors_origin_list, get_settings, validate_runtime_settings
     from docprod.logging_utils import get_logger
 
     settings = get_settings()
-    validate_runtime_settings(settings)
+    validate_runtime_settings(settings, role="api")
     env = getattr(settings, "app_env", "development")
     secret = "dev-session-secret-not-for-production"
     if settings.api_session_secret is not None:
         value = settings.api_session_secret.get_secret_value().strip()
         if value:
             secret = value
-    origins = [p.strip() for p in settings.api_cors_origins.split(",") if p.strip()]
+    origins = cors_origin_list(settings.api_cors_origins)
     default_store = Path("product_data/store.json")
     store = Path(settings.product_store_path) if settings.product_store_path else default_store
     persist = store if persistence_mode(settings) == "json" else None

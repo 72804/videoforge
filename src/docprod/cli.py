@@ -2705,17 +2705,33 @@ def telegram_api_seed(
 
 @app.command("telegram-api-serve")
 def telegram_api_serve(
-    host: str = typer.Option("127.0.0.1", "--host"),
-    port: int = typer.Option(8000, "--port"),
+    host: str | None = typer.Option(None, "--host"),
+    port: int | None = typer.Option(None, "--port"),
 ) -> None:
-    """Serve the local Telegram Mini App API. Never prints secrets."""
+    """Serve the Telegram Mini App API. Binds 0.0.0.0:$PORT when PORT is set."""
+    import os
+
     import uvicorn
 
+    from docprod.config import api_bind_address, validate_runtime_settings
+
     settings = get_settings()
-    console.print(f"API  http://{host}:{port}")
-    console.print(f"docs http://{host}:{port}/docs")
+    validate_runtime_settings(settings, role="api")
+    bind_host, bind_port = api_bind_address(
+        host=host,
+        port=port,
+        app_env=settings.app_env,
+        port_env=os.environ.get("PORT", ""),
+    )
+    console.print(f"API  http://{bind_host}:{bind_port}")
     console.print(f"env  {settings.app_env}")
-    uvicorn.run("docprod.api.app:factory", factory=True, host=host, port=port, reload=False)
+    uvicorn.run(
+        "docprod.api.app:factory",
+        factory=True,
+        host=bind_host,
+        port=bind_port,
+        reload=False,
+    )
 
 
 @app.command("telegram-api-openapi")
@@ -2739,7 +2755,7 @@ def telegram_worker() -> None:
     settings = get_settings()
     from docprod.config import validate_runtime_settings
 
-    validate_runtime_settings(settings)
+    validate_runtime_settings(settings, role="worker")
     configure_logging(settings)
     service = build_product_service(settings)
     worker_id = settings.worker_id.strip() or f"worker-{os.getpid()}"
@@ -2772,13 +2788,16 @@ def _worker_sender(settings):
 @app.command("telegram-bot")
 def telegram_bot() -> None:
     """Long-poll Telegram updates. Do not run together with a webhook for the same bot."""
+    from docprod.config import validate_runtime_settings
     from docprod.product.factory import build_product_service
-    from docprod.telegram.client import HttpxTelegramClient
+    from docprod.telegram.bot import public_https_mini_app_url
+    from docprod.telegram.client import HttpxTelegramClient, TelegramAPIError
     from docprod.telegram.updates import dispatch_update
 
     settings = get_settings()
-    from docprod.config import validate_runtime_settings
-
+    if settings.app_env.strip().lower() == "production":
+        console.print("Do not run telegram-bot polling in production. Use the webhook.")
+        raise typer.Exit(code=1)
     validate_runtime_settings(settings)
     token = ""
     if settings.telegram_bot_token is not None:
@@ -2786,21 +2805,37 @@ def telegram_bot() -> None:
     if not token:
         console.print("TELEGRAM_BOT_TOKEN is required")
         raise typer.Exit(code=1)
+
     telegram = HttpxTelegramClient(token)
     telegram.set_webhook("")
     service = build_product_service(settings)
-    console.print("Polling Telegram updates")
+    studio = public_https_mini_app_url(settings.telegram_mini_app_url)
+    console.print(
+        f"Polling Telegram updates | payment={settings.payment_mode} "
+        f"generation={settings.generation_mode} "
+        f"allow_paid_generation={settings.allow_paid_generation}"
+    )
+    console.print(
+        "Mini App button: enabled" if studio else "Mini App button: disabled (no public https URL)"
+    )
     offset = 0
     while True:
-        updates = telegram.get_updates(offset=offset, timeout=25)
+        try:
+            updates = telegram.get_updates(offset=offset, timeout=25)
+        except TelegramAPIError:
+            console.print("Telegram poll failed; retrying")
+            continue
         for update in updates:
             offset = int(update.get("update_id", offset)) + 1
-            dispatch_update(
-                service,
-                telegram,
-                update,
-                mini_app_url=settings.telegram_mini_app_url.strip(),
-            )
+            try:
+                dispatch_update(
+                    service,
+                    telegram,
+                    update,
+                    mini_app_url=settings.telegram_mini_app_url.strip(),
+                )
+            except Exception:
+                console.print("Ignored a Telegram update that could not be handled")
 
 
 @app.command("telegram-webhook-set")

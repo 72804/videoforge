@@ -125,6 +125,8 @@ class HttpxTelegramClient:
         secret_token: str = "",
         allowed_updates: list[str] | None = None,
     ) -> dict[str, Any]:
+        if not url.strip():
+            return self._call("deleteWebhook", {"drop_pending_updates": False})
         payload: dict[str, Any] = {
             "url": url,
             "allowed_updates": allowed_updates

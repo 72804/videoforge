@@ -16,12 +16,14 @@ target_metadata = Base.metadata
 
 
 def _database_url() -> str:
-    url = os.environ.get("DATABASE_URL", "").strip()
-    if url:
-        return url
-    from docprod.config import get_settings
+    from docprod.db.engine import sqlalchemy_database_url
 
-    return get_settings().database_url
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        from docprod.config import get_settings
+
+        url = get_settings().database_url
+    return sqlalchemy_database_url(url)
 
 
 def run_migrations_offline() -> None:

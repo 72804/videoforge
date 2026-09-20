@@ -238,6 +238,41 @@ def test_start_command_and_outbox_notification() -> None:
     assert repo.outbox[retry.id].status.value == "FAILED"
 
 
+def test_start_without_public_https_url_has_no_web_app_button() -> None:
+    from docprod.telegram.bot import LOCAL_STUDIO_NOTE, studio_keyboard
+
+    telegram = FakeTelegramClient()
+    handle_command(telegram, chat_id=7, text="/start", mini_app_url="http://127.0.0.1:3000")
+    assert START_TEXT in telegram.messages[0]["text"]
+    assert LOCAL_STUDIO_NOTE in telegram.messages[0]["text"]
+    assert telegram.messages[0]["reply_markup"] is None
+    assert studio_keyboard("") is None
+    assert studio_keyboard("https://localhost/studio") is None
+    from docprod.product.models import NotificationOutbox, TelegramUser
+    from docprod.product.notifications import TelegramNotificationSender, drain_outbox
+    from docprod.product.repository import MemoryRepository
+
+    repo = MemoryRepository()
+    user = TelegramUser(telegram_user_id=42, first_name="Pay")
+    repo.put_user(user)
+    note = NotificationOutbox(
+        user_id=user.id,
+        project_id="p1",
+        kind="project_ready",
+        payload={},
+    )
+    repo.outbox[note.id] = note
+    sender = TelegramNotificationSender(telegram, mini_app_url="https://studio.example")
+    assert drain_outbox(repo, sender) == 1
+    assert "ready" in telegram.messages[-1]["text"].lower()
+    assert "Open Project" in str(telegram.messages[-1]["reply_markup"])
+    telegram.fail_send = True
+    retry = NotificationOutbox(user_id=user.id, kind="generation_failed", payload={})
+    repo.outbox[retry.id] = retry
+    assert drain_outbox(repo, sender, max_attempts=1) == 0
+    assert repo.outbox[retry.id].status.value == "FAILED"
+
+
 def test_paid_generation_guard() -> None:
     service = ProductService(bot_token=BOT)
     try:

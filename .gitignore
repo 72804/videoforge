@@ -9,6 +9,10 @@ __pycache__/
 .env
 .env.*
 !.env.example
+!.env.production.example
+
+.vercel/
+.railway/
 
 projects/*
 !projects/.gitkeep

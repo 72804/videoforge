@@ -1,9 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
+import fs from "node:fs";
 import path from "node:path";
 
 const apiPort = 8010;
 const appPort = 3010;
 const store = path.join(__dirname, ".e2e-store.json");
+fs.rmSync(store, { force: true });
+fs.rmSync(`${store}.blobs`, { recursive: true, force: true });
 
 export default defineConfig({
   testDir: "./e2e",

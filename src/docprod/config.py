@@ -2,21 +2,26 @@ from __future__ import annotations
 
 import os
 from functools import lru_cache
+from pathlib import Path
 
-from pydantic import Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from docprod.exceptions import MissingApiKeyError, PaidApiDisabledError, PaidApiNotConfirmedError
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_ENV_FILE = _REPO_ROOT / ".env"
 
 
 class Settings(BaseSettings):
     """Runtime settings. Paid APIs stay disabled unless explicitly enabled."""
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(_ENV_FILE) if _ENV_FILE.is_file() else None,
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
+        populate_by_name=True,
     )
 
     allow_paid_apis: bool = Field(default=False)
@@ -65,7 +70,14 @@ class Settings(BaseSettings):
     quality_ping_local: bool = Field(default=False)
     app_env: str = Field(default="development")
     api_session_secret: SecretStr | None = Field(default=None)
-    api_cors_origins: str = Field(default="")
+    api_cors_origins: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "API_CORS_ORIGINS",
+            "CORS_ALLOWED_ORIGINS",
+            "api_cors_origins",
+        ),
+    )
     telegram_bot_token: SecretStr | None = Field(default=None)
     telegram_bot_username: str = Field(default="")
     telegram_mini_app_url: str = Field(default="")
@@ -193,8 +205,36 @@ def _secret(settings: Settings, field: str) -> str:
     return secret.get_secret_value().strip()
 
 
-def validate_runtime_settings(settings: Settings) -> None:
-    """Fail fast on illegal production payment/generation combinations."""
+def api_bind_address(
+    *,
+    host: str | None = None,
+    port: int | None = None,
+    app_env: str = "development",
+    port_env: str | None = None,
+) -> tuple[str, int]:
+    """Local default 127.0.0.1:8000. Railway PORT binds 0.0.0.0."""
+    env = app_env.strip().lower()
+    injected = port_env if port_env is not None else os.environ.get("PORT", "")
+    bind_port = int(port if port is not None else (str(injected).strip() or "8000"))
+    if host:
+        bind_host = host
+    elif env == "production" or bool(str(injected).strip()):
+        bind_host = "0.0.0.0"
+    else:
+        bind_host = "127.0.0.1"
+    return bind_host, bind_port
+
+
+def cors_origin_list(raw: str) -> list[str]:
+    return [part.strip().rstrip("/") for part in raw.split(",") if part.strip()]
+
+
+def validate_runtime_settings(settings: Settings, *, role: str = "api") -> None:
+    """Fail fast on illegal production payment/generation combinations.
+
+    role=api applies webhook, session, and CORS checks.
+    role=worker skips those API-only requirements.
+    """
     env = settings.app_env.strip().lower()
     payment = settings.payment_mode.strip().lower() or "simulated"
     generation = settings.generation_mode.strip().lower() or "mock"
@@ -204,18 +244,32 @@ def validate_runtime_settings(settings: Settings) -> None:
         raise RuntimeError("ALLOW_PAID_GENERATION must be false until Phase 16.")
     if env in {"development", "test"}:
         return
+    if settings.allow_paid_apis:
+        raise RuntimeError("ALLOW_PAID_APIS must be false until Phase 16.")
     if payment == "simulated":
         raise RuntimeError("PAYMENT_MODE=simulated is not allowed in production.")
     if payment == "fake":
         raise RuntimeError("PAYMENT_MODE=fake is test-only.")
     if payment != "telegram":
         raise RuntimeError("PAYMENT_MODE must be telegram in production.")
+    persistence = (settings.product_persistence or "").strip().lower()
+    if persistence != "postgres":
+        raise RuntimeError("PRODUCT_PERSISTENCE must be postgres in production.")
+    if not settings.database_url.strip():
+        raise RuntimeError("DATABASE_URL is required in production.")
     if not _secret(settings, "telegram_bot_token"):
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required for PAYMENT_MODE=telegram.")
     url = settings.telegram_mini_app_url.strip()
     if not url.startswith("https://"):
         raise RuntimeError("TELEGRAM_MINI_APP_URL must be https in production.")
+    if role == "worker":
+        return
     if not _secret(settings, "api_session_secret"):
         raise RuntimeError("API_SESSION_SECRET is required in production.")
     if not _secret(settings, "telegram_webhook_secret"):
         raise RuntimeError("TELEGRAM_WEBHOOK_SECRET is required in production.")
+    origins = cors_origin_list(settings.api_cors_origins)
+    if not origins:
+        raise RuntimeError("CORS_ALLOWED_ORIGINS is required in production.")
+    if "*" in origins:
+        raise RuntimeError("CORS wildcard origins are not allowed with credentialed cookies.")
