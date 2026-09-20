@@ -7,6 +7,7 @@ import { IS_DEV } from "@/lib/config";
 import { ClientError } from "@/lib/errors";
 import { formatDuration, lineItemLabel } from "@/lib/format";
 import { hapticSuccess } from "@/lib/haptics";
+import { settleQuote } from "@/lib/pay";
 import type { Character, Plan, Project, Quote } from "@/lib/types";
 
 export function CreateReviewScreen({ projectId }: { projectId: string }) {
@@ -17,6 +18,7 @@ export function CreateReviewScreen({ projectId }: { projectId: string }) {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [payState, setPayState] = useState("UNPAID");
   const [details, setDetails] = useState(false);
 
   useEffect(() => {
@@ -26,7 +28,26 @@ export function CreateReviewScreen({ projectId }: { projectId: string }) {
         setCharacters(c);
       })
       .catch((err) => setError(err instanceof ClientError ? err.message : "Could not load."));
+    client
+      .latestQuote(projectId)
+      .then((row) => {
+        setQuote(row.quote);
+        setPlan(row.plan);
+        setPayState(row.payment_status);
+      })
+      .catch(() => undefined);
   }, [projectId]);
+
+  useEffect(() => {
+    if (!quote || payState === "PAID" || payState === "EXPIRED") return;
+    const timer = window.setInterval(() => {
+      client
+        .paymentStatus(quote.quote_id)
+        .then((row) => setPayState(row.status))
+        .catch(() => undefined);
+    }, 2500);
+    return () => window.clearInterval(timer);
+  }, [quote, payState]);
 
   async function calculate() {
     setBusy(true);
@@ -36,6 +57,8 @@ export function CreateReviewScreen({ projectId }: { projectId: string }) {
       const nextQuote = await client.quote(projectId, nextPlan.plan_id);
       setPlan(nextPlan);
       setQuote(nextQuote);
+      const paid = await client.paymentStatus(nextQuote.quote_id).catch(() => ({ status: "UNPAID" }));
+      setPayState(paid.status);
     } catch (err) {
       setError(err instanceof ClientError ? err.message : "Could not calculate price.");
     } finally {
@@ -45,13 +68,13 @@ export function CreateReviewScreen({ projectId }: { projectId: string }) {
 
   async function generate() {
     if (!quote) return;
-    if (!window.confirm("Simulated payment only. No real Telegram Stars will be charged. Continue?")) {
+    if (IS_DEV && !window.confirm("Simulated payment only. No real Telegram Stars will be charged. Continue?")) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      await client.confirmPayment(quote.quote_id);
+      await settleQuote(quote.quote_id);
       hapticSuccess();
       const job = await client.generate(projectId, quote.quote_id);
       if (IS_DEV) {
@@ -90,7 +113,9 @@ export function CreateReviewScreen({ projectId }: { projectId: string }) {
           <p>Images {plan?.image_generations}</p>
           <p>Voice included · Music included</p>
           <div className="stars">{quote.stars} ⭐</div>
-          <div className="sim">Simulated payment</div>
+          {IS_DEV ? <div className="sim">Simulated payment</div> : <p className="lede">Pay with Telegram Stars. The server confirms payment.</p>}
+          {payState === "PAID" ? <p className="ok">Paid</p> : null}
+          {payState === "PENDING" ? <p className="lede">Payment pending…</p> : null}
           <button className="btn ghost" style={{ marginTop: 12 }} onClick={() => setDetails(!details)}>
             {details ? "Hide details" : "View details"}
           </button>
@@ -106,7 +131,7 @@ export function CreateReviewScreen({ projectId }: { projectId: string }) {
       {error ? <p className="error">{error}</p> : null}
       {quote ? (
         <button className="btn primary" data-testid="generate" disabled={busy} onClick={generate}>
-          {busy ? "Starting…" : "Generate Video"}
+          {busy ? "Starting…" : IS_DEV ? "Generate Video" : payState === "PAID" ? "Generate Video" : "Pay with Telegram Stars"}
         </button>
       ) : null}
     </>

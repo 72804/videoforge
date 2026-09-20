@@ -5,7 +5,8 @@ import { client } from "@/lib/api";
 import { IS_DEV } from "@/lib/config";
 import { ClientError } from "@/lib/errors";
 import { clearSession, getToken, getUserJson, saveSession } from "@/lib/session";
-import { applyTelegramTheme, telegram } from "@/lib/telegram";
+import { applyTelegramChrome, telegram } from "@/lib/telegram";
+import { applyAppearance } from "@/lib/theme";
 import { BottomNav } from "./BottomNav";
 import type { User } from "@/lib/types";
 
@@ -19,7 +20,8 @@ export function AuthGate({ children }: { children: ReactNode }) {
     const webapp = telegram();
     webapp?.ready();
     webapp?.expand();
-    applyTelegramTheme(webapp);
+    applyAppearance();
+    applyTelegramChrome(webapp);
     const stored = getToken();
     if (stored && getUserJson()) {
       setUser(JSON.parse(getUserJson() || "null"));

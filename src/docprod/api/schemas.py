@@ -28,6 +28,9 @@ class HealthResponse(BaseModel):
 class ReadyResponse(BaseModel):
     status: str = "ok"
     database: str | None = None
+    payment_mode: str | None = None
+    generation_mode: str | None = None
+    allow_paid_generation: bool | None = None
 
 
 class AuthRequest(BaseModel):

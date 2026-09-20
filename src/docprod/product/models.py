@@ -15,6 +15,7 @@ from docprod.product.enums import (
     JobStatus,
     LedgerStatus,
     OutboxStatus,
+    PaymentIntentStatus,
     PaymentStatus,
     PlanItemType,
     ProjectStatus,
@@ -316,6 +317,24 @@ class TelegramPayment(BaseModel):
     stars: int
     status: PaymentStatus = PaymentStatus.CREATED
     invoice_payload: str = ""
+    refund_status: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class PaymentIntent(BaseModel):
+    """Opaque Stars invoice mapping. Telegram payload is this id only."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=new_id)
+    user_id: str
+    quote_id: str
+    project_id: str
+    plan_hash: str
+    stars: int
+    invoice_url: str = ""
+    status: PaymentIntentStatus = PaymentIntentStatus.OPEN
+    telegram_payment_charge_id: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 

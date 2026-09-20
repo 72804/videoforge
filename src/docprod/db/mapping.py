@@ -16,6 +16,7 @@ from docprod.product.models import (
     GenerationPlanItem,
     IdempotencyRecord,
     NotificationOutbox,
+    PaymentIntent,
     Project,
     Render,
     Scene,
@@ -199,6 +200,14 @@ def payment_from_row(row: orm.TelegramPaymentRow) -> TelegramPayment:
     return TelegramPayment.model_validate(row_dict(row))
 
 
+def intent_to_row(intent: PaymentIntent) -> orm.PaymentIntentRow:
+    return orm.PaymentIntentRow(**_dump(intent))
+
+
+def intent_from_row(row: orm.PaymentIntentRow) -> PaymentIntent:
+    return PaymentIntent.model_validate(row_dict(row))
+
+
 def outbox_to_row(note: NotificationOutbox) -> orm.NotificationOutboxRow:
     return orm.NotificationOutboxRow(**_dump(note, kind="event_type", attempts="attempt_count"))
 
@@ -260,6 +269,7 @@ FLUSH_ORDER: list[tuple[str, type, Callable[[Any], Any], Callable[[Any], Any]]] 
     ("asset_versions", orm.AssetVersionRow, asset_version_to_row, asset_version_from_row),
     ("plans", orm.GenerationPlanRow, plan_to_row, plan_from_row),
     ("quotes", orm.StarQuoteRow, quote_to_row, quote_from_row),
+    ("intents", orm.PaymentIntentRow, intent_to_row, intent_from_row),
     ("payments", orm.TelegramPaymentRow, payment_to_row, payment_from_row),
     ("jobs", orm.GenerationJobRow, job_to_row, job_from_row),
     ("attempts", orm.GenerationAttemptRow, attempt_to_row, attempt_from_row),

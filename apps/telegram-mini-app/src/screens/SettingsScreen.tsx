@@ -2,16 +2,36 @@
 
 import { useState } from "react";
 import { IS_DEV } from "@/lib/config";
+import { getAppearance, setAppearance, type Appearance } from "@/lib/theme";
 
 export function SettingsScreen() {
   const [language, setLanguage] = useState("en");
   const [aspect, setAspect] = useState("9:16");
   const [quality, setQuality] = useState("balanced");
+  const [appearance, setAppearanceState] = useState<Appearance>(getAppearance);
   const [saved, setSaved] = useState(false);
 
   return (
     <>
       <h1>Settings</h1>
+      <div className="field">
+        <label>Appearance</label>
+        <div className="chip-row">
+          {(["dark", "light", "system"] as Appearance[]).map((id) => (
+            <button
+              key={id}
+              className={`chip ${appearance === id ? "on" : ""}`}
+              data-testid={`appearance-${id}`}
+              onClick={() => {
+                setAppearance(id);
+                setAppearanceState(id);
+              }}
+            >
+              {id[0].toUpperCase() + id.slice(1)}
+            </button>
+          ))}
+        </div>
+      </div>
       <div className="field">
         <label htmlFor="language">Language</label>
         <select id="language" value={language} onChange={(e) => setLanguage(e.target.value)}>

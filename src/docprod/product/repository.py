@@ -17,6 +17,7 @@ from docprod.product.models import (
     GenerationPlan,
     IdempotencyRecord,
     NotificationOutbox,
+    PaymentIntent,
     Project,
     Render,
     Scene,
@@ -78,6 +79,7 @@ class MemoryRepository:
         self.txn_by_idempotency: dict[str, str] = {}
         self.payments: dict[str, TelegramPayment] = {}
         self.payments_by_telegram: dict[str, str] = {}
+        self.intents: dict[str, PaymentIntent] = {}
         self.outbox: dict[str, NotificationOutbox] = {}
         self.idempotency: dict[str, IdempotencyRecord] = {}
         self.workers: dict[str, WorkerHeartbeat] = {}

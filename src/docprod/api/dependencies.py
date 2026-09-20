@@ -10,6 +10,7 @@ from docprod.product.errors import AuthError
 from docprod.product.models import TelegramUser
 from docprod.product.services import ProductService
 from docprod.product.worker import MockGenerationWorker
+from docprod.telegram.client import TelegramClient
 
 
 @dataclass
@@ -19,6 +20,11 @@ class AppContext:
     env: str
     worker: MockGenerationWorker
     cors_origins: list[str]
+    telegram: TelegramClient
+    payment_mode: str = "simulated"
+    generation_mode: str = "mock"
+    webhook_secret: str = ""
+    mini_app_url: str = ""
 
 
 def get_ctx(request: Request) -> AppContext:

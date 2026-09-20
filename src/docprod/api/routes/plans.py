@@ -22,19 +22,7 @@ from docprod.product.services import ProductService
 router = APIRouter(tags=["planning"])
 
 
-@router.post("/projects/{project_id}/plan", response_model=PlanView, operation_id="planProject")
-def plan_project(
-    project_id: str,
-    body: PlanRequest,
-    user: TelegramUser = Depends(current_user),
-    service: ProductService = Depends(get_service),
-) -> PlanView:
-    try:
-        plan = service.plan_project(
-            user.id, project_id, kind=body.kind, scene_id=body.scene_id
-        )
-    except ProductError as exc:
-        raise map_product_error(exc) from exc
+def plan_view(service: ProductService, project_id: str, plan) -> PlanView:
     counts = {item.type: item.quantity for item in plan.items}
     duration = sum(v.duration_seconds for v in service.repo.active_versions(project_id))
     return PlanView(
@@ -61,6 +49,22 @@ def plan_project(
     )
 
 
+@router.post("/projects/{project_id}/plan", response_model=PlanView, operation_id="planProject")
+def plan_project(
+    project_id: str,
+    body: PlanRequest,
+    user: TelegramUser = Depends(current_user),
+    service: ProductService = Depends(get_service),
+) -> PlanView:
+    try:
+        plan = service.plan_project(
+            user.id, project_id, kind=body.kind, scene_id=body.scene_id
+        )
+    except ProductError as exc:
+        raise map_product_error(exc) from exc
+    return plan_view(service, project_id, plan)
+
+
 @router.post("/projects/{project_id}/quote", response_model=QuoteView, operation_id="quoteProject")
 def quote_project(
     project_id: str,
@@ -79,6 +83,38 @@ def quote_project(
         expires_at=quote.expires_at.isoformat(),
         status=quote.status.value,
     )
+
+
+@router.get("/projects/{project_id}/latest-quote", operation_id="latestQuote")
+def latest_quote(
+    project_id: str,
+    user: TelegramUser = Depends(current_user),
+    service: ProductService = Depends(get_service),
+) -> dict:
+    from docprod.product.errors import NotFoundError
+    from docprod.telegram.payments import customer_payment_status
+
+    try:
+        service._require_project(user.id, project_id)
+        quotes = [q for q in service.repo.quotes.values() if q.project_id == project_id]
+        if not quotes:
+            raise NotFoundError("quote not found")
+        quote = max(quotes, key=lambda q: q.created_at)
+        plan = service.repo.plans[quote.generation_plan_id]
+        status = customer_payment_status(service, user.id, quote.id)
+    except ProductError as exc:
+        raise map_product_error(exc) from exc
+    return {
+        "quote": QuoteView(
+            quote_id=quote.id,
+            plan_hash=quote.generation_plan_hash,
+            stars=quote.stars,
+            expires_at=quote.expires_at.isoformat(),
+            status=quote.status.value,
+        ).model_dump(),
+        "plan": plan_view(service, project_id, plan).model_dump(),
+        "payment_status": status,
+    }
 
 
 @router.post(

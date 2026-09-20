@@ -98,6 +98,10 @@ export const client = {
       method: "POST",
       json: { kind, scene_id: scene_id ?? null },
     }),
+  latestQuote: (projectId: string) =>
+    api<{ quote: Quote; plan: Plan; payment_status: string }>(
+      `/api/v1/projects/${projectId}/latest-quote`,
+    ),
   quote: (projectId: string, plan_id: string) =>
     api<Quote>(`/api/v1/projects/${projectId}/quote`, { method: "POST", json: { plan_id } }),
   confirmPayment: (quoteId: string) =>
@@ -105,6 +109,13 @@ export const client = {
       method: "POST",
       idempotency: `pay-${quoteId}`,
     }),
+  createInvoice: (quoteId: string) =>
+    api<{ invoice_url: string; stars: number; currency: string }>(
+      `/api/v1/quotes/${quoteId}/telegram-invoice`,
+      { method: "POST" },
+    ),
+  paymentStatus: (quoteId: string) =>
+    api<{ quote_id: string; status: string }>(`/api/v1/quotes/${quoteId}/payment-status`),
   generate: (projectId: string, quote_id: string, kind = "full_project", scene_id?: string) =>
     api<{ job_id: string; status: string }>(`/api/v1/projects/${projectId}/generate`, {
       method: "POST",

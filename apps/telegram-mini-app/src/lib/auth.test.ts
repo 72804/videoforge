@@ -11,5 +11,13 @@ describe("auth bootstrap source", () => {
     expect(gate).toContain("authTelegram(init)");
     expect(gate).toContain("devAuth");
     expect(gate).not.toContain("initDataUnsafe");
+    expect(gate).toContain("IS_DEV");
+  });
+
+  it("does not treat missing Telegram object as permission for Dev login", () => {
+    const gate = readFileSync(path.join(__dirname, "../components/AuthGate.tsx"), "utf8");
+    const config = readFileSync(path.join(__dirname, "config.ts"), "utf8");
+    expect(config).toContain('APP_ENV === "development"');
+    expect(gate).toContain("{IS_DEV ?");
   });
 });

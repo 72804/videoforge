@@ -106,6 +106,17 @@ class PaymentStatus(StrEnum):
     CONFIRMED = "CONFIRMED"
     FAILED = "FAILED"
     DUPLICATE = "DUPLICATE"
+    REFUND_PENDING = "REFUND_PENDING"
+    REFUNDED = "REFUNDED"
+    REFUND_FAILED = "REFUND_FAILED"
+
+
+class PaymentIntentStatus(StrEnum):
+    OPEN = "OPEN"
+    PENDING = "PENDING"
+    PAID = "PAID"
+    EXPIRED = "EXPIRED"
+    CANCELLED = "CANCELLED"
 
 
 class BillingMechanism(StrEnum):

@@ -1,18 +1,36 @@
 import { describe, expect, it } from "vitest";
-import { applyTelegramTheme } from "./telegram";
+import { applyTelegramChrome } from "./telegram";
+import { getAppearance, resolvedTheme, setAppearance } from "./theme";
 
-describe("telegram theme", () => {
-  it("applies dark fallback when no webapp", () => {
-    applyTelegramTheme(null);
-    expect(document.documentElement.dataset.theme).toBe("dark");
-  });
+function memoryStorage() {
+  const data = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => data.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      data.set(key, value);
+    },
+    removeItem: (key: string) => {
+      data.delete(key);
+    },
+    clear: () => data.clear(),
+    key: (index: number) => [...data.keys()][index] ?? null,
+    get length() {
+      return data.size;
+    },
+  };
+  Object.defineProperty(globalThis, "localStorage", { value: storage, configurable: true });
+  if (typeof window !== "undefined") {
+    Object.defineProperty(window, "localStorage", { value: storage, configurable: true });
+  }
+}
 
-  it("applies Telegram light scheme", () => {
-    applyTelegramTheme({
+describe("appearance", () => {
+  it("defaults to dark even if Telegram reports light", () => {
+    applyTelegramChrome({
       initData: "query_id=1",
       initDataUnsafe: { user: { id: 99 } },
       colorScheme: "light",
-      themeParams: { bg_color: "#ffffff", text_color: "#111111" },
+      themeParams: { bg_color: "#ffffff" },
       ready: () => undefined,
       expand: () => undefined,
       BackButton: { show() {}, hide() {}, onClick() {}, offClick() {} },
@@ -26,7 +44,16 @@ describe("telegram theme", () => {
         offClick() {},
       },
     });
-    expect(document.documentElement.dataset.theme).toBe("light");
-    expect(document.documentElement.style.getPropertyValue("--tg-bg")).toBe("#ffffff");
+    expect(resolvedTheme("dark", false)).toBe("dark");
+    expect(document.documentElement.dataset.theme).not.toBe("light");
+  });
+
+  it("persists Light and System", () => {
+    memoryStorage();
+    expect(getAppearance()).toBe("dark");
+    setAppearance("light");
+    expect(getAppearance()).toBe("light");
+    expect(resolvedTheme("system", true)).toBe("dark");
+    expect(resolvedTheme("system", false)).toBe("light");
   });
 });

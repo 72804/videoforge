@@ -24,6 +24,7 @@ export type TelegramWebApp = {
     notificationOccurred: (type: "error" | "success" | "warning") => void;
     impactOccurred: (style: "light" | "medium" | "heavy") => void;
   };
+  openInvoice?: (url: string, callback?: (status: string) => void) => void;
 };
 
 export function telegram(): TelegramWebApp | null {
@@ -33,19 +34,14 @@ export function telegram(): TelegramWebApp | null {
   return webapp || null;
 }
 
-export function applyTelegramTheme(webapp: TelegramWebApp | null): void {
+export function applyTelegramChrome(webapp: TelegramWebApp | null): void {
   if (typeof document === "undefined") return;
-  const root = document.documentElement;
   const params = webapp?.themeParams || {};
   const set = (name: string, value?: string) => {
-    if (value) root.style.setProperty(name, value);
+    if (value) document.documentElement.style.setProperty(name, value);
   };
-  set("--tg-bg", params.bg_color);
-  set("--tg-text", params.text_color);
-  set("--tg-hint", params.hint_color);
-  set("--tg-link", params.link_color);
   set("--tg-button", params.button_color);
   set("--tg-button-text", params.button_text_color);
-  set("--tg-secondary", params.secondary_bg_color);
-  root.dataset.theme = webapp?.colorScheme === "light" ? "light" : "dark";
+  set("--tg-hint", params.hint_color);
+  set("--tg-link", params.link_color);
 }

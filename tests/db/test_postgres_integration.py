@@ -88,6 +88,8 @@ def test_alembic_upgrade_head(monkeypatch: pytest.MonkeyPatch) -> None:
     url = _url()
     engine = create_engine(url, future=True)
     Base.metadata.drop_all(engine)
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
     engine.dispose()
     monkeypatch.setenv("DATABASE_URL", url)
     cfg = Config("alembic.ini")

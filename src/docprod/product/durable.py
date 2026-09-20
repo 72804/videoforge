@@ -25,13 +25,20 @@ class DurableGenerationWorker:
         poll_seconds: float = 1.0,
         lease_seconds: int = 30,
         sender: MockNotificationSender | None = None,
+        generation_mode: str = "mock",
+        allow_paid_generation: bool = False,
     ) -> None:
         self.service = service
         self.worker_id = worker_id
         self.poll_seconds = max(poll_seconds, 0.05)
         self.lease = timedelta(seconds=lease_seconds)
         self.sender = sender or MockNotificationSender()
-        self.mock = MockGenerationWorker(service, worker_id=worker_id)
+        self.mock = MockGenerationWorker(
+            service,
+            worker_id=worker_id,
+            generation_mode=generation_mode,
+            allow_paid_generation=allow_paid_generation,
+        )
         self.mock.lease = self.lease
         self.stop = False
 

@@ -50,6 +50,8 @@ def build_product_service(
         build_repository(settings, store=store),
         storage=build_storage(settings, store=store),
         bot_token=token,
-        limits=ProductLimits(),
+        limits=ProductLimits(
+            init_data_max_age_seconds=settings.telegram_init_data_max_age_seconds
+        ),
         pricing=PricingPolicy(),
     )

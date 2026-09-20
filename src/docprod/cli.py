@@ -2737,6 +2737,9 @@ def telegram_worker() -> None:
     from docprod.product.factory import build_product_service
 
     settings = get_settings()
+    from docprod.config import validate_runtime_settings
+
+    validate_runtime_settings(settings)
     configure_logging(settings)
     service = build_product_service(settings)
     worker_id = settings.worker_id.strip() or f"worker-{os.getpid()}"
@@ -2745,10 +2748,100 @@ def telegram_worker() -> None:
         worker_id=worker_id,
         poll_seconds=settings.worker_poll_seconds,
         lease_seconds=settings.job_lease_seconds,
+        sender=_worker_sender(settings),
+        generation_mode=settings.generation_mode.strip().lower() or "mock",
+        allow_paid_generation=settings.allow_paid_generation,
     ).run_forever()
 
 
-@app.command("telegram-product-import-json")
+def _worker_sender(settings):
+    from docprod.product.notifications import MockNotificationSender, TelegramNotificationSender
+    from docprod.telegram.client import HttpxTelegramClient
+
+    token = ""
+    if settings.telegram_bot_token is not None:
+        token = settings.telegram_bot_token.get_secret_value().strip()
+    if not token:
+        return MockNotificationSender()
+    return TelegramNotificationSender(
+        HttpxTelegramClient(token),
+        mini_app_url=settings.telegram_mini_app_url.strip(),
+    )
+
+
+@app.command("telegram-bot")
+def telegram_bot() -> None:
+    """Long-poll Telegram updates. Do not run together with a webhook for the same bot."""
+    from docprod.product.factory import build_product_service
+    from docprod.telegram.client import HttpxTelegramClient
+    from docprod.telegram.updates import dispatch_update
+
+    settings = get_settings()
+    from docprod.config import validate_runtime_settings
+
+    validate_runtime_settings(settings)
+    token = ""
+    if settings.telegram_bot_token is not None:
+        token = settings.telegram_bot_token.get_secret_value().strip()
+    if not token:
+        console.print("TELEGRAM_BOT_TOKEN is required")
+        raise typer.Exit(code=1)
+    telegram = HttpxTelegramClient(token)
+    telegram.set_webhook("")
+    service = build_product_service(settings)
+    console.print("Polling Telegram updates")
+    offset = 0
+    while True:
+        updates = telegram.get_updates(offset=offset, timeout=25)
+        for update in updates:
+            offset = int(update.get("update_id", offset)) + 1
+            dispatch_update(
+                service,
+                telegram,
+                update,
+                mini_app_url=settings.telegram_mini_app_url.strip(),
+            )
+
+
+@app.command("telegram-webhook-set")
+def telegram_webhook_set() -> None:
+    """Configure the Telegram webhook URL and secret. Never prints the bot token."""
+    from docprod.telegram.client import HttpxTelegramClient
+
+    settings = get_settings()
+    token = ""
+    if settings.telegram_bot_token is not None:
+        token = settings.telegram_bot_token.get_secret_value().strip()
+    secret = (
+        settings.telegram_webhook_secret.get_secret_value().strip()
+        if settings.telegram_webhook_secret
+        else ""
+    )
+    url = settings.telegram_webhook_url.strip()
+    if not token or not url:
+        console.print("TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_URL are required")
+        raise typer.Exit(code=1)
+    client = HttpxTelegramClient(token)
+    info = client.set_webhook(url, secret_token=secret)
+    console.print(f"webhook url={info.get('url', url)}")
+
+
+@app.command("telegram-webhook-info")
+def telegram_webhook_info() -> None:
+    from docprod.telegram.client import HttpxTelegramClient
+
+    settings = get_settings()
+    token = ""
+    if settings.telegram_bot_token is not None:
+        token = settings.telegram_bot_token.get_secret_value().strip()
+    if not token:
+        console.print("TELEGRAM_BOT_TOKEN is required")
+        raise typer.Exit(code=1)
+    info = HttpxTelegramClient(token).webhook_info()
+    console.print(f"url={info.get('url', '')}")
+    console.print(f"pending={info.get('pending_update_count', 0)}")
+
+
 def telegram_product_import_json(
     store: Path = typer.Option(Path("product_data/store.json"), "--store"),
 ) -> None:

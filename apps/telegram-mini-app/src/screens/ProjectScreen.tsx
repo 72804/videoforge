@@ -8,6 +8,7 @@ import { IS_DEV } from "@/lib/config";
 import { ClientError } from "@/lib/errors";
 import { formatDuration, statusLabel } from "@/lib/format";
 import { hapticSuccess } from "@/lib/haptics";
+import { settleQuote } from "@/lib/pay";
 import type { Project, Scene } from "@/lib/types";
 
 export function ProjectScreen({ projectId }: { projectId: string }) {
@@ -35,7 +36,7 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
     try {
       const plan = await client.plan(projectId, "render");
       const quote = await client.quote(projectId, plan.plan_id);
-      await client.confirmPayment(quote.quote_id);
+      await settleQuote(quote.quote_id);
       setRendering("Rendering…");
       const job = await client.render(projectId, quote.quote_id);
       if (IS_DEV) await client.runWorker(job.job_id);

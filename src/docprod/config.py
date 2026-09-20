@@ -67,6 +67,14 @@ class Settings(BaseSettings):
     api_session_secret: SecretStr | None = Field(default=None)
     api_cors_origins: str = Field(default="")
     telegram_bot_token: SecretStr | None = Field(default=None)
+    telegram_bot_username: str = Field(default="")
+    telegram_mini_app_url: str = Field(default="")
+    telegram_webhook_url: str = Field(default="")
+    telegram_webhook_secret: SecretStr | None = Field(default=None)
+    telegram_init_data_max_age_seconds: int = Field(default=86400)
+    payment_mode: str = Field(default="simulated")
+    generation_mode: str = Field(default="mock")
+    allow_paid_generation: bool = Field(default=False)
     product_store_path: str = Field(default="")
     database_url: str = Field(default="")
     product_persistence: str = Field(default="json")
@@ -176,3 +184,38 @@ def require_gemini_api_key(settings: Settings | None = None) -> str:
             "GEMINI_API_KEY is not set. Add it to .env (never commit the file)."
         )
     return cfg.gemini_api_key.get_secret_value()  # type: ignore[union-attr]
+
+
+def _secret(settings: Settings, field: str) -> str:
+    secret = getattr(settings, field)
+    if secret is None:
+        return ""
+    return secret.get_secret_value().strip()
+
+
+def validate_runtime_settings(settings: Settings) -> None:
+    """Fail fast on illegal production payment/generation combinations."""
+    env = settings.app_env.strip().lower()
+    payment = settings.payment_mode.strip().lower() or "simulated"
+    generation = settings.generation_mode.strip().lower() or "mock"
+    if generation != "mock":
+        raise RuntimeError("GENERATION_MODE must be mock until paid adapters are enabled.")
+    if settings.allow_paid_generation:
+        raise RuntimeError("ALLOW_PAID_GENERATION must be false until Phase 16.")
+    if env in {"development", "test"}:
+        return
+    if payment == "simulated":
+        raise RuntimeError("PAYMENT_MODE=simulated is not allowed in production.")
+    if payment == "fake":
+        raise RuntimeError("PAYMENT_MODE=fake is test-only.")
+    if payment != "telegram":
+        raise RuntimeError("PAYMENT_MODE must be telegram in production.")
+    if not _secret(settings, "telegram_bot_token"):
+        raise RuntimeError("TELEGRAM_BOT_TOKEN is required for PAYMENT_MODE=telegram.")
+    url = settings.telegram_mini_app_url.strip()
+    if not url.startswith("https://"):
+        raise RuntimeError("TELEGRAM_MINI_APP_URL must be https in production.")
+    if not _secret(settings, "api_session_secret"):
+        raise RuntimeError("API_SESSION_SECRET is required in production.")
+    if not _secret(settings, "telegram_webhook_secret"):
+        raise RuntimeError("TELEGRAM_WEBHOOK_SECRET is required in production.")

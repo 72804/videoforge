@@ -20,6 +20,7 @@ from docprod.api.routes import (
     projects,
     renders,
     scenes,
+    stars,
     usage,
 )
 from docprod.api.schemas import HealthResponse, ReadyResponse
@@ -32,6 +33,7 @@ from docprod.product.persist import load_repository_file, save_repository
 from docprod.product.services import ProductService
 from docprod.product.storage import LocalStorageBackend, MemoryStorageBackend
 from docprod.product.worker import MockGenerationWorker
+from docprod.telegram.client import FakeTelegramClient, HttpxTelegramClient, TelegramClient
 
 
 def create_app(
@@ -42,6 +44,12 @@ def create_app(
     cors_origins: list[str] | None = None,
     persist_path: Path | None = None,
     session_secret: str = "dev-session-secret-not-for-production",
+    telegram: TelegramClient | None = None,
+    payment_mode: str = "simulated",
+    generation_mode: str = "mock",
+    webhook_secret: str = "",
+    mini_app_url: str = "",
+    allow_paid_generation: bool = False,
 ) -> FastAPI:
     if service is None:
         repo = load_repository_file(persist_path) if persist_path else None
@@ -50,7 +58,11 @@ def create_app(
             blob_root = persist_path.parent / "blobs"
             storage = LocalStorageBackend(blob_root)
         service = ProductService(repo, storage=storage)
-    worker = MockGenerationWorker(service)
+    worker = MockGenerationWorker(
+        service,
+        generation_mode=generation_mode,
+        allow_paid_generation=allow_paid_generation,
+    )
     origins = list(cors_origins or [])
     if env in {"development", "test"} and not origins:
         origins = ["http://127.0.0.1:3000", "http://localhost:3000"]
@@ -60,6 +72,11 @@ def create_app(
         env=env,
         worker=worker,
         cors_origins=origins,
+        telegram=telegram or FakeTelegramClient(),
+        payment_mode=payment_mode,
+        generation_mode=generation_mode,
+        webhook_secret=webhook_secret,
+        mini_app_url=mini_app_url,
     )
     app = FastAPI(
         title="Docprod Telegram Mini App API",
@@ -158,7 +175,15 @@ def create_app(
                 status_code=503,
                 content=ReadyResponse(status="unavailable", database="unavailable").model_dump(),
             )
-        return JSONResponse(content=ReadyResponse(status="ok", database=body.database).model_dump())
+        return JSONResponse(
+            content=ReadyResponse(
+                status="ok",
+                database=body.database,
+                payment_mode=ctx.payment_mode,
+                generation_mode=ctx.generation_mode,
+                allow_paid_generation=False,
+            ).model_dump()
+        )
 
     prefix = "/api/v1"
     app.include_router(auth.router, prefix=prefix)
@@ -170,8 +195,33 @@ def create_app(
     app.include_router(renders.router, prefix=prefix)
     app.include_router(models.router, prefix=prefix)
     app.include_router(usage.router, prefix=prefix)
+    app.include_router(stars.router, prefix=prefix)
     if env in {"development", "test"}:
         app.include_router(payments_dev.router, prefix=prefix)
+
+    @app.post("/telegram/webhook", tags=["telegram"], operation_id="telegramWebhook")
+    async def telegram_webhook(request: Request) -> dict[str, bool]:
+        import hmac
+
+        from docprod.telegram.updates import dispatch_update
+
+        secret = ctx.webhook_secret
+        header = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+        if ctx.env == "production" and not secret:
+            raise HTTPException(status_code=401, detail="webhook secret required")
+        if secret and not hmac.compare_digest(header, secret):
+            raise HTTPException(status_code=401, detail="invalid webhook secret")
+        try:
+            payload = await request.json()
+        except Exception:
+            return {"ok": True}
+        if not isinstance(payload, dict):
+            return {"ok": True}
+        try:
+            dispatch_update(ctx.service, ctx.telegram, payload, mini_app_url=ctx.mini_app_url)
+        except Exception:
+            return {"ok": True}
+        return {"ok": True}
 
     @app.post("/api/v1/dev/jobs/{job_id}/run", tags=["dev-payments"], operation_id="devRunJob")
     def run_job(job_id: str) -> dict[str, str]:
@@ -185,9 +235,11 @@ def create_app(
 
 
 def app_from_settings() -> FastAPI:
-    from docprod.config import get_settings
+    from docprod.config import get_settings, validate_runtime_settings
+    from docprod.logging_utils import get_logger
 
     settings = get_settings()
+    validate_runtime_settings(settings)
     env = getattr(settings, "app_env", "development")
     secret = "dev-session-secret-not-for-production"
     if settings.api_session_secret is not None:
@@ -199,12 +251,36 @@ def app_from_settings() -> FastAPI:
     store = Path(settings.product_store_path) if settings.product_store_path else default_store
     persist = store if persistence_mode(settings) == "json" else None
     service = build_product_service(settings, store=store)
+    token = ""
+    if settings.telegram_bot_token is not None:
+        token = settings.telegram_bot_token.get_secret_value().strip()
+    webhook_secret = ""
+    if settings.telegram_webhook_secret is not None:
+        webhook_secret = settings.telegram_webhook_secret.get_secret_value().strip()
+    payment_mode = settings.payment_mode.strip().lower() or "simulated"
+    if payment_mode in {"telegram", "fake"} and token:
+        telegram: TelegramClient = HttpxTelegramClient(token)
+    else:
+        telegram = FakeTelegramClient()
+    log = get_logger("api")
+    log.info(
+        "Payment mode: %s | Generation mode: %s | ALLOW_PAID_GENERATION=%s",
+        payment_mode,
+        settings.generation_mode,
+        settings.allow_paid_generation,
+    )
     return create_app(
         service=service,
         env=env,
         cors_origins=origins,
         persist_path=persist,
         session_secret=secret,
+        telegram=telegram,
+        payment_mode=payment_mode,
+        generation_mode=settings.generation_mode.strip().lower() or "mock",
+        webhook_secret=webhook_secret,
+        mini_app_url=settings.telegram_mini_app_url.strip(),
+        allow_paid_generation=settings.allow_paid_generation,
     )
 
 

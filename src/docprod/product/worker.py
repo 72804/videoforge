@@ -32,10 +32,22 @@ def _log():
 class MockGenerationWorker:
     """Advances jobs through real states with local mock bytes. No network."""
 
-    def __init__(self, service: ProductService, worker_id: str = "inline") -> None:
+    def __init__(
+        self,
+        service: ProductService,
+        worker_id: str = "inline",
+        *,
+        generation_mode: str = "mock",
+        allow_paid_generation: bool = False,
+    ) -> None:
+        if allow_paid_generation:
+            raise ProductError("ALLOW_PAID_GENERATION is false for this phase")
+        if generation_mode != "mock":
+            raise ProductError("GENERATION_MODE must be mock")
         self.service = service
         self.worker_id = worker_id
         self.lease = timedelta(seconds=30)
+        self.generation_mode = generation_mode
 
     def run_job(self, job_id: str) -> None:
         job = self.service.repo.jobs[job_id]

@@ -1,8 +1,17 @@
-# Local Telegram Mini App development (Phase 13C/13D)
+# Local Telegram Mini App development
 
-No paid AI, Stars, or Telegram Bot API calls.
+Ordinary local work does **not** need a Telegram bot, webhook, or Stars.
 
-## PostgreSQL only (Compose)
+Defaults:
+
+- `APP_ENV=development`
+- `PAYMENT_MODE=simulated`
+- `GENERATION_MODE=mock`
+- `ALLOW_PAID_GENERATION=false`
+
+Frontend: `NEXT_PUBLIC_APP_ENV=development` enables Dev login and simulated Stars.
+
+## PostgreSQL (Compose)
 
 ```bash
 docker compose up -d postgres
@@ -12,36 +21,9 @@ uv run alembic upgrade head
 uv run docprod telegram-api-seed
 ```
 
-Terminal 1:
-
-```bash
-uv run docprod telegram-api-serve
-```
-
-Terminal 2:
-
-```bash
-uv run docprod telegram-worker
-```
-
-API: `http://127.0.0.1:8000/docs`  
-Health: `GET /health` (no credentials)  
-Ready: `GET /ready`
-
-## JSON mode (no Docker)
-
-```bash
-export PRODUCT_PERSISTENCE=json
-uv run docprod telegram-api-seed --store product_data/store.json
-uv run docprod telegram-api-serve
-```
-
-Generation in JSON/test mode can still be driven with
-`POST /api/v1/dev/jobs/{id}/run`. Postgres mode expects `telegram-worker`.
-
-## Mini App frontend
-
-Terminal 3:
+Terminal 1: `uv run docprod telegram-api-serve`  
+Terminal 2: `uv run docprod telegram-worker`  
+Terminal 3: Mini App:
 
 ```bash
 cd apps/telegram-mini-app
@@ -50,21 +32,50 @@ npm install
 npm run dev
 ```
 
-Open http://127.0.0.1:3000 — use **Dev login**. The amber banner means
-simulated Stars and mock generation. Do not confuse this with production auth.
+Open http://127.0.0.1:3000 — **Dev login**. Amber banner = simulated Stars + mock generation.
 
-Optional CORS is enabled for `http://127.0.0.1:3000`. Next also reverse-proxies
-`/api/*` to `http://127.0.0.1:8000`.
+API: `http://127.0.0.1:8000/docs`  
+Health: `GET /health`  
+Ready: `GET /ready`
 
+JSON mode: `PRODUCT_PERSISTENCE=json` and `POST /api/v1/dev/jobs/{id}/run` after generate.
 
-## Simulated payment
+Simulated payment (development/test only): `POST /api/v1/dev/payments/{quote_id}/confirm`.
 
-Development/test only:
+JSON import: `docs/DATABASE_OPERATIONS.md`.
 
-`POST /api/v1/dev/payments/{quote_id}/confirm`
+## Optional: real bot against a tunnel
 
-Disabled when `APP_ENV` is not `development` or `test`.
+Keep generation mock. Set `PAYMENT_MODE=telegram`, `TELEGRAM_BOT_TOKEN`, https Mini App URL (tunnel), `TELEGRAM_WEBHOOK_URL`, `TELEGRAM_WEBHOOK_SECRET`.
 
-## JSON import
+```bash
+uv run docprod telegram-webhook-set
+uv run docprod telegram-webhook-info
+```
 
-See `docs/DATABASE_OPERATIONS.md`. Engine artifacts are not imported.
+**or** local polling (clears webhook):
+
+```bash
+uv run docprod telegram-bot
+```
+
+Never run webhook and polling together.
+
+## Environment (server)
+
+| Variable | Notes |
+| --- | --- |
+| `APP_ENV` | `development` / `test` / `production` |
+| `TELEGRAM_BOT_TOKEN` | Server only |
+| `TELEGRAM_MINI_APP_URL` | https in production |
+| `TELEGRAM_WEBHOOK_URL` | `https://host/telegram/webhook` |
+| `TELEGRAM_WEBHOOK_SECRET` | Required in production |
+| `TELEGRAM_INIT_DATA_MAX_AGE_SECONDS` | Default 86400 |
+| `PAYMENT_MODE` | `simulated` (dev) / `telegram` (prod) / `fake` (tests) |
+| `GENERATION_MODE` | `mock` |
+| `ALLOW_PAID_GENERATION` | `false` |
+| `API_SESSION_SECRET` | Required in production |
+| `DATABASE_URL` | Postgres |
+| `PRODUCT_PERSISTENCE` | `json` or `postgres` |
+
+Frontend public only: `NEXT_PUBLIC_API_BASE_URL`, `NEXT_PUBLIC_APP_ENV`.

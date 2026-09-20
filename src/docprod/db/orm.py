@@ -319,6 +319,23 @@ class TelegramPaymentRow(Base):
     stars: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False)
     invoice_payload: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    refund_status: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PaymentIntentRow(Base):
+    __tablename__ = "payment_intents"
+    __table_args__ = (Index("payment_intents_quote_idx", "quote_id"),)
+
+    id: Mapped[str] = mapped_column(PK, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("telegram_users.id"), nullable=False)
+    quote_id: Mapped[str] = mapped_column(ForeignKey("star_quotes.id"), nullable=False)
+    project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
+    plan_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    stars: Mapped[int] = mapped_column(Integer, nullable=False)
+    invoice_url: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    telegram_payment_charge_id: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

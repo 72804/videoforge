@@ -7,6 +7,7 @@ import { IS_DEV } from "@/lib/config";
 import { ClientError } from "@/lib/errors";
 import { invalidationMessage } from "@/lib/format";
 import { hapticSuccess, hapticWarn } from "@/lib/haptics";
+import { settleQuote } from "@/lib/pay";
 import { telegram } from "@/lib/telegram";
 import type { Scene, SceneVersion } from "@/lib/types";
 
@@ -102,7 +103,7 @@ export function SceneEditorScreen({ projectId, sceneId }: { projectId: string; s
     if (!quoteId || !regenKind) return;
     setBusy(true);
     try {
-      await client.confirmPayment(quoteId);
+      await settleQuote(quoteId);
       const job =
         regenKind === "scene_image"
           ? await client.regenImage(sceneId, quoteId)
@@ -178,7 +179,7 @@ export function SceneEditorScreen({ projectId, sceneId }: { projectId: string; s
         <div className="card" data-testid="regen-quote">
           <h2>{regenKind === "scene_image" ? "Regenerate image" : "Regenerate video"}</h2>
           <div className="stars">{quoteStars} ⭐</div>
-          <div className="sim">Simulated payment</div>
+          {IS_DEV ? <div className="sim">Simulated payment</div> : <p className="lede">Pay with Telegram Stars.</p>}
           <p className="lede">This will replace the current version. Previous versions remain available.</p>
           {regenKind === "scene_video" ? <p>Selected model: Veo Lite · Duration: 8 sec</p> : null}
           <div className="row">
