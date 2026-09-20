@@ -6,18 +6,23 @@ from docprod.models.scene import Scene, ScenePlan
 from docprod.quality.availability import availability
 from docprod.quality.catalog import get_model
 from docprod.quality.classify import classify_scene, score_scene, sfx_class_for
+from docprod.quality.driving import needs_driving_performance
+from docprod.quality.duration import billable_seconds, cost_per_used_second, wasted_seconds
 from docprod.quality.enums import (
+    AdapterStatus,
+    CostConfidence,
     ProviderStatus,
     QualityProfile,
     SceneProductionClass,
 )
-from docprod.quality.profiles import VIDEO_SECONDS, policy_for
+from docprod.quality.profiles import policy_for
 from docprod.quality.router import (
     estimate_model_cost,
     fallback_chain,
     preferred_video_model,
     still_route,
     technique_for_model,
+    upgrade_kind_for,
     wants_video,
 )
 from docprod.quality.scoring import utility
@@ -42,6 +47,8 @@ def pick_from_chain(
     chain: list[str],
     status: dict[str, ProviderStatus],
     profile: QualityProfile,
+    *,
+    used_seconds: float = 0.0,
 ) -> str:
     policy = policy_for(profile)
     for model_id in chain:
@@ -50,14 +57,22 @@ def pick_from_chain(
         spec = get_model(model_id)
         if spec is None:
             continue
+        if spec.adapter_status is AdapterStatus.DOCUMENTED_UNIMPLEMENTED:
+            continue
         if not policy.allow_paid and not spec.local:
             continue
         if spec.local:
             return model_id
+        seconds = used_seconds or spec.min_duration_seconds or 0
+        cost, conf = estimate_model_cost(model_id, seconds=seconds)
+        if profile is QualityProfile.BALANCED and conf is CostConfidence.UNRESOLVED:
+            continue
         st = status.get(spec.provider, ProviderStatus.UNCONFIGURED)
         if spec.implemented or st is not ProviderStatus.UNCONFIGURED:
             return model_id
-        if profile in {QualityProfile.PREMIUM, QualityProfile.MAX_QUALITY}:
+        if spec.implemented:
+            return model_id
+        if profile in {QualityProfile.PREMIUM, QualityProfile.MAX_QUALITY} and spec.implemented:
             return model_id
     return "local-camera"
 
@@ -106,7 +121,7 @@ def allocate_video(
             static_ids.add(scene.id)
             continue
         model = locked or preferred_video_model(klass, profile)
-        cost, _conf = estimate_model_cost(model)
+        cost, _conf = estimate_model_cost(model, seconds=scene.duration)
         tech = technique_for_model(model)
         cands.append(
             _Cand(
@@ -163,10 +178,17 @@ def allocate_video(
             out.append(decision)
             continue
         chain = fallback_chain(item.klass, profile)
-        model = item.locked or pick_from_chain(chain, avail, profile)
+        model = item.locked or pick_from_chain(
+            chain, avail, profile, used_seconds=item.scene.duration
+        )
         spec = get_model(model)
         provider = spec.provider if spec else "local"
-        cost, conf = estimate_model_cost(model)
+        used = item.scene.duration
+        billed = billable_seconds(model, used) if get_model(model) else 0.0
+        cost, conf = estimate_model_cost(model, seconds=used)
+        wasted = wasted_seconds(billed, used)
+        kind = upgrade_kind_for(item.klass, model)
+        driving = needs_driving_performance(item.scene, model_id=model)
         out.append(
             RouteDecision(
                 scene_id=scene.id,
@@ -178,9 +200,10 @@ def allocate_video(
                 estimated_cost=cost,
                 cost_confidence=conf,
                 reason=(
-                    f"{item.klass.value} earns video: story={item.scores.story_importance:.2f} "
+                    f"{kind.value}: story={item.scores.story_importance:.2f} "
                     f"motion={item.scores.motion_need:.2f} util={item.util:.2f} "
-                    f"clip={VIDEO_SECONDS:.0f}s"
+                    f"used={used:.1f}s billable={billed:.0f}s waste={wasted:.1f}s"
+                    + (" needs driving performance" if driving else "")
                 ),
                 quality_tier=policy.default_tier,
                 scores=item.scores,
@@ -189,6 +212,12 @@ def allocate_video(
                 locked_provider=item.locked,
                 sfx_class=sfx_class_for(scene),
                 music_sync_required=item.music_sync,
+                used_seconds=used,
+                billable_seconds=billed,
+                wasted_seconds=wasted,
+                effective_cost_per_used_second=cost_per_used_second(cost, used),
+                upgrade_kind=kind,
+                needs_driving_performance=driving,
             )
         )
     return out

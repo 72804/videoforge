@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 from docprod.quality.catalog import get_model
+from docprod.quality.duration import billable_seconds
 from docprod.quality.enums import (
     CostConfidence,
     QualityProfile,
     QualityTier,
     SceneProductionClass,
+    UpgradeKind,
 )
 from docprod.quality.profiles import VIDEO_SECONDS, policy_for
-from docprod.quality.scoring import quality_gain
 from docprod.quality.specs import SceneValueScore
 
 
 def estimate_model_cost(
-    model_id: str, *, seconds: float = VIDEO_SECONDS
+    model_id: str,
+    *,
+    seconds: float | None = None,
+    characters: float = 0.0,
 ) -> tuple[float | None, CostConfidence]:
     spec = get_model(model_id)
     if spec is None:
@@ -25,12 +29,16 @@ def estimate_model_cost(
         return None, CostConfidence.UNRESOLVED
     if price.mode.value == "free":
         return 0.0, CostConfidence.KNOWN
+    qty = VIDEO_SECONDS if seconds is None else seconds
     if price.mode.value == "per_second":
-        return round(price.value * seconds, 6), price.confidence
+        billed = billable_seconds(model_id, qty)
+        return round(price.value * billed, 6), price.confidence
     if price.mode.value == "per_request":
         return round(price.value, 6), price.confidence
     if price.mode.value == "per_minute":
-        return round(price.value * (seconds / 60.0), 6), price.confidence
+        return round(price.value * (qty / 60.0), 6), price.confidence
+    if price.mode.value == "per_character":
+        return round(price.value * characters, 6), price.confidence
     return None, CostConfidence.UNRESOLVED
 
 
@@ -68,15 +76,14 @@ def fallback_chain(production_class: SceneProductionClass, profile: QualityProfi
     if production_class is SceneProductionClass.HERO_CINEMATIC:
         return [
             policy.hero_model,
-            "veo-3.1-standard",
+            "runway-gen-4.5",
             "veo-3.1-lite-generate-preview",
             "local-camera",
         ]
     if production_class is SceneProductionClass.DIALOGUE_SHOT:
         return [
             policy.dialogue_model,
-            "hunyuan-avatar-local",
-            "veo-3.1-lite-generate-preview",
+            "runway-act-two",
             "narration-over-image",
             "local-camera",
         ]
@@ -88,11 +95,13 @@ def fallback_chain(production_class: SceneProductionClass, profile: QualityProfi
             policy.performance_model,
             "runway-act-two",
             "higgsfield-genjutsu",
+            "runway-gen-4.5",
             "local-camera",
         ]
     return [
         preferred_video_model(production_class, profile),
         "veo-3.1-lite-generate-preview",
+        "runway-gen-4.5",
         "local-camera",
     ]
 
@@ -169,4 +178,22 @@ def still_route(scene_id: str, production_class: SceneProductionClass, profile: 
     )
 
 
-_ = quality_gain
+def upgrade_kind_for(production_class: SceneProductionClass, model_id: str) -> UpgradeKind:
+    if model_id in {"local-camera", "local-title", "narration-over-image"} or "image" in model_id:
+        return UpgradeKind.STILL_LOCAL_MOTION
+    if production_class is SceneProductionClass.DIALOGUE_SHOT:
+        return UpgradeKind.DIALOGUE_LIPSYNC
+    spec = get_model(model_id)
+    caps = set(spec.capabilities) if spec else set()
+    if production_class in {
+        SceneProductionClass.PERFORMANCE_SHOT,
+        SceneProductionClass.MUSIC_SYNCED_PERFORMANCE,
+    }:
+        if "performance_transfer" in caps or "driving_video" in caps:
+            return UpgradeKind.PERFORMANCE_TRANSFER
+        return UpgradeKind.SIMPLE_I2V
+    if production_class is SceneProductionClass.HERO_CINEMATIC:
+        return UpgradeKind.HERO_CINEMATIC
+    if production_class is SceneProductionClass.REACTION_SHOT:
+        return UpgradeKind.REACTION_I2V
+    return UpgradeKind.SIMPLE_I2V

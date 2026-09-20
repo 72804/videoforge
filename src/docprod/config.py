@@ -51,7 +51,10 @@ class Settings(BaseSettings):
     phase11_max_usd: float = Field(default=2.0)
     quality_profile: str = Field(default="balanced")
     elevenlabs_api_key: SecretStr | None = Field(default=None)
+    elevenlabs_voice_id: str = Field(default="")
     higgsfield_api_key: SecretStr | None = Field(default=None)
+    higgsfield_api_key_id: SecretStr | None = Field(default=None)
+    higgsfield_api_key_secret: SecretStr | None = Field(default=None)
     runway_api_key: SecretStr | None = Field(default=None)
     anthropic_api_key: SecretStr | None = Field(default=None)
     local_llm_base_url: str = Field(default="")
@@ -88,7 +91,14 @@ class Settings(BaseSettings):
         return self._secret_configured(self.elevenlabs_api_key)
 
     def higgsfield_key_configured(self) -> bool:
-        return self._secret_configured(self.higgsfield_api_key)
+        if self._secret_configured(self.higgsfield_api_key_id) and self._secret_configured(
+            self.higgsfield_api_key_secret
+        ):
+            return True
+        if not self._secret_configured(self.higgsfield_api_key):
+            return False
+        combined = self.higgsfield_api_key.get_secret_value()  # type: ignore[union-attr]
+        return ":" in combined
 
     def runway_key_configured(self) -> bool:
         return self._secret_configured(self.runway_api_key)

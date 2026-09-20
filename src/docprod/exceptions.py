@@ -62,5 +62,14 @@ class UnimplementedProviderError(RuntimeError):
     """Raised when a catalogued provider has no implemented network adapter."""
 
 
+class DocumentedUnimplementedError(UnimplementedProviderError):
+    """Official product exists, but the public HTTP contract is incomplete."""
+
+    def __init__(self, model_id: str, reason: str) -> None:
+        self.model_id = model_id
+        self.reason = reason
+        super().__init__(f"{model_id}: {reason}")
+
+
 class ProviderOfflineError(RuntimeError):
     """Raised when a local inference endpoint is configured but not reachable."""

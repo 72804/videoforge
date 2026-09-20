@@ -2,8 +2,17 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from docprod.providers.pricing import LYRIA_35_USD_PER_SONG, VEO_LITE_720P_USD_PER_SEC
-from docprod.quality.enums import CostConfidence, Modality, PriceMode, QualityTier
+from docprod.providers.pricing import (
+    ELEVEN_MUSIC_USD_PER_MINUTE,
+    ELEVEN_SFX_USD_PER_MINUTE,
+    ELEVEN_V3_USD_PER_1K_CHARS,
+    LYRIA_35_USD_PER_SONG,
+    PRICING_AS_OF,
+    RUNWAY_ACT_TWO_USD_PER_SEC,
+    RUNWAY_GEN45_USD_PER_SEC,
+    VEO_LITE_720P_USD_PER_SEC,
+)
+from docprod.quality.enums import AdapterStatus, CostConfidence, Modality, PriceMode, QualityTier
 from docprod.quality.specs import ModelSpec, PricingSpec
 
 KNOWN_TTS_TEXT = PricingSpec(
@@ -12,6 +21,8 @@ KNOWN_TTS_TEXT = PricingSpec(
     unit="text_token_in",
     notes="$0.60/1M text in; audio-out $12/1M when usage present",
     confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+    source_note="OpenAI TTS usage",
 )
 KNOWN_WHISPER = PricingSpec(
     mode=PriceMode.PER_MINUTE,
@@ -19,6 +30,8 @@ KNOWN_WHISPER = PricingSpec(
     unit="minute",
     notes="OpenAI Whisper $0.006/min",
     confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+    source_note="OpenAI audio API",
 )
 KNOWN_VEO_LITE = PricingSpec(
     mode=PriceMode.PER_SECOND,
@@ -26,6 +39,8 @@ KNOWN_VEO_LITE = PricingSpec(
     unit="second",
     notes="Veo 3.1 Lite 720p known unit price",
     confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+    source_note="Google Veo Lite",
 )
 KNOWN_LYRIA = PricingSpec(
     mode=PriceMode.PER_REQUEST,
@@ -33,8 +48,61 @@ KNOWN_LYRIA = PricingSpec(
     unit="song",
     notes="Lyria Interactions $0.08/song",
     confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+    source_note="Google Lyria",
 )
-FREE = PricingSpec(mode=PriceMode.FREE, value=0.0, unit="call", confidence=CostConfidence.KNOWN)
+KNOWN_GEN45 = PricingSpec(
+    mode=PriceMode.PER_SECOND,
+    value=RUNWAY_GEN45_USD_PER_SEC,
+    unit="second",
+    notes="12 credits/s × $0.01",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+    source_note="https://docs.dev.runwayml.com/guides/pricing/",
+)
+KNOWN_ACT_TWO = PricingSpec(
+    mode=PriceMode.PER_SECOND,
+    value=RUNWAY_ACT_TWO_USD_PER_SEC,
+    unit="second",
+    notes="5 credits/s × $0.01; driving 3–30s",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+    source_note="https://docs.dev.runwayml.com/guides/pricing/",
+)
+KNOWN_ELEVEN_TTS = PricingSpec(
+    mode=PriceMode.PER_CHARACTER,
+    value=ELEVEN_V3_USD_PER_1K_CHARS / 1000.0,
+    unit="character",
+    notes="$0.10 / 1K characters",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+    source_note="https://elevenlabs.io/pricing/api",
+)
+KNOWN_ELEVEN_SFX = PricingSpec(
+    mode=PriceMode.PER_MINUTE,
+    value=ELEVEN_SFX_USD_PER_MINUTE,
+    unit="minute",
+    notes="$0.12 / minute",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+    source_note="https://elevenlabs.io/pricing/api",
+)
+KNOWN_ELEVEN_MUSIC = PricingSpec(
+    mode=PriceMode.PER_MINUTE,
+    value=ELEVEN_MUSIC_USD_PER_MINUTE,
+    unit="minute",
+    notes="$0.15 / minute",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+    source_note="https://elevenlabs.io/pricing/api",
+)
+FREE = PricingSpec(
+    mode=PriceMode.FREE,
+    value=0.0,
+    unit="call",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of=PRICING_AS_OF,
+)
 UNKNOWN = PricingSpec(mode=PriceMode.UNKNOWN, confidence=CostConfidence.UNRESOLVED)
 
 
@@ -48,11 +116,18 @@ def _m(
     speed: str = "unknown",
     pricing: PricingSpec | None = None,
     implemented: bool = False,
+    adapter_status: AdapterStatus | None = None,
     async_remote: bool = False,
     local: bool = False,
     notes: str = "",
     display: str = "",
+    duration_options: tuple[int, ...] = (),
+    min_duration_seconds: float | None = None,
+    max_duration_seconds: float | None = None,
 ) -> ModelSpec:
+    status = adapter_status
+    if status is None:
+        status = AdapterStatus.IMPLEMENTED if implemented else AdapterStatus.CATALOG_ONLY
     return ModelSpec(
         model_id=model_id,
         provider=provider,
@@ -63,9 +138,13 @@ def _m(
         speed_tier=speed,
         pricing=pricing or UNKNOWN,
         implemented=implemented,
+        adapter_status=status,
         async_remote=async_remote,
         local=local,
         notes=notes,
+        duration_options=duration_options,
+        min_duration_seconds=min_duration_seconds,
+        max_duration_seconds=max_duration_seconds,
     )
 
 
@@ -184,6 +263,9 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             async_remote=True,
             pricing=KNOWN_VEO_LITE,
             speed="fast",
+            duration_options=(8,),
+            min_duration_seconds=8,
+            max_duration_seconds=8,
             notes="Implemented Veo 3.1 Lite I2V 8s 720p",
         ),
         _m(
@@ -207,14 +289,30 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             "higgsfield",
             Modality.VIDEO,
             caps=("image_to_video", "text_to_video"),
-            notes="UNIMPLEMENTED adapter boundary",
+            adapter_status=AdapterStatus.DOCUMENTED_UNIMPLEMENTED,
+            notes=(
+                "Kling I2V body is not in docs.higgsfield.ai public index "
+                "(console-discovered schemas only)."
+            ),
+        ),
+        _m(
+            "kling-2.5-turbo-i2v",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=("image_to_video",),
+            adapter_status=AdapterStatus.DOCUMENTED_UNIMPLEMENTED,
+            duration_options=(5, 10),
+            notes="Unofficial mirrors list 5/10s I2V; not taken as official schema.",
         ),
         _m(
             "seedance",
             "higgsfield",
             Modality.VIDEO,
-            caps=("image_to_video",),
-            notes="UNIMPLEMENTED adapter boundary",
+            caps=("text_to_video",),
+            adapter_status=AdapterStatus.DOCUMENTED_UNIMPLEMENTED,
+            notes=(
+                "Official blog documents Seedance 2.0 T2V only; I2V schema unpublished."
+            ),
         ),
         _m(
             "wan",
@@ -234,17 +332,28 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             "runway-gen-4.5",
             "runway",
             Modality.VIDEO,
-            caps=("image_to_video", "text_to_video", "camera_control"),
+            caps=("image_to_video", "text_to_video"),
             tier=QualityTier.PREMIUM,
-            notes="UNIMPLEMENTED",
+            implemented=True,
+            async_remote=True,
+            pricing=KNOWN_GEN45,
+            duration_options=tuple(range(2, 11)),
+            min_duration_seconds=2,
+            max_duration_seconds=10,
+            notes="POST /v1/image_to_video model gen4.5 — docs.dev.runwayml.com",
         ),
         _m(
             "runway-act-two",
             "runway",
             Modality.VIDEO,
-            caps=("performance_transfer", "driving_video", "lip_sync"),
+            caps=("performance_transfer", "driving_video", "lip_sync", "dialogue"),
             tier=QualityTier.PREMIUM,
-            notes="UNIMPLEMENTED performance transfer",
+            implemented=True,
+            async_remote=True,
+            pricing=KNOWN_ACT_TWO,
+            min_duration_seconds=3,
+            max_duration_seconds=30,
+            notes="POST /v1/character_performance model act_two",
         ),
         _m(
             "higgsfield-genjutsu",
@@ -252,7 +361,10 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             Modality.VIDEO,
             caps=("performance_transfer", "driving_video"),
             tier=QualityTier.PREMIUM,
-            notes="Genjutsu motion transfer slot",
+            adapter_status=AdapterStatus.DOCUMENTED_UNIMPLEMENTED,
+            min_duration_seconds=3,
+            max_duration_seconds=30,
+            notes="Product page only; no public REST body. Preflight uses 3–30s / 30 refs.",
         ),
         _m(
             "ltx-local",
@@ -296,6 +408,9 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             Modality.TTS,
             caps=("turkish", "expressiveness", "voice_cloning", "style_instruction"),
             tier=QualityTier.PREMIUM,
+            implemented=True,
+            pricing=KNOWN_ELEVEN_TTS,
+            notes="POST /v1/text-to-speech/{voice_id} model_id eleven_v3",
         ),
         _m(
             "eleven-multilingual",
@@ -335,6 +450,9 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             Modality.MUSIC,
             caps=("instrumental", "lyrics", "section_control", "inpainting"),
             tier=QualityTier.PREMIUM,
+            implemented=True,
+            pricing=KNOWN_ELEVEN_MUSIC,
+            notes="POST /v1/music; Birko V2 still reuses cached Lyria by default",
         ),
         _m(
             "stable-audio",
@@ -380,7 +498,16 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             pricing=FREE,
             tier=QualityTier.LOCAL,
         ),
-        _m("eleven-sfx", "elevenlabs", Modality.SFX, caps=("hero",), tier=QualityTier.PREMIUM),
+        _m(
+            "eleven-sfx",
+            "elevenlabs",
+            Modality.SFX,
+            caps=("hero",),
+            tier=QualityTier.PREMIUM,
+            implemented=True,
+            pricing=KNOWN_ELEVEN_SFX,
+            notes="POST /v1/sound-generation eleven_text_to_sound_v2; HERO_SFX only",
+        ),
         _m("stable-audio-sfx", "stability", Modality.SFX, caps=("hero", "ambience")),
         _m(
             "audioldm2-local",

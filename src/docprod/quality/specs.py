@@ -3,6 +3,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from docprod.quality.enums import (
+    AdapterStatus,
     CostConfidence,
     Modality,
     PriceMode,
@@ -11,6 +12,7 @@ from docprod.quality.enums import (
     QualityTier,
     SceneProductionClass,
     SfxClass,
+    UpgradeKind,
 )
 
 
@@ -22,6 +24,8 @@ class PricingSpec(BaseModel):
     unit: str = ""
     notes: str = ""
     confidence: CostConfidence = CostConfidence.UNRESOLVED
+    pricing_as_of: str = ""
+    source_note: str = ""
 
 
 class CapabilitySpec(BaseModel):
@@ -42,9 +46,13 @@ class ModelSpec(BaseModel):
     speed_tier: str = "unknown"
     pricing: PricingSpec = Field(default_factory=PricingSpec)
     implemented: bool = False
+    adapter_status: AdapterStatus = AdapterStatus.CATALOG_ONLY
     async_remote: bool = False
     local: bool = False
     notes: str = ""
+    duration_options: tuple[int, ...] = ()
+    min_duration_seconds: float | None = None
+    max_duration_seconds: float | None = None
 
 
 class ProviderSpec(BaseModel):
@@ -113,6 +121,12 @@ class RouteDecision(BaseModel):
     locked_provider: str = ""
     sfx_class: SfxClass | None = None
     music_sync_required: bool = False
+    used_seconds: float = 0.0
+    billable_seconds: float = 0.0
+    wasted_seconds: float = 0.0
+    effective_cost_per_used_second: float | None = None
+    upgrade_kind: UpgradeKind = UpgradeKind.STILL_LOCAL_MOTION
+    needs_driving_performance: bool = False
 
 
 class CharacterProfile(BaseModel):
@@ -184,4 +198,35 @@ class EpisodeCostPlan(BaseModel):
     known_cost: float = 0.0
     estimated_cost: float = 0.0
     unresolved_categories: list[str] = Field(default_factory=list)
+    unresolved_cost_items: list[str] = Field(default_factory=list)
+    estimated_lower_bound_usd: float = 0.0
+    estimated_upper_bound_usd: float | None = None
+    fully_priced: bool = True
     notes: list[str] = Field(default_factory=list)
+
+
+class DrivingPerformancePlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    duration: float
+    dialogue_audio_target: str = ""
+    required_motions: list[str] = Field(default_factory=list)
+    camera_behavior: str = "locked medium shot"
+    number_of_performers: int = 1
+    recording_instructions: str = ""
+    reference_character_bindings: list[str] = Field(default_factory=list)
+    needs_driving_performance: bool = True
+
+
+class TtsComparisonRow(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str
+    provider: str
+    available: bool
+    estimated_cost: float | None = None
+    cost_confidence: CostConfidence = CostConfidence.UNRESOLVED
+    profile_usage: str = ""
+    tags: list[str] = Field(default_factory=list)
+    downstream: list[str] = Field(default_factory=list)

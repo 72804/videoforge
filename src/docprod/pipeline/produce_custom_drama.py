@@ -58,6 +58,7 @@ from docprod.writing.models import WORDS_PER_MINUTE, NarrationScript
 ProgressFn = Callable[[str], None]
 LYRIA_DRAMA_MAX = 2
 FINAL_NAME = "birko_kemal_drama_v1.mp4"
+FINAL_NAME_V2 = "birko_kemal_drama_v2.mp4"
 LEDGER_TOKEN = "ödemiyor"
 
 

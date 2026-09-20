@@ -8,10 +8,12 @@ from docprod.quality.budget import allocate_video
 from docprod.quality.character import character_set_for_drama
 from docprod.quality.cost_plan import build_cost_plan
 from docprod.quality.critic import critique_script
+from docprod.quality.driving import driving_plan_for, needs_driving_performance
 from docprod.quality.enums import QualityProfile
 from docprod.quality.gates import preflight_gates
 from docprod.quality.report import profile_summary, render_router_markdown
 from docprod.quality.shots import dialogue_request_for, performance_request_for
+from docprod.quality.tts_compare import compare_narrators
 from docprod.storage.json_store import load_model, save_json
 from docprod.storage.paths import ProjectPaths
 from docprod.writing.models import NarrationScript
@@ -47,12 +49,24 @@ def plan_quality(
     )
     gates = preflight_gates(plan, profile=profile, cost=cost, uniqueness_required=uniqueness)
     critic = None
+    script_chars = 0
     if paths.story_script_json().is_file():
         script = load_model(paths.story_script_json(), NarrationScript)
         critic = critique_script(script, plan)
+        script_chars = len(script.full_narration)
     charset = character_set_for_drama(paths)
     dialogue = [dialogue_request_for(s) for s in plan.scenes]
     performance = [performance_request_for(s) for s in plan.scenes]
+    driving = [
+        driving_plan_for(s).model_dump()
+        for s, decision in zip(plan.scenes, decisions, strict=True)
+        if needs_driving_performance(s, model_id=decision.selected_model)
+    ]
+    tts_rows = compare_narrators(
+        character_count=script_chars or 2500,
+        speech_minutes=max(plan.scenes[-1].end / 60.0, 0.1) if plan.scenes else 2.0,
+        cached_openai=upgrade_existing,
+    )
     summary = profile_summary(decisions, cost)
     payload = {
         "project_id": plan.project_id,
@@ -67,6 +81,20 @@ def plan_quality(
         "characters": charset.model_dump(),
         "dialogue_shots": [d.model_dump() for d in dialogue if d],
         "performance_shots": [p.model_dump() for p in performance if p],
+        "driving_performance": driving,
+        "tts_comparison": [row.model_dump(mode="json") for row in tts_rows],
+        "reuse": {
+            "stills": True,
+            "title_cards": True,
+            "narration": upgrade_existing,
+            "alignment": upgrade_existing,
+            "lyria_music": True,
+            "generic_sfx": True,
+        },
+        "episode_outputs": {
+            "v1": "birko_kemal_drama_v1.mp4",
+            "v2": "birko_kemal_drama_v2.mp4",
+        },
         "paid_calls": 0,
     }
     review = paths.review_dir
@@ -85,6 +113,10 @@ def plan_quality(
         encoding="utf-8",
     )
     save_json(json_path, payload)
+    v2_md = review / f"quality_router_plan_v2_{profile.value}.md"
+    v2_json = review / f"quality_router_plan_v2_{profile.value}.json"
+    v2_md.write_text(md_path.read_text(encoding="utf-8"), encoding="utf-8")
+    save_json(v2_json, payload)
     if profile is QualityProfile.BALANCED:
         (review / "quality_router_plan.md").write_text(
             md_path.read_text(encoding="utf-8"), encoding="utf-8"

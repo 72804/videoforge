@@ -92,6 +92,25 @@ model-catalog
 
 Dry-run only. There is no command that fires every premium route.
 
+## Phase 12B providers
+
+Implemented (payload + cache + dry-run, **no generation**):
+
+- Runway `gen4.5` I2V (2–10s) and `act_two` (driving video 3–30s)
+- ElevenLabs `eleven_v3` TTS, `eleven_text_to_sound_v2` SFX, `/v1/music`
+
+Documented-unimplemented:
+
+- Higgsfield Genjutsu (product page only; no REST schema on docs.higgsfield.ai)
+- Higgsfield Kling I2V (console-discovered schemas, not in public index)
+- Seedance I2V (official blog shows T2V only)
+
+Chosen non-Google general I2V: **Runway Gen-4.5**.
+
+Duration: Veo Lite is always 8s billed. Prefer Gen-4.5 when shorter beats would waste Veo seconds *and* the budget still fits.
+
+Birko V2 reuses stills, Cedar, Lyria, generic SFX. Output names: `birko_kemal_drama_v1.mp4` kept; `birko_kemal_drama_v2.mp4` for a future approved generate.
+
 ## Birko canary dry-run (zero spend)
 
 `birko_kemal_drama_canary` — 24 timeline scenes (21 narrative beats + 3 title

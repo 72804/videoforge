@@ -10,7 +10,9 @@ from docprod.quality.specs import (
 )
 
 
-def dialogue_request_for(scene: Scene, *, duration: float = 8.0) -> DialogueShotRequest | None:
+def dialogue_request_for(
+    scene: Scene, *, duration: float | None = None
+) -> DialogueShotRequest | None:
     if classify_scene(scene) is not SceneProductionClass.DIALOGUE_SHOT:
         return None
     chars = list((scene.metadata or {}).get("characters") or [])
@@ -18,14 +20,14 @@ def dialogue_request_for(scene: Scene, *, duration: float = 8.0) -> DialogueShot
         scene_id=scene.id,
         character_refs=[f"ref_{c}" if not str(c).startswith("ref_") else str(c) for c in chars],
         dialogue_text=scene.narration,
-        duration=duration,
+        duration=float(duration if duration is not None else scene.duration),
         emotion=scene.mood.value if hasattr(scene.mood, "value") else str(scene.mood),
         camera_instructions=scene.visual_intent,
     )
 
 
 def performance_request_for(
-    scene: Scene, *, duration: float = 8.0, driving: DrivingPerformanceAsset | None = None
+    scene: Scene, *, duration: float | None = None, driving: DrivingPerformanceAsset | None = None
 ) -> PerformanceShotRequest | None:
     klass = classify_scene(scene)
     if klass not in {
@@ -38,7 +40,7 @@ def performance_request_for(
         scene_id=scene.id,
         driving_video=driving.path if driving else "",
         character_refs=[f"ref_{c}" if not str(c).startswith("ref_") else str(c) for c in chars],
-        shot_duration=duration,
+        shot_duration=float(duration if duration is not None else scene.duration),
         camera_preservation=True,
         motion_preservation=True,
     )

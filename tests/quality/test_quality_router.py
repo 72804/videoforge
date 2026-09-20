@@ -59,13 +59,14 @@ def test_catalog_has_priority_families() -> None:
     assert "ace-step-local" in ids
     assert get_model("kling-3") is not None
     assert get_model("kling-3").implemented is False
+    assert get_model("runway-gen-4.5").implemented is True
 
 
 def test_unknown_price_is_unresolved() -> None:
-    cost, conf = estimate_model_cost("runway-gen-4.5")
+    cost, conf = estimate_model_cost("kling-3")
     assert cost is None
     assert conf is CostConfidence.UNRESOLVED
-    known, kconf = estimate_model_cost("veo-3.1-lite-generate-preview")
+    known, kconf = estimate_model_cost("veo-3.1-lite-generate-preview", seconds=4.0)
     assert known == pytest.approx(0.4)
     assert kconf is CostConfidence.KNOWN
 
@@ -91,10 +92,12 @@ def test_balanced_does_not_video_everything() -> None:
     video = [
         d
         for d in decisions
-        if d.selected_model == "veo-3.1-lite-generate-preview"
+        if d.upgrade_kind.value != "still_local_motion"
+        and d.selected_model not in {"gpt-image-2.5-flare", "local-title", "local-camera"}
     ]
-    stills = [d for d in decisions if d.selected_model != "veo-3.1-lite-generate-preview"]
-    assert 3 <= len(video) <= 10
+    video_ids = {d.scene_id for d in video}
+    stills = [d for d in decisions if d.scene_id not in video_ids]
+    assert 2 <= len(video) <= 10
     assert len(stills) > len(video)
     cost = build_cost_plan(
         project_id="tiny_drama",

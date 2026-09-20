@@ -8,6 +8,7 @@ from docprod.graphics.renderer import GRAPHIC_STRATEGIES
 from docprod.models.enums import AssetStrategy
 from docprod.models.scene import Scene
 from docprod.providers.image_config import GeneratedImageManifest
+from docprod.quality.substitution import upgrade_clip_path
 from docprod.stock.models import StockSourceManifest
 from docprod.storage.hashing import file_sha256
 from docprod.storage.json_store import load_model
@@ -295,11 +296,26 @@ def resolve_title_card_still(paths: ProjectPaths, scene: Scene) -> VisualSource 
     return None
 
 
+def resolve_upgrade_clip(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
+    clip = upgrade_clip_path(paths, scene.id)
+    if not clip.is_file():
+        return None
+    return VisualSource(
+        path=clip,
+        sha256=file_sha256(clip),
+        kind="ai_video",
+        strategy_rendered="upgrade_video",
+    )
+
+
 def resolve_scene_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
     """Prefer motion footage, then stills, then local graphics."""
     title = resolve_title_card_still(paths, scene)
     if title is not None:
         return title
+    upgrade = resolve_upgrade_clip(paths, scene)
+    if upgrade is not None:
+        return upgrade
     motion = resolve_ai_video_clip(paths, scene)
     if motion is not None:
         return motion

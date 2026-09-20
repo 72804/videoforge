@@ -397,11 +397,14 @@ def provider_status_cmd() -> None:
     report = availability()
     table = Table(title="provider status")
     table.add_column("id")
-    table.add_column("status")
+    table.add_column("keys")
+    table.add_column("adapter")
+    adapters = report.adapter_status
     for key, value in report.providers.items():
-        table.add_row(key, value.value)
+        table.add_row(key, value.value, adapters.get(key, "catalog_only"))
+    table.add_row("chosen_general_i2v", "n/a", adapters.get("chosen_general_i2v", ""))
     for key, value in report.local_endpoints.items():
-        table.add_row(f"local_{key}", value.value)
+        table.add_row(f"local_{key}", value.value, "local")
     console.print(table)
 
 
@@ -415,6 +418,7 @@ def model_catalog_cmd() -> None:
     table.add_column("provider")
     table.add_column("modality")
     table.add_column("implemented")
+    table.add_column("adapter")
     table.add_column("price")
     for spec in model_catalog():
         price = spec.pricing.confidence.value
@@ -425,6 +429,7 @@ def model_catalog_cmd() -> None:
             spec.provider,
             spec.modality.value,
             str(spec.implemented).lower(),
+            spec.adapter_status.value,
             price,
         )
     console.print(table)

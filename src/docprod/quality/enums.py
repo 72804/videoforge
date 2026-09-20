@@ -99,3 +99,18 @@ class Modality(StrEnum):
     MUSIC = "music"
     SFX = "sfx"
     ALIGNMENT = "alignment"
+
+
+class AdapterStatus(StrEnum):
+    IMPLEMENTED = "implemented"
+    CATALOG_ONLY = "catalog_only"
+    DOCUMENTED_UNIMPLEMENTED = "documented_unimplemented"
+
+
+class UpgradeKind(StrEnum):
+    STILL_LOCAL_MOTION = "still_local_motion"
+    SIMPLE_I2V = "simple_i2v"
+    REACTION_I2V = "reaction_i2v"
+    DIALOGUE_LIPSYNC = "dialogue_lipsync"
+    HERO_CINEMATIC = "hero_cinematic"
+    PERFORMANCE_TRANSFER = "performance_transfer"

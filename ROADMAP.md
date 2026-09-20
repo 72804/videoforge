@@ -91,6 +91,14 @@ Implemented:
 - dialogue / performance request objects + unimplemented adapters
 - provider-status / model-catalog / quality-plan CLI
 
+### Phase 12B — premium adapters (dry-run)
+
+- Runway Gen-4.5 I2V and Act-Two character performance (official API)
+- Eleven v3 TTS, SFX, Music (official API; no generation in this phase)
+- Higgsfield Genjutsu / Kling I2V: documented-unimplemented (no public REST body)
+- Billable vs used seconds, cost bounds, driving-performance instructions
+- V2 episode filename `birko_kemal_drama_v2.mp4` (does not overwrite V1)
+
 ### Deferred creator UI
 
 - quality-profile selector

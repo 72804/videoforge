@@ -4,16 +4,62 @@ from collections import Counter
 
 from docprod.quality.catalog import get_model
 from docprod.quality.enums import CostConfidence, QualityProfile
-from docprod.quality.profiles import VIDEO_SECONDS, policy_for
+from docprod.quality.profiles import policy_for
 from docprod.quality.router import estimate_model_cost
 from docprod.quality.specs import CostLine, EpisodeCostPlan, RouteDecision
 
 VIDEO_MODELS_PREMIUM = {
-    "veo-3.1-standard",
     "runway-gen-4.5",
     "runway-act-two",
     "higgsfield-genjutsu",
+    "veo-3.1-standard",
 }
+
+
+def _video_decisions(decisions: list[RouteDecision], policy) -> list[RouteDecision]:
+    skip = {
+        "local-camera",
+        "local-title",
+        "narration-over-image",
+        policy.timeline_image_model,
+        "gpt-image-2.5-flare",
+        "gpt-image-2.5-sunburst",
+        "comfyui-local",
+    }
+    out: list[RouteDecision] = []
+    for item in decisions:
+        if item.selected_model in skip:
+            continue
+        spec = get_model(item.selected_model)
+        if spec is None or spec.modality.value != "video":
+            continue
+        out.append(item)
+    return out
+
+
+def _line_from_group(category: str, group: list[RouteDecision]) -> CostLine:
+    first = group[0]
+    spec = get_model(first.selected_model)
+    quantity = sum(item.billable_seconds or 0.0 for item in group)
+    costs = [item.estimated_cost for item in group]
+    if any(c is None for c in costs):
+        total = None
+        conf = CostConfidence.UNRESOLVED
+    else:
+        total = round(sum(float(c) for c in costs), 6)
+        conf = first.cost_confidence
+    return CostLine(
+        category=category,
+        provider=first.selected_provider,
+        model_id=first.selected_model,
+        count=float(len(group)),
+        quantity=quantity,
+        unit="second",
+        unit_price=spec.pricing.value if spec else None,
+        estimated_cost=total,
+        confidence=conf,
+        notes=f"billable_seconds={quantity:.1f}",
+    )
 
 
 def build_cost_plan(
@@ -24,116 +70,44 @@ def build_cost_plan(
     upgrade_existing: bool = True,
     music_calls: int = 1,
     tts_minutes: float = 2.1,
+    tts_characters: int = 0,
+    upgrade_narrator: bool = False,
+    upgrade_music: bool = False,
+    hero_sfx_seconds: float = 1.0,
 ) -> EpisodeCostPlan:
     policy = policy_for(profile)
     lines: list[CostLine] = []
-    if not upgrade_existing:
-        stills = [
-            d
-            for d in decisions
-            if d.selected_model in {policy.timeline_image_model, policy.character_image_model}
-            or d.selected_model.endswith("flare")
-            or d.selected_model.endswith("sunburst")
-            or d.selected_model == "comfyui-local"
-        ]
-        lines.append(
-            CostLine(
-                category="timeline_images",
-                provider="openai",
-                model_id=policy.timeline_image_model,
-                count=float(len(stills)),
-                unit="image",
-                confidence=CostConfidence.ESTIMATED,
-                notes="usage-based; not regenerated in upgrade mode",
-            )
-        )
-    video = [
-        d
-        for d in decisions
-        if d.selected_model not in {
-            "local-camera",
-            "local-title",
-            "narration-over-image",
-            policy.timeline_image_model,
-            "gpt-image-2.5-flare",
-            "gpt-image-2.5-sunburst",
-            "comfyui-local",
-        }
-        and get_model(d.selected_model)
-        and get_model(d.selected_model).modality.value == "video"
-    ]
+    video = _video_decisions(decisions, policy)
     cheap = [d for d in video if d.selected_model not in VIDEO_MODELS_PREMIUM]
     premium = [d for d in video if d.selected_model in VIDEO_MODELS_PREMIUM]
     perf = [
         d
         for d in video
-        if d.production_class.value in {"performance_shot", "music_synced_performance"}
-        or "act-two" in d.selected_model
-        or "genjutsu" in d.selected_model
-        or "avatar" in d.selected_model
+        if d.upgrade_kind.value == "performance_transfer"
+        or d.production_class.value in {"performance_shot", "music_synced_performance"}
     ]
     if cheap:
-        cost, conf = estimate_model_cost(cheap[0].selected_model)
-        qty = VIDEO_SECONDS * len(cheap)
-        total = round(cost * len(cheap), 6) if cost is not None else None
-        lines.append(
-            CostLine(
-                category="cheap_video",
-                provider=cheap[0].selected_provider,
-                model_id=cheap[0].selected_model,
-                count=float(len(cheap)),
-                quantity=qty,
-                unit="second",
-                unit_price=get_model(cheap[0].selected_model).pricing.value
-                if get_model(cheap[0].selected_model)
-                else None,
-                estimated_cost=total,
-                confidence=conf,
-            )
-        )
+        lines.append(_line_from_group("cheap_video", cheap))
     if premium:
-        cost, conf = estimate_model_cost(premium[0].selected_model)
-        lines.append(
-            CostLine(
-                category="premium_video",
-                provider=premium[0].selected_provider,
-                model_id=premium[0].selected_model,
-                count=float(len(premium)),
-                quantity=VIDEO_SECONDS * len(premium),
-                unit="second",
-                estimated_cost=cost * len(premium) if cost is not None else None,
-                confidence=conf,
-            )
-        )
+        lines.append(_line_from_group("premium_video", premium))
     if perf:
-        cost, conf = estimate_model_cost(perf[0].selected_model)
-        lines.append(
-            CostLine(
-                category="performance",
-                provider=perf[0].selected_provider,
-                model_id=perf[0].selected_model,
-                count=float(len(perf)),
-                quantity=VIDEO_SECONDS * len(perf),
-                unit="second",
-                estimated_cost=cost * len(perf) if cost is not None else None,
-                confidence=conf,
-            )
+        lines.append(_line_from_group("performance", perf))
+
+    if upgrade_narrator or not upgrade_existing:
+        tts_spec = get_model(policy.tts_model)
+        tts_cost, tts_conf = estimate_model_cost(
+            policy.tts_model, seconds=tts_minutes * 60, characters=float(tts_characters)
         )
-    tts_spec = get_model(policy.tts_model)
-    if not upgrade_existing:
-        tts_cost, tts_conf = estimate_model_cost(policy.tts_model, seconds=tts_minutes * 60)
         lines.append(
             CostLine(
                 category="tts",
                 provider=tts_spec.provider if tts_spec else "unknown",
                 model_id=policy.tts_model,
-                quantity=tts_minutes,
-                unit="minute",
+                quantity=float(tts_characters or tts_minutes),
+                unit="character" if tts_characters else "minute",
                 estimated_cost=tts_cost,
-                confidence=tts_conf
-                if policy.tts_model != "gpt-4o-mini-tts"
-                else CostConfidence.UNRESOLVED,
-                notes="OpenAI TTS needs usage tokens; Eleven price UNRESOLVED",
+                confidence=tts_conf,
+                notes="narrator upgrade invalidates alignment + dialogue sync",
             )
         )
         align = get_model(policy.alignment_model)
@@ -150,8 +124,9 @@ def build_cost_plan(
                 confidence=aconf,
             )
         )
+    if upgrade_music:
         music = get_model(policy.music_model)
-        mc, mconf = estimate_model_cost(policy.music_model)
+        mc, mconf = estimate_model_cost(policy.music_model, seconds=tts_minutes * 60)
         lines.append(
             CostLine(
                 category="music",
@@ -163,17 +138,22 @@ def build_cost_plan(
                 confidence=mconf,
             )
         )
+
     hero_sfx = sum(1 for d in decisions if d.sfx_class and d.sfx_class.value == "hero_sfx")
     if policy.premium_sfx and hero_sfx:
         sfx = get_model(policy.sfx_model)
+        sc, sconf = estimate_model_cost(policy.sfx_model, seconds=hero_sfx_seconds * hero_sfx)
         lines.append(
             CostLine(
                 category="sfx",
                 provider=sfx.provider if sfx else "elevenlabs",
                 model_id=policy.sfx_model,
                 count=float(hero_sfx),
-                confidence=CostConfidence.UNRESOLVED,
-                notes="Hero SFX only; unit price UNRESOLVED",
+                quantity=hero_sfx_seconds * hero_sfx,
+                unit="second",
+                estimated_cost=sc,
+                confidence=sconf,
+                notes="HERO_SFX only; generic SFX stay local",
             )
         )
     else:
@@ -185,6 +165,7 @@ def build_cost_plan(
                 count=float(hero_sfx),
                 estimated_cost=0.0,
                 confidence=CostConfidence.KNOWN,
+                notes="reuse existing local/procedural SFX",
             )
         )
 
@@ -198,9 +179,16 @@ def build_cost_plan(
             estimated += line.estimated_cost
         elif line.estimated_cost is None or line.confidence is CostConfidence.UNRESOLVED:
             unresolved.append(line.category)
-    remaining = None
-    if upgrade_existing:
-        remaining = round(known + estimated, 6)
+    lower = round(known + estimated, 6)
+    fully = not unresolved
+    upper = lower if fully else None
+    remaining = lower if upgrade_existing else None
+    notes = [
+        "upgrade_existing=true: reuse locked stills/TTS/Lyria/SFX unless flags set"
+        if upgrade_existing
+        else "full regeneration costing",
+        "unresolved items mean this profile is NOT cheaper than a fully priced one",
+    ]
     return EpisodeCostPlan(
         project_id=project_id,
         profile=profile,
@@ -213,10 +201,11 @@ def build_cost_plan(
         known_cost=round(known, 6),
         estimated_cost=round(estimated, 6),
         unresolved_categories=sorted(set(unresolved)),
-        notes=[
-            "upgrade_existing=true: do not regenerate locked images" if upgrade_existing else "",
-            f"video_clip_seconds={VIDEO_SECONDS}",
-        ],
+        unresolved_cost_items=sorted(set(unresolved)),
+        estimated_lower_bound_usd=lower,
+        estimated_upper_bound_usd=upper,
+        fully_priced=fully,
+        notes=notes,
     )
 
 

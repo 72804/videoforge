@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from docprod.config import Settings, get_settings
-from docprod.quality.enums import ProviderStatus
+from docprod.quality.catalog import model_catalog
+from docprod.quality.enums import AdapterStatus, ProviderStatus
 from docprod.quality.specs import ProviderSpec
 
 PROVIDERS: tuple[ProviderSpec, ...] = (
@@ -72,6 +73,7 @@ def ping_url(url: str, timeout: float = 0.4) -> ProviderStatus:
 class AvailabilityReport:
     providers: dict[str, ProviderStatus]
     local_endpoints: dict[str, ProviderStatus]
+    adapter_status: dict[str, str] = field(default_factory=dict)
 
 
 def availability(settings: Settings | None = None) -> AvailabilityReport:
@@ -99,4 +101,25 @@ def availability(settings: Settings | None = None) -> AvailabilityReport:
             else ProviderStatus.UNCONFIGURED
         ),
     }
-    return AvailabilityReport(providers=providers, local_endpoints=local_endpoint_status(cfg))
+    adapters: dict[str, str] = {}
+    for spec in model_catalog():
+        key = spec.provider
+        current = adapters.get(key)
+        rank = {
+            AdapterStatus.IMPLEMENTED.value: 2,
+            AdapterStatus.DOCUMENTED_UNIMPLEMENTED.value: 1,
+            AdapterStatus.CATALOG_ONLY.value: 0,
+        }
+        value = spec.adapter_status.value
+        if spec.implemented:
+            value = AdapterStatus.IMPLEMENTED.value
+        if current is None or rank.get(value, 0) > rank.get(current, 0):
+            adapters[key] = value
+    adapters.setdefault("openai", AdapterStatus.IMPLEMENTED.value)
+    adapters.setdefault("google", AdapterStatus.IMPLEMENTED.value)
+    adapters["chosen_general_i2v"] = "runway-gen-4.5"
+    return AvailabilityReport(
+        providers=providers,
+        local_endpoints=local_endpoint_status(cfg),
+        adapter_status=adapters,
+    )
