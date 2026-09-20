@@ -49,6 +49,17 @@ class Settings(BaseSettings):
     enable_lyria_realtime: bool = Field(default=False)
     enable_semantic_audio_qc: bool = Field(default=False)
     phase11_max_usd: float = Field(default=2.0)
+    quality_profile: str = Field(default="balanced")
+    elevenlabs_api_key: SecretStr | None = Field(default=None)
+    higgsfield_api_key: SecretStr | None = Field(default=None)
+    runway_api_key: SecretStr | None = Field(default=None)
+    anthropic_api_key: SecretStr | None = Field(default=None)
+    local_llm_base_url: str = Field(default="")
+    local_image_base_url: str = Field(default="")
+    local_video_base_url: str = Field(default="")
+    local_tts_base_url: str = Field(default="")
+    local_music_base_url: str = Field(default="")
+    quality_ping_local: bool = Field(default=False)
 
     def openai_key_configured(self) -> bool:
         secret = self.openai_api_key
@@ -67,6 +78,23 @@ class Settings(BaseSettings):
         if secret is None:
             return False
         return bool(secret.get_secret_value().strip())
+
+    def _secret_configured(self, secret: SecretStr | None) -> bool:
+        if secret is None:
+            return False
+        return bool(secret.get_secret_value().strip())
+
+    def elevenlabs_key_configured(self) -> bool:
+        return self._secret_configured(self.elevenlabs_api_key)
+
+    def higgsfield_key_configured(self) -> bool:
+        return self._secret_configured(self.higgsfield_api_key)
+
+    def runway_key_configured(self) -> bool:
+        return self._secret_configured(self.runway_api_key)
+
+    def anthropic_key_configured(self) -> bool:
+        return self._secret_configured(self.anthropic_api_key)
 
 
 @lru_cache

@@ -155,6 +155,14 @@ AI_STILL_PROMPTS: dict[str, str] = {
 }
 
 
+def is_cinematic_title_card(scene: Scene | SemanticSceneIntent | None) -> bool:
+    if scene is None:
+        return False
+    if isinstance(scene, SemanticSceneIntent):
+        return False
+    return bool((scene.metadata or {}).get("cinematic_title_card"))
+
+
 def explicit_explainer_requested(scene: Scene | SemanticSceneIntent | None) -> bool:
     if scene is None:
         return False

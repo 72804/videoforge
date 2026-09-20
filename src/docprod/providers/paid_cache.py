@@ -61,6 +61,105 @@ def lyria_request_hash(
     )
 
 
+def generic_paid_request_hash(kind: str, payload: dict) -> str:
+    """Durable hash for any paid modality. Include every material input."""
+    return content_hash({"kind": kind, **payload})
+
+
+def tts_cache_hash(
+    *,
+    model: str,
+    voice: str,
+    text: str,
+    instructions: str,
+    language: str,
+    settings: dict | None = None,
+) -> str:
+    return generic_paid_request_hash(
+        "tts",
+        {
+            "model": model,
+            "voice": voice,
+            "text": text,
+            "instructions": instructions,
+            "language": language,
+            "settings": settings or {},
+        },
+    )
+
+
+def music_cache_hash(
+    *,
+    model: str,
+    prompt: str,
+    reference_audio_sha256s: list[str],
+    image_sha256s: list[str],
+    duration_hint_seconds: float,
+    options: dict | None = None,
+) -> str:
+    return generic_paid_request_hash(
+        "music",
+        {
+            "model": model,
+            "prompt": prompt,
+            "reference_audio_sha256s": reference_audio_sha256s,
+            "image_sha256s": image_sha256s,
+            "duration_hint_seconds": duration_hint_seconds,
+            "options": options or {},
+        },
+    )
+
+
+def sfx_cache_hash(
+    *,
+    model: str,
+    prompt: str,
+    duration: float,
+    settings: dict | None = None,
+) -> str:
+    return generic_paid_request_hash(
+        "sfx",
+        {
+            "model": model,
+            "prompt": prompt,
+            "duration": duration,
+            "settings": settings or {},
+        },
+    )
+
+
+def video_cache_hash(
+    *,
+    model: str,
+    prompt: str,
+    negative_prompt: str,
+    input_image_sha256s: list[str],
+    reference_image_sha256s: list[str],
+    driving_video_sha256: str,
+    audio_sha256: str,
+    duration_seconds: float,
+    resolution: str,
+    aspect_ratio: str,
+    seed: int | None = None,
+) -> str:
+    return generic_paid_request_hash(
+        "video",
+        {
+            "model": model,
+            "prompt": prompt,
+            "negative_prompt": negative_prompt,
+            "input_image_sha256s": input_image_sha256s,
+            "reference_image_sha256s": reference_image_sha256s,
+            "driving_video_sha256": driving_video_sha256,
+            "audio_sha256": audio_sha256,
+            "duration_seconds": duration_seconds,
+            "resolution": resolution,
+            "aspect_ratio": aspect_ratio,
+            "seed": seed,
+        },
+    )
+
+
 class PaidArtifactCache:
     def __init__(self, root: Path | None = None) -> None:
         self.root = root or paid_cache_root()

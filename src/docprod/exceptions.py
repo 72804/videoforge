@@ -56,3 +56,11 @@ class ScriptValidationError(RuntimeError):
 
 class SemanticPlannerError(RuntimeError):
     """Raised when semantic scene planning fails (parse, budget, or validation)."""
+
+
+class UnimplementedProviderError(RuntimeError):
+    """Raised when a catalogued provider has no implemented network adapter."""
+
+
+class ProviderOfflineError(RuntimeError):
+    """Raised when a local inference endpoint is configured but not reachable."""

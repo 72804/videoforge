@@ -273,8 +273,33 @@ def resolve_ai_video_clip(paths: ProjectPaths, scene: Scene) -> VisualSource | N
     )
 
 
+def resolve_title_card_still(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
+    if not (scene.metadata or {}).get("cinematic_title_card"):
+        return None
+    candidates: list[Path] = []
+    for source in scene.sources:
+        rel = str(source.local_path or "")
+        if not rel:
+            continue
+        candidates.append(Path(rel))
+        candidates.append(paths.root / rel)
+    candidates.append(paths.visuals_dir / "chapter_titles" / f"{scene.id}.jpg")
+    for candidate in candidates:
+        if candidate.is_file():
+            return VisualSource(
+                path=candidate,
+                sha256=file_sha256(candidate),
+                kind="title_card",
+                strategy_rendered="title_card",
+            )
+    return None
+
+
 def resolve_scene_visual(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
     """Prefer motion footage, then stills, then local graphics."""
+    title = resolve_title_card_still(paths, scene)
+    if title is not None:
+        return title
     motion = resolve_ai_video_clip(paths, scene)
     if motion is not None:
         return motion

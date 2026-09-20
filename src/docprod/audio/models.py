@@ -11,6 +11,14 @@ DEFAULT_VOICE_INSTRUCTIONS = (
     "Maintain continuous storytelling flow and natural sentence rhythm."
 )
 
+DRAMA_VOICE_INSTRUCTIONS = (
+    "Speak in natural Turkish as a controlled dramatic storyteller. "
+    "Slightly dry and deadpan. Deliver an absurd neighborhood story seriously. "
+    "Measured pace, clear diction, not cartoonish, not overly emotional, "
+    "not a commercial advertisement. Humor comes from the writing and timing, "
+    "not from exaggerated acting. Maintain continuous storytelling flow."
+)
+
 TTS_CONTINUATION_INSTRUCTIONS = (
     "This is a continuation of the same documentary narration. Maintain the same "
     "voice character, pacing, energy, seriousness, and delivery as the preceding "

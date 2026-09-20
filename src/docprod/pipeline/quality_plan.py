@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from docprod.models.scene import ScenePlan
+from docprod.quality.availability import availability
+from docprod.quality.budget import allocate_video
+from docprod.quality.character import character_set_for_drama
+from docprod.quality.cost_plan import build_cost_plan
+from docprod.quality.critic import critique_script
+from docprod.quality.enums import QualityProfile
+from docprod.quality.gates import preflight_gates
+from docprod.quality.report import profile_summary, render_router_markdown
+from docprod.quality.shots import dialogue_request_for, performance_request_for
+from docprod.storage.json_store import load_model, save_json
+from docprod.storage.paths import ProjectPaths
+from docprod.writing.models import NarrationScript
+
+PROFILES = tuple(QualityProfile)
+
+
+@dataclass
+class QualityPlanBundle:
+    profile: QualityProfile
+    markdown_path: str
+    json_path: str
+    summary: dict
+    gate_passed: bool
+
+
+def plan_quality(
+    paths: ProjectPaths,
+    *,
+    profile: QualityProfile,
+    upgrade_existing: bool = True,
+) -> QualityPlanBundle:
+    plan = load_model(paths.scene_plan_json, ScenePlan)
+    decisions = allocate_video(plan, profile)
+    cost = build_cost_plan(
+        project_id=plan.project_id,
+        profile=profile,
+        decisions=decisions,
+        upgrade_existing=upgrade_existing,
+    )
+    uniqueness = str(paths.root.name).endswith("drama_canary") or any(
+        s.metadata.get("episode_mode") == "custom_short_drama" for s in plan.scenes
+    )
+    gates = preflight_gates(plan, profile=profile, cost=cost, uniqueness_required=uniqueness)
+    critic = None
+    if paths.story_script_json().is_file():
+        script = load_model(paths.story_script_json(), NarrationScript)
+        critic = critique_script(script, plan)
+    charset = character_set_for_drama(paths)
+    dialogue = [dialogue_request_for(s) for s in plan.scenes]
+    performance = [performance_request_for(s) for s in plan.scenes]
+    summary = profile_summary(decisions, cost)
+    payload = {
+        "project_id": plan.project_id,
+        "profile": profile.value,
+        "availability": {k: v.value for k, v in availability().providers.items()},
+        "local_endpoints": {k: v.value for k, v in availability().local_endpoints.items()},
+        "decisions": [item.model_dump(mode="json") for item in decisions],
+        "cost": cost.model_dump(mode="json"),
+        "summary": summary,
+        "gates": {"passed": gates.passed, "errors": gates.errors, "warnings": gates.warnings},
+        "critic": critic.model_dump() if critic else None,
+        "characters": charset.model_dump(),
+        "dialogue_shots": [d.model_dump() for d in dialogue if d],
+        "performance_shots": [p.model_dump() for p in performance if p],
+        "paid_calls": 0,
+    }
+    review = paths.review_dir
+    review.mkdir(parents=True, exist_ok=True)
+    stem = f"quality_router_plan_{profile.value}"
+    md_path = review / f"{stem}.md"
+    json_path = review / f"{stem}.json"
+    md_path.write_text(
+        render_router_markdown(
+            project_id=plan.project_id,
+            profile=profile,
+            decisions=decisions,
+            cost=cost,
+            plan=plan,
+        ),
+        encoding="utf-8",
+    )
+    save_json(json_path, payload)
+    if profile is QualityProfile.BALANCED:
+        (review / "quality_router_plan.md").write_text(
+            md_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        save_json(review / "quality_router_plan.json", payload)
+    return QualityPlanBundle(
+        profile=profile,
+        markdown_path=str(md_path),
+        json_path=str(json_path),
+        summary=summary,
+        gate_passed=gates.passed,
+    )
+
+
+def plan_all_profiles(paths: ProjectPaths) -> list[QualityPlanBundle]:
+    return [plan_quality(paths, profile=profile) for profile in QualityProfile]

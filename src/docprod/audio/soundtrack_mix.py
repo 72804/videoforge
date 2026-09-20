@@ -11,15 +11,42 @@ from docprod.render.ffmpeg import run_ffmpeg
 def synthesize_generic(kind: str, dest: Path, duration: float = 2.0) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix(".tmp.wav")
-    if kind == "ambience":
-        src = f"anoisesrc=d={duration}:c=pink:r=48000:a=0.08"
-        filt = "lowpass=f=380,highpass=f=40,volume=-22dB"
+    if kind in {"ambience", "apartment", "stairwell", "bakkal"}:
+        src = f"anoisesrc=d={duration}:c=brown:r=48000:a=0.06"
+        filt = "lowpass=f=320,highpass=f=35,volume=-24dB"
+    elif kind == "elevator":
+        src = f"sine=f=88:d={duration}"
+        filt = (
+            "aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo,"
+            "volume=-28dB,lowpass=f=220"
+        )
     elif kind == "metal":
         src = f"sine=f=180:d={min(duration, 0.35)}"
         filt = "aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo,volume=-18dB"
-    elif kind == "sting":
-        src = f"sine=f=110:d={min(duration, 0.9)}"
-        filt = "afade=t=in:st=0:d=0.02,afade=t=out:st=0.4:d=0.45,volume=-20dB"
+    elif kind in {"sting", "chapter_sting"}:
+        src = f"anoisesrc=d={min(duration, 0.32)}:c=white:r=48000:a=0.12"
+        filt = (
+            "highpass=f=280,lowpass=f=3500,afade=t=in:st=0:d=0.02,"
+            "afade=t=out:st=0.12:d=0.18,volume=-16dB"
+        )
+    elif kind == "ledger":
+        src = f"sine=f=72:d={min(duration, 0.22)}"
+        filt = (
+            "aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo,"
+            "afade=t=out:st=0.08:d=0.12,volume=-12dB"
+        )
+    elif kind == "pocket":
+        src = f"anoisesrc=d={min(duration, 0.45)}:c=white:r=48000:a=0.05"
+        filt = "bandpass=f=420:w=280,afade=t=out:st=0.2:d=0.22,volume=-26dB"
+    elif kind == "cola":
+        src = f"sine=f=920:d={min(duration, 0.08)}"
+        filt = (
+            "aformat=sample_fmts=s16:sample_rates=48000:channel_layouts=stereo,"
+            "afade=t=out:st=0.03:d=0.05,volume=-18dB"
+        )
+    elif kind == "window":
+        src = f"anoisesrc=d={min(duration, 0.35)}:c=white:r=48000:a=0.05"
+        filt = "bandpass=f=900:w=600,afade=t=out:st=0.12:d=0.2,volume=-22dB"
     else:
         src = f"anoisesrc=d={min(duration, 1.2)}:c=white:r=48000:a=0.04"
         filt = "bandpass=f=1800:w=800,volume=-24dB"
@@ -54,6 +81,7 @@ def mix_soundtrack(
     assets: dict[str, Path],
     dest: Path,
     timeline: RuntimeTimeline,
+    loop_music: bool = True,
 ) -> dict[str, str]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     inputs = ["-i", str(narration)]
@@ -67,7 +95,7 @@ def mix_soundtrack(
         source = assets.get(cue.asset_id) or assets.get(cue.sound_need_id)
         if source is None or not source.is_file():
             continue
-        if cue.type == "music":
+        if cue.type == "music" and loop_music:
             inputs.extend(["-stream_loop", "-1", "-i", str(source)])
         else:
             inputs.extend(["-i", str(source)])

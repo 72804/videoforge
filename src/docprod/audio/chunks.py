@@ -77,13 +77,10 @@ def _quote_unbalanced(text: str, start: int, end: int) -> bool:
     return slice_.count('"') % 2 == 1 or slice_.count("“") != slice_.count("”")
 
 
-def _chunk_instructions(index: int) -> str:
+def _chunk_instructions(index: int, base: str = DEFAULT_VOICE_INSTRUCTIONS) -> str:
     if index > 1:
-        return (
-            f"{DEFAULT_VOICE_INSTRUCTIONS} {TTS_CONTINUATION_INSTRUCTIONS} "
-            f"{TTS_ONCE_INSTRUCTIONS}"
-        )
-    return f"{DEFAULT_VOICE_INSTRUCTIONS} {TTS_ONCE_INSTRUCTIONS}"
+        return f"{base} {TTS_CONTINUATION_INSTRUCTIONS} {TTS_ONCE_INSTRUCTIONS}"
+    return f"{base} {TTS_ONCE_INSTRUCTIONS}"
 
 
 def _boundary_candidates(
@@ -202,6 +199,8 @@ class NarrationChunkPlanner:
         self,
         script: CanonicalNarrationScript,
         plan: ScenePlan | None = None,
+        *,
+        voice_instructions: str | None = None,
     ) -> NarrationChunkManifest:
         text = script.text
         chapters = _chapters(plan, script)
@@ -239,7 +238,9 @@ class NarrationChunkPlanner:
             chapter_start = overlapping[0][1] if overlapping else ""
             chapter_end = overlapping[-1][1] if overlapping else ""
             index = len(chunks) + 1
-            instructions = _chunk_instructions(index)
+            instructions = _chunk_instructions(
+                index, base=voice_instructions or DEFAULT_VOICE_INSTRUCTIONS
+            )
             reason = "start" if join_kind == "start" else join_kind
             chunks.append(
                 NarrationChunkSpec(

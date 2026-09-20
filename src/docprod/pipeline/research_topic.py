@@ -136,6 +136,10 @@ def run_research_topic(
     _ = project
     cfg = settings or get_settings()
     topic = load_model(paths.topic_json(), TopicSpec)
+    if topic.content_type == "custom_short_drama":
+        raise RuntimeError(
+            "custom_short_drama projects must not run web research. Use plan-custom-drama."
+        )
     model = cfg.research_model
     max_calls = cfg.research_max_tool_calls or MAX_WEB_TOOL_CALLS
     request_hash = research_request_hash(topic, model=model, max_tool_calls=max_calls)

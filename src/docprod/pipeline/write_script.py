@@ -49,6 +49,10 @@ def run_write_script(
 ) -> tuple[NarrationScript, bool, int]:
     cfg = settings or get_settings()
     topic = load_model(paths.topic_json(), TopicSpec)
+    if topic.content_type == "custom_short_drama":
+        raise DossierValidationError(
+            "custom_short_drama uses plan-custom-drama; write-script is documentary-only."
+        )
     if not paths.research_dossier_json().is_file():
         raise DossierValidationError("Dossier missing. Run build-dossier first.")
     dossier = load_model(paths.research_dossier_json(), ResearchDossier)

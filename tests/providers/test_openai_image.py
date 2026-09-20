@@ -78,6 +78,9 @@ class FakeImages:
             model="gpt-image-2.5-flare",
         )
 
+    def edit(self, **kwargs: object) -> SimpleNamespace:
+        return self.generate(**kwargs)
+
 
 class FakeClient:
     def __init__(self, images: FakeImages | None = None) -> None:
@@ -125,6 +128,22 @@ def test_request_payload_uses_configured_model_size_quality() -> None:
     assert result.image_bytes == JPEG_BYTES
     assert result.revised_prompt == "revised documentary still"
     assert result.usage == {"total_tokens": 12}
+
+
+def test_generate_with_reference_uses_edit(tmp_path: Path) -> None:
+    images = FakeImages()
+    cfg = ImageGenerationConfig(
+        model="gpt-image-2.5-flare",
+        size="1536x864",
+        quality="medium",
+        output_format="jpeg",
+    )
+    ref = tmp_path / "ref.jpg"
+    ref.write_bytes(JPEG_BYTES)
+    provider = OpenAIImageProvider(settings=_settings(), config=cfg, client=FakeClient(images))
+    provider.generate("new scene", confirm_paid=True, reference_images=[ref])
+    assert "image" in images.calls[0]
+    assert images.calls[0]["model"] == "gpt-image-2.5-flare"
 
 
 def test_execute_writes_image_metadata_sha_and_cache(

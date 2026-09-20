@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import time
+from pathlib import Path
 from typing import Any
 
 from openai import (
@@ -107,9 +108,11 @@ class OpenAIImageProvider:
         confirm_paid: bool,
         seed: int | None = None,
         max_attempts: int = 2,
+        reference_images: list[Path] | None = None,
     ) -> OpenAIImageResult:
         require_paid_call_allowed("openai", confirm_paid=confirm_paid, settings=self.settings)
         require_openai_api_key(self.settings)
+        refs = [Path(path) for path in (reference_images or []) if Path(path).is_file()]
         kwargs: dict[str, Any] = {
             "model": self.config.model,
             "prompt": prompt,
@@ -122,16 +125,27 @@ class OpenAIImageProvider:
         started = time.perf_counter()
         response = None
         last_error: BaseException | None = None
-        for attempt in range(max(1, max_attempts)):
-            try:
-                response = client.images.generate(**kwargs)
-                last_error = None
-                break
-            except Exception as exc:
-                last_error = exc
-                if attempt == 0 and _is_transient(exc) and max_attempts > 1:
-                    continue
-                raise
+        handles: list[Any] = []
+        try:
+            if refs:
+                handles = [path.open("rb") for path in refs]
+                kwargs["image"] = handles if len(handles) > 1 else handles[0]
+            for attempt in range(max(1, max_attempts)):
+                try:
+                    if refs:
+                        response = client.images.edit(**kwargs)
+                    else:
+                        response = client.images.generate(**kwargs)
+                    last_error = None
+                    break
+                except Exception as exc:
+                    last_error = exc
+                    if attempt == 0 and _is_transient(exc) and max_attempts > 1:
+                        continue
+                    raise
+        finally:
+            for handle in handles:
+                handle.close()
         if response is None:
             raise last_error or RuntimeError("OpenAI image generation returned no response")
         elapsed = time.perf_counter() - started

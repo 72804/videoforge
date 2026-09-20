@@ -73,3 +73,34 @@ Deferred:
 - never overwrite locked human decisions
 
 Paid stages may reuse a cached successful result when the request hash is unchanged. That is not a revision history or lock system.
+
+---
+
+## PHASE 12 — QUALITY ROUTER / CINEMATIC ENGINE
+
+**Status: PLANNING IMPLEMENTED / PRODUCTION EXECUTION NOT ENABLED**
+
+Code, tests, and dry-run cost plans exist. Paid multi-model production is **not**
+wired to a one-shot execute command.
+
+Implemented:
+
+- production classes and quality profiles (`ECONOMY` … `LOCAL_ONLY`)
+- capability catalog + dry-run cost planner
+- greedy budget allocation
+- dialogue / performance request objects + unimplemented adapters
+- provider-status / model-catalog / quality-plan CLI
+
+### Deferred creator UI
+
+- quality-profile selector
+- per-scene provider override
+- model picker
+- scene lock / regen scene
+- performance driving-video upload
+- audio provider override
+- cost slider / budget control
+- preview-before-spend
+
+Do not treat these as available in the current CLI beyond dry-run reports.
+

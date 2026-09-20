@@ -123,9 +123,14 @@ def run_plan_story_scenes(
     client: OpenAIResponsesProvider | None = None,
 ) -> StoryPlanResult:
     cfg = settings or get_settings()
+    topic = load_model(paths.topic_json(), TopicSpec)
+    if topic.content_type == "custom_short_drama":
+        raise SemanticPlannerError(
+            "custom_short_drama uses plan-custom-drama; "
+            "plan-story-scenes is documentary-only."
+        )
     if not paths.story_script_json().is_file() or not paths.research_dossier_json().is_file():
         raise SemanticPlannerError("Missing story script or dossier. Finish Phase 8 first.")
-    topic = load_model(paths.topic_json(), TopicSpec)
     script = load_model(paths.story_script_json(), NarrationScript)
     dossier = load_model(paths.research_dossier_json(), ResearchDossier)
     registry = persist_evidence_registry(paths)

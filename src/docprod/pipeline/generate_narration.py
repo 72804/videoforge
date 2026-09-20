@@ -89,11 +89,15 @@ def prepare_narration(
     plan: ScenePlan,
     *,
     settings: Settings | None = None,
+    voice_instructions: str | None = None,
 ) -> NarrationDryRun:
     cfg = settings or get_settings()
+    instructions = voice_instructions or DEFAULT_VOICE_INSTRUCTIONS
     script = build_canonical_script(plan)
     persist_canonical_script(paths, script)
-    manifest = NarrationChunkPlanner().plan(script, plan)
+    manifest = NarrationChunkPlanner().plan(
+        script, plan, voice_instructions=instructions
+    )
     validate_chunk_manifest(manifest, script)
     paths.narration_chunks_dir().mkdir(parents=True, exist_ok=True)
     save_model(paths.narration_proposed_chunk_plan(), manifest)
@@ -114,7 +118,7 @@ def prepare_narration(
         model=cfg.openai_tts_model,
         voice=cfg.openai_tts_voice,
         speed=cfg.openai_tts_speed,
-        instructions=DEFAULT_VOICE_INSTRUCTIONS,
+        instructions=instructions,
         character_count=len(script.text),
         word_count=len(tokenize_display(script.text)),
         output_wav=paths.narration_master_wav(),
@@ -149,10 +153,14 @@ def generate_narration(
     settings: Settings | None = None,
     tts: OpenAITTSProvider | None = None,
     whisper: OpenAIWhisperAligner | None = None,
+    voice_instructions: str | None = None,
 ) -> NarrationResult:
     cfg = settings or get_settings()
     _ = project
-    prepared = prepare_narration(paths, plan, settings=cfg)
+    instructions = voice_instructions or DEFAULT_VOICE_INSTRUCTIONS
+    prepared = prepare_narration(
+        paths, plan, settings=cfg, voice_instructions=instructions
+    )
     script = prepared.script
     manifest = prepared.chunk_manifest
     if paths.narration_chunk_manifest().is_file() and paths.narration_chunk_wav(1).is_file():
@@ -162,7 +170,7 @@ def generate_narration(
         model=cfg.openai_tts_model,
         voice=cfg.openai_tts_voice,
         speed=cfg.openai_tts_speed,
-        instructions=DEFAULT_VOICE_INSTRUCTIONS,
+        instructions=instructions,
         script=script.text + f"|chunks={manifest.chunk_count}",
     )
     wav = paths.narration_master_wav()
@@ -418,7 +426,7 @@ def generate_narration(
         model=cfg.openai_tts_model,
         voice=cfg.openai_tts_voice,
         speed=cfg.openai_tts_speed,
-        instructions=DEFAULT_VOICE_INSTRUCTIONS,
+        instructions=instructions,
         script_hash=script_hash,
         request_hash=request_hash,
         duration=probe.duration,

@@ -74,6 +74,8 @@ def build_canonical_script(plan: ScenePlan) -> CanonicalNarrationScript:
     cursor = 0
     for scene in plan.scenes:
         narration = normalize_whitespace(scene.narration)
+        if not narration:
+            continue
         if pieces:
             cursor += 1  # joining space
         start = cursor

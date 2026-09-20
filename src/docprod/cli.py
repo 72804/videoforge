@@ -226,6 +226,210 @@ def init_project(
     console.print(f"{action} project [bold]{project_id}[/bold] at {project_dir.root}")
 
 
+@app.command("plan-custom-drama")
+def plan_custom_drama_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+) -> None:
+    """Author a fictional short-drama plan locally. Zero paid APIs."""
+    from docprod.pipeline.plan_custom_drama import plan_custom_drama
+
+    result = plan_custom_drama(project_id=project_id)
+    console.print("episode_mode=custom_short_drama paid_calls=0")
+    console.print(f"project={result.project_id}")
+    console.print(f"script_words={result.script_words}")
+    console.print(f"runtime_min={result.runtime_minutes:.2f}")
+    console.print(f"scenes={result.scene_count}")
+    console.print(f"title_cards={len(result.title_cards)}")
+    console.print(f"ai_stills_planned={result.ai_still_count}")
+    console.print(f"duplicate_visuals={len(result.duplicate_visuals)}")
+    console.print(f"collage_violations={len(result.collage_violations)}")
+    for title in result.title_cards:
+        console.print(f"chapter_title={title}")
+    for key, value in result.planned_paid.items():
+        console.print(f"planned_{key}={value}")
+    console.print(f"review={result.review_path}")
+
+
+@app.command("generate-drama-visuals")
+def generate_drama_visuals_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+    confirm_paid: bool = typer.Option(
+        False,
+        "--confirm-paid",
+        help="Required for real paid image API calls (with ALLOW_PAID_APIS=true).",
+    ),
+    max_paid_requests: int = typer.Option(24, "--max-paid-requests", min=0),
+) -> None:
+    """Generate 3 character refs + all timeline stills. No TTS/Whisper/render."""
+    from docprod.models.scene import ScenePlan
+    from docprod.pipeline.generate_drama_visuals import execute_generate_drama_visuals
+
+    project_dir, _project = _load_project(project_id)
+    if not project_dir.scene_plan_json.is_file():
+        _fail(f"Missing scene plan: {project_dir.scene_plan_json}")
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    try:
+        result = execute_generate_drama_visuals(
+            project_dir,
+            plan=plan,
+            confirm_paid=confirm_paid,
+            max_paid_requests=max_paid_requests,
+            progress=lambda message: console.print(message),
+        )
+    except (PaidApiDisabledError, PaidApiNotConfirmedError, MissingApiKeyError, ValueError) as exc:
+        _fail(str(exc))
+    console.print(f"model={result.model}")
+    console.print(f"raw_model={result.raw_model}")
+    console.print(f"quality={result.quality}")
+    console.print(f"size={result.size}")
+    console.print(f"refs={result.ref_count} timeline={result.timeline_count}")
+    console.print(f"paid_calls={result.paid_calls} cache_hits={result.cache_hits}")
+    console.print(f"failed={len(result.failed)}")
+    for item in result.failed:
+        console.print(f"fail={item}")
+    console.print(f"contact_sheet={result.contact_sheet}")
+    console.print(f"report={result.report_path}")
+
+
+@app.command("produce-custom-drama")
+def produce_custom_drama_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+    confirm_paid: bool = typer.Option(
+        False,
+        "--confirm-paid",
+        help="Required for TTS, Whisper, and Lyria.",
+    ),
+) -> None:
+    """Full custom-drama episode: narration, still-motion, soundtrack, mux. No Veo."""
+    from docprod.pipeline.produce_custom_drama import produce_custom_drama
+
+    project_dir, project = _load_project(project_id)
+    try:
+        report = produce_custom_drama(
+            project_dir,
+            project=project,
+            confirm_paid=confirm_paid,
+            progress=lambda message: console.print(message),
+        )
+    except (
+        PaidApiDisabledError,
+        PaidApiNotConfirmedError,
+        MissingApiKeyError,
+        MaxPaidRequestsExceededError,
+        ZeroPlaceholderError,
+        FileNotFoundError,
+        RuntimeError,
+        AlignmentQualityError,
+        IntegrityBlockedError,
+        TtsInputLimitError,
+        ValueError,
+    ) as exc:
+        _fail(str(exc))
+    console.print(f"narration_model={report.narration_model}")
+    console.print(f"narration_duration={report.narration_duration:.3f}")
+    console.print(f"tts_spend={report.tts_spend_usd}")
+    console.print(
+        f"whisper matched={report.whisper_matched} interpolated={report.whisper_interpolated} "
+        f"unmatched={report.whisper_unmatched} confidence={report.alignment_confidence:.3f}"
+    )
+    console.print(f"whisper_spend={report.whisper_spend_usd}")
+    console.print(f"scene_count={report.scene_count}")
+    console.print(f"unique_narrative_visuals={report.unique_narrative_visuals}")
+    console.print(f"duplicate_visuals={report.duplicate_visuals}")
+    console.print(f"title_card_count={report.title_card_count}")
+    for item in report.title_timings:
+        console.print(f"title={item}")
+    console.print(f"lyria_generation_count={report.lyria_generation_count}")
+    console.print(f"lyria_spend={report.lyria_spend_usd}")
+    console.print(f"music_audible={str(report.music_audible).lower()}")
+    console.print(f"sfx_count={report.sfx_count}")
+    console.print(f"chapter_sting_count={report.chapter_sting_count}")
+    console.print(f"ledger_close={str(report.ledger_close_present).lower()}")
+    console.print(f"subtitle_cues={report.subtitle_cue_count}")
+    console.print(f"lufs={report.lufs}")
+    console.print(f"true_peak={report.true_peak}")
+    console.print(f"final_duration={report.final_duration:.3f}")
+    console.print(f"visual_rerenders={report.visual_rerenders}")
+    console.print(f"new_paid_spend={report.new_paid_spend_usd}")
+    console.print(f"previous_image_cost={report.previous_image_cost_usd}")
+    console.print(f"total_episode_cost={report.total_episode_cost_usd}")
+    console.print(f"qc={report.qc_path}")
+    console.print(f"production={report.production_path}")
+    for note in report.notes:
+        console.print(note)
+
+
+@app.command("quality-plan")
+def quality_plan_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+    profile: str = typer.Option("balanced", "--profile"),
+    all_profiles: bool = typer.Option(False, "--all-profiles"),
+) -> None:
+    """Dry-run quality router. Zero paid APIs."""
+    from docprod.pipeline.quality_plan import plan_quality
+    from docprod.quality.enums import QualityProfile
+
+    project_dir, _project = _load_project(project_id)
+    profiles: list[QualityProfile]
+    if all_profiles:
+        profiles = list(QualityProfile)
+    else:
+        try:
+            profiles = [QualityProfile(profile)]
+        except ValueError:
+            _fail(f"Unknown profile {profile!r}")
+    for item in profiles:
+        bundle = plan_quality(project_dir, profile=item)
+        console.print(f"profile={item.value}")
+        for key, value in bundle.summary.items():
+            console.print(f"{key}={value}")
+        console.print(f"gate_passed={str(bundle.gate_passed).lower()}")
+        console.print(f"markdown={bundle.markdown_path}")
+        console.print(f"json={bundle.json_path}")
+        console.print("paid_calls=0")
+
+
+@app.command("provider-status")
+def provider_status_cmd() -> None:
+    """Show configured providers without printing secrets. No paid calls."""
+    from docprod.quality.availability import availability
+
+    report = availability()
+    table = Table(title="provider status")
+    table.add_column("id")
+    table.add_column("status")
+    for key, value in report.providers.items():
+        table.add_row(key, value.value)
+    for key, value in report.local_endpoints.items():
+        table.add_row(f"local_{key}", value.value)
+    console.print(table)
+
+
+@app.command("model-catalog")
+def model_catalog_cmd() -> None:
+    """Print the capability catalog. No network."""
+    from docprod.quality.catalog import model_catalog
+
+    table = Table(title="model catalog")
+    table.add_column("model")
+    table.add_column("provider")
+    table.add_column("modality")
+    table.add_column("implemented")
+    table.add_column("price")
+    for spec in model_catalog():
+        price = spec.pricing.confidence.value
+        if spec.pricing.value is not None:
+            price = f"{spec.pricing.confidence.value}:{spec.pricing.value}"
+        table.add_row(
+            spec.model_id,
+            spec.provider,
+            spec.modality.value,
+            str(spec.implemented).lower(),
+            price,
+        )
+    console.print(table)
+
+
 @app.command("init-research")
 def init_research_cmd(
     project_id: str = typer.Argument(...),
