@@ -36,7 +36,7 @@ class TelegramClient(Protocol):
         *,
         secret_token: str = "",
         allowed_updates: list[str] | None = None,
-    ) -> dict[str, Any]: ...
+    ) -> bool: ...
 
     def webhook_info(self) -> dict[str, Any]: ...
 
@@ -124,9 +124,9 @@ class HttpxTelegramClient:
         *,
         secret_token: str = "",
         allowed_updates: list[str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> bool:
         if not url.strip():
-            return self._call("deleteWebhook", {"drop_pending_updates": False})
+            return bool(self._call("deleteWebhook", {"drop_pending_updates": False}))
         payload: dict[str, Any] = {
             "url": url,
             "allowed_updates": allowed_updates
@@ -135,7 +135,7 @@ class HttpxTelegramClient:
         }
         if secret_token:
             payload["secret_token"] = secret_token
-        return self._call("setWebhook", payload)
+        return bool(self._call("setWebhook", payload))
 
     def webhook_info(self) -> dict[str, Any]:
         return self._call("getWebhookInfo", {})
@@ -207,7 +207,7 @@ class FakeTelegramClient:
         *,
         secret_token: str = "",
         allowed_updates: list[str] | None = None,
-    ) -> dict[str, Any]:
+    ) -> bool:
         self.webhook = {
             "url": url,
             "has_custom_certificate": False,
@@ -215,7 +215,7 @@ class FakeTelegramClient:
             "allowed_updates": allowed_updates,
             "secret_configured": bool(secret_token),
         }
-        return self.webhook
+        return True
 
     def webhook_info(self) -> dict[str, Any]:
         return dict(self.webhook)

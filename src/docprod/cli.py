@@ -2857,8 +2857,12 @@ def telegram_webhook_set() -> None:
         console.print("TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_URL are required")
         raise typer.Exit(code=1)
     client = HttpxTelegramClient(token)
-    info = client.set_webhook(url, secret_token=secret)
-    console.print(f"webhook url={info.get('url', url)}")
+    ok = client.set_webhook(url, secret_token=secret)
+    if ok:
+        console.print(f"webhook url={url}")
+        return
+    console.print("Telegram rejected setWebhook")
+    raise typer.Exit(code=1)
 
 
 @app.command("telegram-migrate")
