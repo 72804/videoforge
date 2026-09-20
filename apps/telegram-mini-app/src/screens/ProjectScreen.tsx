@@ -19,10 +19,20 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
   const [busy, setBusy] = useState(false);
   const [rendering, setRendering] = useState("");
 
+  const [preview, setPreview] = useState<string | null>(null);
+
   async function load() {
     const [p, s] = await Promise.all([client.project(projectId), client.scenes(projectId)]);
     setProject(p);
     setScenes(s);
+    if (p.final_asset_version_id) {
+      try {
+        const url = await client.media(p.final_asset_version_id);
+        setPreview(url);
+      } catch {
+        setPreview(null);
+      }
+    }
   }
 
   useEffect(() => {
@@ -66,7 +76,11 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
       <h1>{project?.title || "Project"}</h1>
       <div className={`status-pill ${project?.status || ""}`}>{statusLabel(project?.status || "")}</div>
       <div className="card" style={{ minHeight: 180, marginTop: 16 }}>
-        <p className="lede">{project?.prompt}</p>
+        {preview ? (
+          <video src={preview} controls playsInline style={{ width: "100%" }} data-testid="final-video" />
+        ) : (
+          <p className="lede">{project?.prompt}</p>
+        )}
         <p>{formatDuration(project?.duration_seconds)}</p>
         {IS_DEV ? <div className="mock-tag" style={{ position: "relative" }}>Mock preview</div> : null}
       </div>
@@ -76,7 +90,17 @@ export function ProjectScreen({ projectId }: { projectId: string }) {
         </Link>
       ) : null}
       <div className="row" style={{ margin: "12px 0" }}>
-        <button className="btn primary" type="button">Play / Preview</button>
+        <button
+          className="btn primary"
+          type="button"
+          disabled={!preview}
+          onClick={() => {
+            const node = document.querySelector("video[data-testid='final-video']");
+            if (node instanceof HTMLVideoElement) void node.play();
+          }}
+        >
+          Play / Preview
+        </button>
         <button className="btn" data-testid="render" disabled={busy} onClick={render}>
           {rendering || "Render / Export"}
         </button>

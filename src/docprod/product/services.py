@@ -5,11 +5,14 @@ from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
 from docprod.product.auth import TelegramInitData, validate_init_data
+from docprod.product.canary import canary_allows
 from docprod.product.contracts import JobStatusView, ProjectSummary, SceneSummary
+from docprod.product.engine_bridge import build_engine_spec, persist_engine_outline
 from docprod.product.enums import (
     AspectRatio,
     AssetKind,
     AttemptStatus,
+    ContentType,
     DurationMode,
     JobStatus,
     LedgerStatus,
@@ -62,6 +65,7 @@ from docprod.product.plans import (
     default_plan_items,
     hash_quote,
 )
+from docprod.product.progress import progress_counts, work_units
 from docprod.product.repository import MemoryRepository
 from docprod.product.settlement import classify_attempt
 from docprod.product.storage import MemoryStorageBackend, StorageBackend
@@ -84,6 +88,9 @@ class ProductService:
         moderation: ModerationHooks | None = None,
         bot_token: str = "test-bot-token",
         clock: Clock | None = None,
+        generation_mode: str = "mock",
+        real_generation_canary: bool = False,
+        canary_telegram_ids: frozenset[int] | None = None,
     ) -> None:
         self.repo = repo or MemoryRepository()
         self.storage = storage or MemoryStorageBackend()
@@ -92,6 +99,9 @@ class ProductService:
         self.moderation = moderation or ModerationHooks()
         self.bot_token = bot_token
         self.clock = clock or utcnow
+        self.generation_mode = generation_mode
+        self.real_generation_canary = real_generation_canary
+        self.canary_telegram_ids = canary_telegram_ids or frozenset()
 
     def authenticate_telegram(self, init_data: str) -> TelegramUser:
         parsed: TelegramInitData = validate_init_data(
@@ -181,6 +191,7 @@ class ProductService:
             default_text_model=default_text_model,
             default_voice_model=default_voice_model,
             style=style,
+            content_type=ContentType.CUSTOM_STORY,
         )
         return self.repo.put_project(project)
 
@@ -453,7 +464,19 @@ class ProductService:
     ):
         project = self._require_project(user_id, project_id)
         if kind == "full_project" and not self.repo.scenes_for(project_id):
-            self.ensure_mock_outline(user_id, project_id)
+            if self.generation_mode == "real":
+                spec = build_engine_spec(
+                    project,
+                    characters=self.repo.characters_for(project_id),
+                    references=[
+                        ref for ref in self.repo.references.values() if ref.project_id == project_id
+                    ],
+                    hard_max_usd=self.limits.max_provider_usd_per_job,
+                    pricing=self.pricing,
+                )
+                persist_engine_outline(self.repo, project, spec)
+            else:
+                self.ensure_mock_outline(user_id, project_id)
         if kind == "scene_video" and scene_id:
             animate_scene_ids = {scene_id}
         versions = self.repo.active_versions(project_id)
@@ -601,6 +624,14 @@ class ProductService:
             raise ProductError(gate.reason or "generation ineligible")
         if quote.estimated_provider_usd - 1e-9 > self.limits.max_provider_usd_per_job:
             raise LimitExceededError("provider cost cap exceeded")
+        if self.real_generation_canary:
+            user = self.repo.users[user_id]
+            if not canary_allows(
+                user.telegram_user_id,
+                self.canary_telegram_ids,
+                required=True,
+            ):
+                raise LimitExceededError("real generation is limited to the canary allowlist")
         job = GenerationJob(
             project_id=project.id,
             user_id=user_id,
@@ -613,11 +644,15 @@ class ProductService:
             provider_cost_cap=self.limits.max_provider_usd_per_job,
             reserved_provider_cost=quote.estimated_provider_usd,
             progress={
+                "story": {"completed": 0, "total": 1},
+                "scene_planning": {"completed": 0, "total": 1},
                 "script": {"completed": 0, "total": 1},
                 "images": {"completed": 0, "total": len(self.repo.scenes_for(project.id))},
                 "video": {"completed": 0, "total": 0},
+                "voice": {"completed": 0, "total": 1},
                 "audio": {"completed": 0, "total": 1},
                 "render": {"completed": 0, "total": 1},
+                "upload": {"completed": 0, "total": 1},
             },
             created_at=self.clock(),
             updated_at=self.clock(),
@@ -760,9 +795,7 @@ class ProductService:
             started_at=now,
             updated_at=now,
             completed_at=(
-                now
-                if attempt_status in {AttemptStatus.SUCCEEDED, AttemptStatus.FAILED}
-                else None
+                now if attempt_status in {AttemptStatus.SUCCEEDED, AttemptStatus.FAILED} else None
             ),
             safe_error_message=safe_error_message,
             created_at=now,
@@ -781,7 +814,7 @@ class ProductService:
             project_id=job.project_id,
             job_id=job.id,
             kind="project_ready",
-            payload={"text": "Your video is ready.", "open_project": True},
+            payload={"text": "Your video is ready 🎬", "open_project": True},
         )
         self.repo.outbox[note.id] = note
         return render
@@ -832,17 +865,7 @@ class ProductService:
             raise NotFoundError("job not found")
         if job.user_id != user_id:
             raise OwnershipError("job does not belong to user")
-        units = []
-        for label, counts in job.progress.items():
-            units.append(
-                {
-                    "label": label,
-                    "completed": int(counts["completed"]),
-                    "total": int(counts["total"]),
-                    "done": int(counts["total"]) > 0
-                    and int(counts["completed"]) >= int(counts["total"]),
-                }
-            )
+        units = work_units(job.progress)
         return JobStatusView(
             id=job.id,
             status=job.status.value,
@@ -908,6 +931,8 @@ class ProductService:
             sha256=_sha256_bytes(data),
             model=model,
             provider="mock",
+            mime="application/octet-stream",
+            byte_size=len(data),
         )
         self.repo.asset_versions[version.id] = version
         scene_version = self._active_version(scene)
@@ -926,10 +951,7 @@ class ProductService:
         progress = None
         if jobs:
             latest = max(jobs, key=lambda j: j.created_at)
-            progress = {
-                key: int(val["completed"])
-                for key, val in latest.progress.items()
-            }
+            progress = progress_counts(latest.progress)
         return ProjectSummary(
             id=project.id,
             title=project.title,
@@ -966,4 +988,5 @@ def freeze_clock(moment: datetime) -> Clock:
         if moment.tzinfo is None:
             return moment.replace(tzinfo=UTC)
         return moment
+
     return _clock

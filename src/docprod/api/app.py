@@ -64,6 +64,7 @@ def create_app(
     job_execution_mode: str = "worker",
     internal_job_secret: str = "",
     notifier=None,
+    worker_wake_url: str = "",
 ) -> FastAPI:
     if service is None:
         repo = load_repository_file(persist_path) if persist_path else None
@@ -94,6 +95,7 @@ def create_app(
         job_execution_mode=job_execution_mode,
         internal_job_secret=internal_job_secret,
         notifier=notifier,
+        worker_wake_url=worker_wake_url,
     )
     app = FastAPI(
         title="Docprod Telegram Mini App API",
@@ -332,6 +334,7 @@ def app_from_settings() -> FastAPI:
         job_execution_mode=resolve_job_execution_mode(settings),
         internal_job_secret=internal,
         notifier=notifier,
+        worker_wake_url=settings.worker_wake_url.strip(),
     )
 
 

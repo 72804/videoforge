@@ -180,6 +180,7 @@ class AssetVersion(BaseModel):
     model: str = ""
     provider: str = ""
     mime: str = ""
+    byte_size: int = 0
     width: int | None = None
     height: int | None = None
     duration_seconds: float | None = None
@@ -289,6 +290,7 @@ class Render(BaseModel):
     project_id: str
     storage_key: str
     stale: bool = False
+    asset_version_id: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 
 

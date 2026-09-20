@@ -95,6 +95,17 @@ class Settings(BaseSettings):
     job_lease_seconds: int = Field(default=30)
     job_execution_mode: str = Field(default="")
     internal_job_secret: SecretStr | None = Field(default=None)
+    real_generation_dry_run: bool = Field(default=True)
+    real_generation_canary: bool = Field(default=False)
+    generation_canary_telegram_ids: str = Field(default="")
+    canary_max_provider_usd: float = Field(default=2.0)
+    worker_wake_url: str = Field(default="")
+    s3_bucket: str = Field(default="")
+    s3_endpoint: str = Field(default="")
+    s3_region: str = Field(default="auto")
+    s3_access_key: SecretStr | None = Field(default=None)
+    s3_secret_key: SecretStr | None = Field(default=None)
+    s3_public_base: str = Field(default="")
 
     def openai_key_configured(self) -> bool:
         secret = self.openai_api_key
@@ -235,9 +246,26 @@ def resolve_job_execution_mode(settings: Settings) -> str:
     mode = settings.job_execution_mode.strip().lower()
     if mode in {"inline", "worker"}:
         return mode
+    if settings.worker_wake_url.strip():
+        return "worker"
     if settings.app_env.strip().lower() == "production":
         return "inline"
     return "worker"
+
+
+def _provider_keys_configured(settings: Settings) -> list[str]:
+    names: list[str] = []
+    if settings.openai_key_configured():
+        names.append("OPENAI_API_KEY")
+    if settings.gemini_key_configured():
+        names.append("GEMINI_API_KEY")
+    if settings.runway_key_configured():
+        names.append("RUNWAY_API_KEY")
+    if settings.elevenlabs_key_configured():
+        names.append("ELEVENLABS_API_KEY")
+    if settings.anthropic_key_configured():
+        names.append("ANTHROPIC_API_KEY")
+    return names
 
 
 def validate_runtime_settings(settings: Settings, *, role: str = "api") -> None:
@@ -249,14 +277,16 @@ def validate_runtime_settings(settings: Settings, *, role: str = "api") -> None:
     env = settings.app_env.strip().lower()
     payment = settings.payment_mode.strip().lower() or "simulated"
     generation = settings.generation_mode.strip().lower() or "mock"
-    if generation != "mock":
-        raise RuntimeError("GENERATION_MODE must be mock until paid adapters are enabled.")
-    if settings.allow_paid_generation:
-        raise RuntimeError("ALLOW_PAID_GENERATION must be false until Phase 16.")
+    if generation not in {"mock", "real"}:
+        raise RuntimeError("GENERATION_MODE must be mock or real.")
+    if role == "api" and generation == "real":
+        raise RuntimeError("API GENERATION_MODE must be mock; real execution is worker-only.")
+    if role == "api" and settings.allow_paid_generation:
+        raise RuntimeError("ALLOW_PAID_GENERATION is worker-only.")
+    if role == "api" and settings.allow_paid_apis:
+        raise RuntimeError("ALLOW_PAID_APIS is worker-only.")
     if env in {"development", "test"}:
         return
-    if settings.allow_paid_apis:
-        raise RuntimeError("ALLOW_PAID_APIS must be false until Phase 16.")
     if payment == "simulated":
         raise RuntimeError("PAYMENT_MODE=simulated is not allowed in production.")
     if payment == "fake":
@@ -273,14 +303,26 @@ def validate_runtime_settings(settings: Settings, *, role: str = "api") -> None:
     url = settings.telegram_mini_app_url.strip()
     if not url.startswith("https://"):
         raise RuntimeError("TELEGRAM_MINI_APP_URL must be https in production.")
-    if role == "worker":
+    if role == "api":
+        extra = _provider_keys_configured(settings)
+        if extra:
+            raise RuntimeError("Provider API keys must not be set on the API: " + ", ".join(extra))
+        if not _secret(settings, "api_session_secret"):
+            raise RuntimeError("API_SESSION_SECRET is required in production.")
+        if not _secret(settings, "telegram_webhook_secret"):
+            raise RuntimeError("TELEGRAM_WEBHOOK_SECRET is required in production.")
+        if not _secret(settings, "internal_job_secret"):
+            raise RuntimeError("INTERNAL_JOB_SECRET is required in production.")
+        origins = cors_origin_list(settings.api_cors_origins)
+        if "*" in origins:
+            raise RuntimeError("CORS wildcard origins are not allowed with credentialed cookies.")
         return
-    if not _secret(settings, "api_session_secret"):
-        raise RuntimeError("API_SESSION_SECRET is required in production.")
-    if not _secret(settings, "telegram_webhook_secret"):
-        raise RuntimeError("TELEGRAM_WEBHOOK_SECRET is required in production.")
-    if not _secret(settings, "internal_job_secret"):
-        raise RuntimeError("INTERNAL_JOB_SECRET is required in production.")
-    origins = cors_origin_list(settings.api_cors_origins)
-    if "*" in origins:
-        raise RuntimeError("CORS wildcard origins are not allowed with credentialed cookies.")
+    if generation == "real" and not settings.real_generation_dry_run:
+        if not settings.allow_paid_generation or not settings.allow_paid_apis:
+            raise RuntimeError(
+                "Real paid execution requires ALLOW_PAID_GENERATION and ALLOW_PAID_APIS."
+            )
+        if not settings.s3_bucket.strip() or not _secret(settings, "s3_access_key"):
+            raise RuntimeError("Object storage credentials are required for real generation.")
+    if generation == "mock" and settings.allow_paid_generation:
+        raise RuntimeError("ALLOW_PAID_GENERATION requires GENERATION_MODE=real on the worker.")

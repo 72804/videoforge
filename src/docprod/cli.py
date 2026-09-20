@@ -613,9 +613,7 @@ def migrate_character_stills_cmd(
 
     project_dir, _project = _load_project(project_id)
     plan = load_model(project_dir.scene_plan_json, ScenePlan)
-    pre = preflight_still_migration(
-        project_dir, plan, hard_cap_usd=hard_cap_usd
-    )
+    pre = preflight_still_migration(project_dir, plan, hard_cap_usd=hard_cap_usd)
     json_path, md_path = write_migration_preflight(project_dir, pre)
     console.print(md_path.read_text(encoding="utf-8"))
     console.print(f"preflight_json={json_path}")
@@ -2767,6 +2765,8 @@ def telegram_worker() -> None:
         sender=_worker_sender(settings),
         generation_mode=settings.generation_mode.strip().lower() or "mock",
         allow_paid_generation=settings.allow_paid_generation,
+        allow_paid_apis=settings.allow_paid_apis,
+        dry_run=settings.real_generation_dry_run,
     ).run_forever()
 
 
@@ -2901,8 +2901,34 @@ def telegram_jobs_run(
         worker_id=settings.worker_id.strip() or "cli-bounded",
         sender=_worker_sender(settings),
         generation_mode=settings.generation_mode.strip().lower() or "mock",
-        allow_paid_generation=False,
+        allow_paid_generation=settings.allow_paid_generation,
+        allow_paid_apis=settings.allow_paid_apis,
+        dry_run=settings.real_generation_dry_run,
     ).run_bounded(max_jobs=max_jobs)
+    console.print(f"ran={ran}")
+
+
+@app.command("telegram-worker-once")
+def telegram_worker_once() -> None:
+    """Cloud Run Job entry: claim and run at most one queued job, then exit."""
+    from docprod.product.durable import DurableGenerationWorker
+    from docprod.product.factory import build_product_service
+
+    settings = get_settings()
+    from docprod.config import validate_runtime_settings
+
+    validate_runtime_settings(settings, role="worker")
+    configure_logging(settings)
+    service = build_product_service(settings)
+    ran = DurableGenerationWorker(
+        service,
+        worker_id=settings.worker_id.strip() or "job-once",
+        sender=_worker_sender(settings),
+        generation_mode=settings.generation_mode.strip().lower() or "mock",
+        allow_paid_generation=settings.allow_paid_generation,
+        allow_paid_apis=settings.allow_paid_apis,
+        dry_run=settings.real_generation_dry_run,
+    ).run_bounded(max_jobs=1)
     console.print(f"ran={ran}")
 
 

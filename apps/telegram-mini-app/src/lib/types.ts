@@ -30,6 +30,7 @@ export type Project = {
   style?: string | null;
   active_job_id?: string | null;
   active_job_status?: string | null;
+  final_asset_version_id?: string | null;
 };
 
 export type Character = {

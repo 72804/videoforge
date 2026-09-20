@@ -29,6 +29,7 @@ class AppContext:
     job_execution_mode: str = "worker"
     internal_job_secret: str = ""
     notifier: NotificationSender | None = None
+    worker_wake_url: str = ""
 
 
 def get_ctx(request: Request) -> AppContext:
@@ -61,6 +62,7 @@ def current_user(
 def run_queued_job(ctx: AppContext, job: GenerationJob) -> GenerationJob:
     """Optionally execute mock generation in-process. Local default leaves jobs queued."""
     if ctx.job_execution_mode != "inline":
+        _wake_worker(ctx)
         return job
     from docprod.product.durable import DurableGenerationWorker
 
@@ -72,3 +74,18 @@ def run_queued_job(ctx: AppContext, job: GenerationJob) -> GenerationJob:
         allow_paid_generation=False,
     ).run_job_id(job.id)
     return ctx.service.repo.jobs[job.id]
+
+
+def _wake_worker(ctx: AppContext) -> None:
+    url = ctx.worker_wake_url.strip()
+    if not url:
+        return
+    import httpx
+
+    headers = {}
+    if ctx.internal_job_secret:
+        headers["X-Internal-Job-Secret"] = ctx.internal_job_secret
+    try:
+        httpx.post(url, headers=headers, timeout=5.0)
+    except Exception:
+        return

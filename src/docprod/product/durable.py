@@ -11,6 +11,7 @@ from docprod.observability import log_scope
 from docprod.product.enums import JobStatus
 from docprod.product.models import WorkerHeartbeat, utcnow
 from docprod.product.notifications import MockNotificationSender, drain_outbox
+from docprod.product.real_worker import RealGenerationWorker
 from docprod.product.services import ProductService
 from docprod.product.worker import MockGenerationWorker
 
@@ -28,19 +29,31 @@ class DurableGenerationWorker:
         sender: MockNotificationSender | None = None,
         generation_mode: str = "mock",
         allow_paid_generation: bool = False,
+        allow_paid_apis: bool = False,
+        dry_run: bool = True,
     ) -> None:
         self.service = service
         self.worker_id = worker_id
         self.poll_seconds = max(poll_seconds, 0.05)
         self.lease = timedelta(seconds=lease_seconds)
         self.sender = sender or MockNotificationSender()
-        self.mock = MockGenerationWorker(
-            service,
-            worker_id=worker_id,
-            generation_mode=generation_mode,
-            allow_paid_generation=allow_paid_generation,
-        )
-        self.mock.lease = self.lease
+        if generation_mode == "real":
+            self.runner = RealGenerationWorker(
+                service,
+                worker_id=worker_id,
+                generation_mode=generation_mode,
+                allow_paid_generation=allow_paid_generation,
+                allow_paid_apis=allow_paid_apis,
+                dry_run=dry_run,
+            )
+        else:
+            self.runner = MockGenerationWorker(
+                service,
+                worker_id=worker_id,
+                generation_mode=generation_mode,
+                allow_paid_generation=allow_paid_generation,
+            )
+        self.runner.lease = self.lease
         self.stop = False
 
     def request_stop(self, *_args: object) -> None:
@@ -80,9 +93,7 @@ class DurableGenerationWorker:
     def tick(self) -> bool:
         def _once() -> bool:
             self._beat()
-            job = self.service.repo.claim_queued_job(
-                self.worker_id, now=utcnow(), lease=self.lease
-            )
+            job = self.service.repo.claim_queued_job(self.worker_id, now=utcnow(), lease=self.lease)
             drain_outbox(self.service.repo, self.sender)
             if job is None:
                 return False
@@ -90,7 +101,7 @@ class DurableGenerationWorker:
                 log.info("claimed generation job")
                 self._beat(job.id)
                 try:
-                    self.mock.run_job(job.id)
+                    self.runner.run_job(job.id)
                 except Exception:
                     log.exception("worker job failed")
                     try:
@@ -144,7 +155,7 @@ class DurableGenerationWorker:
             job.updated_at = stamp
             with log_scope(job_id=job.id, user_id=job.user_id, project_id=job.project_id):
                 try:
-                    self.mock.run_job(job.id)
+                    self.runner.run_job(job.id)
                 except Exception:
                     log.exception("worker job failed")
                     try:

@@ -14,6 +14,14 @@ class StorageBackend(Protocol):
 
     def url_for(self, key: str) -> str: ...
 
+    def delete(self, key: str) -> None: ...
+
+    def signed_url(
+        self, key: str, *, expires_in: int = 3600, method: str = "GET"
+    ) -> str | None: ...
+
+    def metadata(self, key: str) -> dict[str, str]: ...
+
 
 class LocalStorageBackend:
     """Development object storage. Future S3/R2 backends must match this interface."""
@@ -44,6 +52,18 @@ class LocalStorageBackend:
     def url_for(self, key: str) -> str:
         return "file://" + quote(str(self._path(key).resolve()))
 
+    def delete(self, key: str) -> None:
+        path = self._path(key)
+        if path.is_file():
+            path.unlink()
+
+    def signed_url(self, key: str, *, expires_in: int = 3600, method: str = "GET") -> str | None:
+        return self.url_for(key)
+
+    def metadata(self, key: str) -> dict[str, str]:
+        path = self._path(key)
+        return {"size": str(path.stat().st_size), "content_type": "application/octet-stream"}
+
 
 class PlaceholderStorageBackend:
     """Production mock storage. Bytes are not persisted. /media must not imply a durable disk."""
@@ -59,6 +79,15 @@ class PlaceholderStorageBackend:
 
     def url_for(self, key: str) -> str:
         return f"placeholder://{key}"
+
+    def delete(self, key: str) -> None:
+        return None
+
+    def signed_url(self, key: str, *, expires_in: int = 3600, method: str = "GET") -> str | None:
+        return None
+
+    def metadata(self, key: str) -> dict[str, str]:
+        return {}
 
 
 class MemoryStorageBackend:
@@ -77,3 +106,13 @@ class MemoryStorageBackend:
 
     def url_for(self, key: str) -> str:
         return f"memory://{key}"
+
+    def delete(self, key: str) -> None:
+        self._blobs.pop(key, None)
+
+    def signed_url(self, key: str, *, expires_in: int = 3600, method: str = "GET") -> str | None:
+        return f"memory://{key}?exp={expires_in}"
+
+    def metadata(self, key: str) -> dict[str, str]:
+        data = self._blobs[key]
+        return {"size": str(len(data)), "content_type": "application/octet-stream"}

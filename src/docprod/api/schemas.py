@@ -107,6 +107,7 @@ class ProjectSummaryView(BaseModel):
     style: str | None = None
     active_job_id: str | None = None
     active_job_status: str | None = None
+    final_asset_version_id: str | None = None
 
 
 class CharacterCreate(BaseModel):

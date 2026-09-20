@@ -81,7 +81,7 @@ def test_worker_skips_api_only_secrets() -> None:
     validate_runtime_settings(_prod(api_cors_origins=""))
 
 
-def test_production_rejects_paid_flags() -> None:
+def test_production_api_rejects_paid_flags() -> None:
     try:
         validate_runtime_settings(_prod(allow_paid_apis=True))
     except RuntimeError as exc:
@@ -109,16 +109,12 @@ def test_bind_address_uses_port_env() -> None:
 
 
 def test_neon_postgres_url_normalized() -> None:
-    neon = (
-        "postgres://u:p@ep-abc-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require"
-    )
+    neon = "postgres://u:p@ep-abc-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require"
     converted = sqlalchemy_database_url(neon)
     assert converted.startswith("postgresql+psycopg://")
     assert "sslmode=require" in converted
     assert uses_serverless_pool(converted)
-    assert uses_serverless_pool(
-        "postgresql://u:p@ep-abc.region.aws.neon.tech/db?pgbouncer=true"
-    )
+    assert uses_serverless_pool("postgresql://u:p@ep-abc.region.aws.neon.tech/db?pgbouncer=true")
     engine = make_engine(neon, serverless=True)
     assert engine.pool.__class__.__name__ == "NullPool"
     local = make_engine("postgresql://u:p@127.0.0.1/docprod", serverless=False)
@@ -126,9 +122,7 @@ def test_neon_postgres_url_normalized() -> None:
 
 
 def test_job_execution_mode_defaults() -> None:
-    assert (
-        resolve_job_execution_mode(_prod()) == "inline"
-    )
+    assert resolve_job_execution_mode(_prod()) == "inline"
     assert (
         resolve_job_execution_mode(
             Settings(app_env="development", job_execution_mode="", _env_file=None)
@@ -139,10 +133,6 @@ def test_job_execution_mode_defaults() -> None:
 
 
 def test_railway_postgres_url_normalized() -> None:
-    assert sqlalchemy_database_url("postgres://u:p@host/db").startswith(
-        "postgresql+psycopg://"
-    )
-    assert sqlalchemy_database_url("postgresql://u:p@host/db").startswith(
-        "postgresql+psycopg://"
-    )
+    assert sqlalchemy_database_url("postgres://u:p@host/db").startswith("postgresql+psycopg://")
+    assert sqlalchemy_database_url("postgresql://u:p@host/db").startswith("postgresql+psycopg://")
     assert "+psycopg" in sqlalchemy_database_url("postgresql+psycopg://u:p@host/db")

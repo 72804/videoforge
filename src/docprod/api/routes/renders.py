@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Header, Request
-from fastapi.responses import Response
+from fastapi.responses import RedirectResponse, Response
 
 from docprod.api.dependencies import current_user, get_ctx, get_service, run_queued_job
 from docprod.api.errors import map_product_error
@@ -35,9 +35,7 @@ def render_project(
         )
         if hit:
             return JobAccepted.model_validate(hit.body)
-        job = service.queue_generation(
-            user.id, project_id, body.quote_id, kind="render"
-        )
+        job = service.queue_generation(user.id, project_id, body.quote_id, kind="render")
         job = run_queued_job(get_ctx(request), job)
     except ProductError as exc:
         raise map_product_error(exc) from exc
@@ -67,8 +65,14 @@ def get_media(
     project = service.repo.projects.get(asset.project_id)
     if project is None or project.user_id != user.id:
         raise map_product_error(OwnershipError("forbidden"))
+    signer = getattr(service.storage, "signed_url", None)
+    if callable(signer):
+        signed = signer(version.storage_key, expires_in=3600)
+        if signed and not str(signed).startswith(("memory://", "file://", "placeholder://")):
+            return RedirectResponse(signed, status_code=302)
     try:
         data = service.storage.get_bytes(version.storage_key)
     except (FileNotFoundError, KeyError) as exc:
         raise map_product_error(NotFoundError("asset bytes missing")) from exc
-    return Response(content=data, media_type="application/octet-stream")
+    media_type = version.mime or "application/octet-stream"
+    return Response(content=data, media_type=media_type)

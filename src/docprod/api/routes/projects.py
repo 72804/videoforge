@@ -8,6 +8,7 @@ from docprod.api.schemas import ProjectCreate, ProjectPatch, ProjectSummaryView
 from docprod.product.enums import AspectRatio, DurationMode, ProjectStatus
 from docprod.product.errors import ProductError
 from docprod.product.models import Project, TelegramUser
+from docprod.product.progress import progress_counts
 from docprod.product.services import ProductService
 
 router = APIRouter(tags=["projects"])
@@ -24,9 +25,16 @@ def _summary(
     active_job_status = None
     if jobs:
         latest = max(jobs, key=lambda j: j.created_at)
-        progress = {key: int(val["completed"]) for key, val in latest.progress.items()}
+        progress = progress_counts(latest.progress)
         active_job_id = latest.id
         active_job_status = latest.status.value
+        final_id = latest.progress.get("final_asset_version_id")
+        if isinstance(final_id, str):
+            payload_final = final_id
+        else:
+            payload_final = None
+    else:
+        payload_final = None
     payload: dict = {
         "id": project.id,
         "title": project.title,
@@ -37,6 +45,7 @@ def _summary(
         "updated_at": project.updated_at.isoformat(),
         "active_job_id": active_job_id,
         "active_job_status": active_job_status,
+        "final_asset_version_id": payload_final,
     }
     if detail:
         payload.update(
@@ -87,11 +96,7 @@ def list_projects(
     user: TelegramUser = Depends(current_user),
     service: ProductService = Depends(get_service),
 ) -> list[ProjectSummaryView]:
-    rows = [
-        p
-        for p in service.repo.projects_for(user.id)
-        if p.status is not ProjectStatus.ARCHIVED
-    ]
+    rows = [p for p in service.repo.projects_for(user.id) if p.status is not ProjectStatus.ARCHIVED]
     return [_summary(service, p) for p in sorted(rows, key=lambda p: p.updated_at, reverse=True)]
 
 

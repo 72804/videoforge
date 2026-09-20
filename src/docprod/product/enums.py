@@ -12,6 +12,7 @@ class ContentType(StrEnum):
     NARRATED = "narrated"
     DRAMATIC = "dramatic"
     HYBRID = "hybrid"
+    CUSTOM_STORY = "custom_story"
 
 
 class ProjectStatus(StrEnum):

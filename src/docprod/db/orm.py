@@ -165,6 +165,7 @@ class AssetVersionRow(Base):
     model: Mapped[str] = mapped_column(Text, nullable=False, default="")
     provider: Mapped[str] = mapped_column(Text, nullable=False, default="")
     mime: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     width: Mapped[int | None] = mapped_column(Integer)
     height: Mapped[int | None] = mapped_column(Integer)
     duration_seconds: Mapped[float | None] = mapped_column(Float)
@@ -286,6 +287,7 @@ class RenderRow(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
     storage_key: Mapped[str] = mapped_column(Text, nullable=False)
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    asset_version_id: Mapped[str | None] = mapped_column(PK)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
