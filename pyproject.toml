@@ -45,9 +45,6 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
-[tool.vercel]
-entrypoint = "app:app"
-
 [tool.ruff]
 src = ["src", "tests"]
 line-length = 100

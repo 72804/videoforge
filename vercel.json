@@ -1,10 +1,33 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "fastapi",
-  "functions": {
-    "app.py": {
-      "maxDuration": 60,
-      "excludeFiles": "{tests/**,apps/**,artifacts/**,projects/**}"
+  "services": {
+    "frontend": {
+      "root": "apps/telegram-mini-app",
+      "framework": "nextjs"
+    },
+    "backend": {
+      "root": "services/api",
+      "framework": "fastapi",
+      "entrypoint": "app:app",
+      "installCommand": "python -m pip install ../..",
+      "functions": {
+        "app.py": {
+          "maxDuration": 60
+        }
+      }
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/health", "destination": { "service": "backend" } },
+    { "source": "/ready", "destination": { "service": "backend" } },
+    { "source": "/docs", "destination": { "service": "backend" } },
+    { "source": "/docs/:path*", "destination": { "service": "backend" } },
+    { "source": "/redoc", "destination": { "service": "backend" } },
+    { "source": "/openapi.json", "destination": { "service": "backend" } },
+    { "source": "/telegram/webhook", "destination": { "service": "backend" } },
+    { "source": "/internal/:path*", "destination": { "service": "backend" } },
+    { "source": "/api/v1", "destination": { "service": "backend" } },
+    { "source": "/api/v1/:path*", "destination": { "service": "backend" } },
+    { "source": "/(.*)", "destination": { "service": "frontend" } }
+  ]
 }

@@ -282,7 +282,5 @@ def validate_runtime_settings(settings: Settings, *, role: str = "api") -> None:
     if not _secret(settings, "internal_job_secret"):
         raise RuntimeError("INTERNAL_JOB_SECRET is required in production.")
     origins = cors_origin_list(settings.api_cors_origins)
-    if not origins:
-        raise RuntimeError("CORS_ALLOWED_ORIGINS is required in production.")
     if "*" in origins:
         raise RuntimeError("CORS wildcard origins are not allowed with credentialed cookies.")

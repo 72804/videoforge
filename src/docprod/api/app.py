@@ -335,7 +335,7 @@ def app_from_settings() -> FastAPI:
     )
 
 
-app = None  # Vercel loads repo-root app.py, not this module-level name.
+app = None  # Vercel Services loads services/api/app.py, not this module-level name.
 
 
 def factory() -> FastAPI:

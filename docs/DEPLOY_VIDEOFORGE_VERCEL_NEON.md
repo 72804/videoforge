@@ -1,129 +1,71 @@
-# Deploy VideoForge (Vercel + Neon)
+# Deploy VideoForge (one Vercel project + Neon)
 
-Production target is **two Vercel projects** from the same GitHub repo plus **Neon PostgreSQL**.
-Generation stays **mocked**. Paid AI stays **off**. Do **not** run `telegram-bot` polling once the production webhook is set.
+One GitHub repo. **One Vercel project.** One public domain. Neon PostgreSQL.
 
-A single Vercel project would mix Next.js and FastAPI roots. That is not simpler here: keep Mini App `Root Directory = apps/telegram-mini-app` and the API at the **repository root**.
+Existing project: `https://videoforge-dusky.vercel.app`
 
-Repo: `https://github.com/72804/videoforge.git`
+Do **not** create a second Vercel project. Generation stays **mocked**. Paid AI stays **off**.
 
-The FastAPI app is a Vercel **zero-config FastAPI** entrypoint: repo-root `app.py` exports `app = app_from_settings()`. Every request hits that ASGI app. Routes stay `/health`, `/ready`, `/telegram/webhook`, `/internal/jobs/run`, `/api/v1/*`. There is no `/api/health`. Do not use `api/index.py` (legacy file-based functions only serve `/api`).
+## Architecture
 
-`https://videoforge-dusky.vercel.app` is the **Mini App** (Next.js). It is not the API. `/health` there is a Next.js 404. Point `NEXT_PUBLIC_API_BASE_URL` at the **API project** origin only (no `/api` suffix).
+Vercel **Services** in repo-root `vercel.json`:
 
-## Human checklist
+| Service | Root | Framework | Entrypoint |
+|---|---|---|---|
+| `frontend` | `apps/telegram-mini-app` | Next.js | default |
+| `backend` | `services/api` | FastAPI | `app:app` → `app_from_settings()` |
 
-1. Create a Neon project (region close to Vercel).
-2. Copy the **pooled** `DATABASE_URL` into a password manager (hostname contains `-pooler.`). Never commit it. Never put it on the Mini App.
-3. Run the Alembic migration **once** against Neon (not on every request):
+`services/api` is a thin deploy root. It imports `docprod` from `src/`; it does not copy the backend.
 
-```bash
-export DATABASE_URL='postgresql://USER:PASSWORD@HOST-pooler.REGION.aws.neon.tech/neondb?sslmode=require'
-uv run alembic upgrade head
-```
+## Public routing
 
-Equivalent:
+First matching rewrite wins. Backend paths are listed **before** the frontend catch-all.
 
-```bash
-export DATABASE_URL='...'
-uv run docprod telegram-migrate
-```
+| Path | Service |
+|---|---|
+| `/health`, `/ready` | FastAPI |
+| `/telegram/webhook` | FastAPI |
+| `/internal/*` | FastAPI |
+| `/api/v1/*` | FastAPI |
+| `/docs`, `/openapi.json` | FastAPI |
+| `/`, `/create/*`, `/projects/*`, `/settings`, everything else | Next.js |
 
-4. Vercel → **Add New** → **Project** → import `72804/videoforge`. Name it **VideoForge API**.
-   - **Root Directory:** repository root (leave empty / `.`).
-   - **Framework Preset:** FastAPI (not Next.js). `vercel.json` also sets `"framework": "fastapi"`.
-   - If the dashboard still says Next.js, override it. A Next.js API project will serve the Mini App HTML and 404 `/health`.
-5. Set API environment variables (Section “API env”). Deploy.
-6. Open `https://<api-vercel-domain>/health` then `/ready`. Expect `generation_mode=mock`, `payment_mode=telegram`, database ready.
-7. Vercel → **Add New** → **Project** → same repo. Name it **VideoForge Mini App**. **Root Directory: `apps/telegram-mini-app`**.
-8. Mini App env:
+The FastAPI app still sees the original paths (`/health`, `/api/v1/...`). There is no `/api/health` and no `/api/api/v1`.
 
-```
-NEXT_PUBLIC_APP_ENV=production
-NEXT_PUBLIC_API_BASE_URL=https://<api-vercel-domain>
-```
+## Same-origin Mini App
 
-Must be public `https://` with **no path**. Do not use the Mini App domain. Do not append `/api` or `/api/v1`.
-9. Deploy the Mini App. Copy its origin, e.g. `https://<mini-app-domain>`.
-10. On the **API** project set:
+Production browser calls are relative: `/api/v1/...`.
 
-```
-TELEGRAM_MINI_APP_URL=https://<mini-app-domain>
-CORS_ALLOWED_ORIGINS=https://<mini-app-domain>
-TELEGRAM_WEBHOOK_URL=https://<api-vercel-domain>/telegram/webhook
-```
+Leave `NEXT_PUBLIC_API_BASE_URL` **empty**. Do not point it at a second hostname.
 
-11. Redeploy the **API** after those URL env changes.
-12. From a machine that has the bot token in a local ignored `.env` (never paste the token into chat or git):
+## Human checklist (existing dusky project)
+
+1. Neon project + pooled `DATABASE_URL` in a password manager.
+2. Migrate once: `DATABASE_URL='…' uv run alembic upgrade head`
+3. Push this commit to `72804/videoforge` `main`.
+4. In the **existing** Vercel project (dusky):
+   - **Root Directory:** empty / `.` (repository root). If it is still `apps/telegram-mini-app`, change it so this `vercel.json` is used.
+   - **Framework Preset:** **Services** (not Next.js-only, not FastAPI-only).
+5. Set env vars on that same project (server + `NEXT_PUBLIC_APP_ENV`). Redeploy.
+6. Check:
+   - `https://videoforge-dusky.vercel.app/` Mini App
+   - `https://videoforge-dusky.vercel.app/health`
+   - `https://videoforge-dusky.vercel.app/ready`
+7. `TELEGRAM_MINI_APP_URL=https://videoforge-dusky.vercel.app`
+8. `TELEGRAM_WEBHOOK_URL=https://videoforge-dusky.vercel.app/telegram/webhook`
+9. Redeploy after URL env changes, then:
 
 ```bash
 uv run docprod telegram-webhook-set
 uv run docprod telegram-webhook-info
 ```
 
-13. BotFather: Menu Button / Mini App URL = `https://<mini-app-domain>`. Configure domain.
-14. Telegram: `/start` on `@VideoForgeAIBot` → Open Studio → Telegram auth → quote → **one** controlled Stars payment → mock generation → completion notification.
+10. BotFather Mini App / menu button / domain = `https://videoforge-dusky.vercel.app`
+11. Telegram `/start` → Studio → auth → quote → **one** Stars payment → mock generation.
 
-Do **not** enable `ALLOW_PAID_GENERATION` or `ALLOW_PAID_APIS`. Do **not** connect Veo / OpenAI / Runway / ElevenLabs.
+## Env (one project)
 
-## Why two Vercel projects
-
-| Project | Root | Runtime |
-|---|---|---|
-| VideoForge Mini App | `apps/telegram-mini-app` | Next.js |
-| VideoForge API | repository root | Python FastAPI (`app.py`) |
-
-Frontend never receives `DATABASE_URL`, bot token, session secret, webhook secret, or `INTERNAL_JOB_SECRET`.
-
-## Public API URLs (FastAPI project only)
-
-After the **API** project deploys (FastAPI, not Next.js):
-
-| Method | Path |
-|---|---|
-| GET | `https://<api-vercel-domain>/health` |
-| GET | `https://<api-vercel-domain>/ready` |
-| POST | `https://<api-vercel-domain>/telegram/webhook` |
-| POST | `https://<api-vercel-domain>/internal/jobs/run` |
-| * | `https://<api-vercel-domain>/api/v1/*` |
-| GET | `https://<api-vercel-domain>/docs` (OpenAPI UI) |
-
-These are **not** valid:
-
-- `https://<mini-app-domain>/health`
-- `https://<api-vercel-domain>/api/health`
-- `NEXT_PUBLIC_API_BASE_URL=https://<api>/api` (would become `/api/api/v1`)
-
-## Mock jobs without a permanent worker
-
-Vercel Functions do not run `uv run docprod telegram-worker` forever.
-
-Production default: `JOB_EXECUTION_MODE=inline`.
-
-1. Client calls generate (after Stars confirmation in Neon).
-2. API persists a `GenerationJob` and claims it by **server-generated** job id.
-3. The same bounded invocation runs mock stages, writes outbox rows, and attempts Telegram delivery.
-4. The function returns. No `while True`.
-
-Crash recovery: `POST /internal/jobs/run` with header `X-Internal-Job-Secret`. It runs **at most one** queued job (`run_bounded(max_jobs=1)`). Expired leases can be reclaimed. Terminal jobs are no-ops. Duplicate payments stay unique in the ledger.
-
-Local development still uses:
-
-```bash
-uv run docprod telegram-api-serve
-uv run docprod telegram-worker
-uv run docprod telegram-bot
-```
-
-`telegram-bot` polling refuses `APP_ENV=production`.
-
-Optional one-shot local drain: `uv run docprod telegram-jobs-run --max-jobs 1`.
-
-## File storage
-
-Production PostgreSQL uses `PlaceholderStorageBackend`. Mock asset **metadata** is in Neon. Bytes are **not** durable. `GET /api/v1/media/{id}` returns 404. Object storage (S3/R2) is a later phase before real media.
-
-## API env (Vercel API project)
+Server (never `NEXT_PUBLIC_`):
 
 ```
 APP_ENV=production
@@ -138,8 +80,8 @@ ALLOW_PAID_APIS=false
 JOB_EXECUTION_MODE=inline
 TELEGRAM_BOT_TOKEN=
 TELEGRAM_BOT_USERNAME=VideoForgeAIBot
-TELEGRAM_MINI_APP_URL=
-TELEGRAM_WEBHOOK_URL=
+TELEGRAM_MINI_APP_URL=https://videoforge-dusky.vercel.app
+TELEGRAM_WEBHOOK_URL=https://videoforge-dusky.vercel.app/telegram/webhook
 TELEGRAM_WEBHOOK_SECRET=
 TELEGRAM_INIT_DATA_MAX_AGE_SECONDS=86400
 CORS_ALLOWED_ORIGINS=
@@ -147,48 +89,33 @@ LOG_LEVEL=INFO
 JOB_LEASE_SECONDS=30
 ```
 
-Generate secrets locally (do not paste output into git):
-
-```bash
-openssl rand -hex 32
-```
-
-Use three values: `API_SESSION_SECRET`, `TELEGRAM_WEBHOOK_SECRET`, `INTERNAL_JOB_SECRET`.
-
-No secret uses a `NEXT_PUBLIC_` prefix.
-
-Webhook URL shape: `https://<api-vercel-domain>/telegram/webhook`.
-
-## Frontend env (Vercel Mini App project)
+Browser:
 
 ```
 NEXT_PUBLIC_APP_ENV=production
-NEXT_PUBLIC_API_BASE_URL=https://<api-vercel-domain>
+NEXT_PUBLIC_API_BASE_URL=
 ```
 
-## Database connections
+Same-origin production does not need CORS. Wildcard CORS is still forbidden. Local split-dev may set `CORS_ALLOWED_ORIGINS=http://127.0.0.1:3000,http://localhost:3000` on the API process only.
 
-Production and Neon pooled URLs use SQLAlchemy `NullPool` (no large per-instance pool). `postgres://` is rewritten to `postgresql+psycopg://`. Query strings such as `sslmode=require` are preserved. Local Compose Postgres tests keep a normal pool unless the URL contains `-pooler.` or `pgbouncer=true`.
+## Local development
 
-Migrations are **never** run inside a request handler.
+Standalone (unchanged):
 
-## Python install on Vercel
+```bash
+uv run docprod telegram-api-serve
+uv run docprod telegram-worker
+cd apps/telegram-mini-app && npm run dev
+```
 
-Vercel reads `pyproject.toml` (`requires-python >= 3.12`, `.python-version` is `3.12`). It does not need `uv run`. Optional Google extras are not required. Real FFmpeg rendering is not used in this mock phase.
+Dev Next.js rewrites `/api/*`, `/health`, `/ready`, `/telegram/*`, `/internal/*`, and `/docs` to `http://127.0.0.1:8000`.
 
-`Dockerfile` remains for a **future dedicated worker host**. The Vercel API does not use it.
+Optional one-origin:
 
-## BotFather
+```bash
+vercel dev
+```
 
-1. Open `@BotFather` → your bot `@VideoForgeAIBot`.
-2. Set Menu Button / Mini App to the **frontend** HTTPS URL.
-3. Add the Mini App domain.
-4. Do not put the API URL in the menu button.
+## Storage / jobs / Neon
 
-## After deploy, one Stars payment
-
-Use a real Telegram account you control. Quote first. Pay once. Confirm the bot message. Do not loop payments while debugging.
-
-## Railway / Docker (superseded for production)
-
-See [DEPLOY_VIDEOFORGE.md](DEPLOY_VIDEOFORGE.md). That path is optional if you later host a long-running worker. It is **not** required for this Vercel + Neon mock phase.
+Unchanged: Neon + NullPool, placeholder mock bytes, inline mock jobs, no paid AI, no R2/S3.

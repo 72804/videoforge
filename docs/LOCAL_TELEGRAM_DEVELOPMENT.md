@@ -34,7 +34,9 @@ npm run dev
 
 Open http://127.0.0.1:3000 — **Dev login**. Amber banner = simulated Stars + mock generation.
 
-Production hosting is **Vercel + Neon**, not Railway. See [DEPLOY_VIDEOFORGE_VERCEL_NEON.md](DEPLOY_VIDEOFORGE_VERCEL_NEON.md).
+Production hosting is **one Vercel project + Neon** (`https://videoforge-dusky.vercel.app`). See [DEPLOY_VIDEOFORGE_VERCEL_NEON.md](DEPLOY_VIDEOFORGE_VERCEL_NEON.md).
+
+Optional: `vercel dev` from the repo root for one local origin.
 
 API: `http://127.0.0.1:8000/docs`  
 Health: `GET /health`  

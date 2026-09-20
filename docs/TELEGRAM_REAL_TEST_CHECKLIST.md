@@ -18,8 +18,8 @@ GENERATION_MODE=mock
 ALLOW_PAID_GENERATION=false
 ALLOW_PAID_APIS=false
 TELEGRAM_BOT_TOKEN=...
-TELEGRAM_MINI_APP_URL=https://...
-TELEGRAM_WEBHOOK_URL=https://.../telegram/webhook
+TELEGRAM_MINI_APP_URL=https://videoforge-dusky.vercel.app
+TELEGRAM_WEBHOOK_URL=https://videoforge-dusky.vercel.app/telegram/webhook
 TELEGRAM_WEBHOOK_SECRET=...
 TELEGRAM_INIT_DATA_MAX_AGE_SECONDS=86400
 API_SESSION_SECRET=...
@@ -31,8 +31,10 @@ Frontend production build:
 
 ```
 NEXT_PUBLIC_APP_ENV=production
-NEXT_PUBLIC_API_BASE_URL=https://api.example
+NEXT_PUBLIC_API_BASE_URL=
 ```
+
+Same-origin production leaves the API base empty so the browser calls `/api/v1/...` on `https://videoforge-dusky.vercel.app`.
 
 Migrate: `uv run alembic upgrade head`.
 

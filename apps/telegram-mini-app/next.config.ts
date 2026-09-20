@@ -12,6 +12,12 @@ const nextConfig: NextConfig = {
     return [
       { source: "/api/:path*", destination: `${api}/api/:path*` },
       { source: "/health", destination: `${api}/health` },
+      { source: "/ready", destination: `${api}/ready` },
+      { source: "/telegram/:path*", destination: `${api}/telegram/:path*` },
+      { source: "/internal/:path*", destination: `${api}/internal/:path*` },
+      { source: "/docs", destination: `${api}/docs` },
+      { source: "/docs/:path*", destination: `${api}/docs/:path*` },
+      { source: "/openapi.json", destination: `${api}/openapi.json` },
     ];
   },
 };

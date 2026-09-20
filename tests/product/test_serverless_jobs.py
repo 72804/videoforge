@@ -190,15 +190,15 @@ def test_inline_generate_completes_without_dev_runner() -> None:
 
 
 def test_vercel_entrypoint_file_reuses_create_app() -> None:
-    text = Path("app.py").read_text(encoding="utf-8")
+    text = Path("services/api/app.py").read_text(encoding="utf-8")
     assert "app_from_settings" in text
     assert "app = app_from_settings()" in text
-    pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
-    assert 'entrypoint = "app:app"' in pyproject
     assert not Path("api/index.py").exists()
+    assert not Path("app.py").exists()
     vercel = Path("vercel.json").read_text(encoding="utf-8")
+    assert '"framework": "nextjs"' in vercel
     assert '"framework": "fastapi"' in vercel
-    assert '"app.py"' in vercel
+    assert '"entrypoint": "app:app"' in vercel
 
 
 def test_public_api_contract_is_root_not_api_prefix() -> None:

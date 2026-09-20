@@ -71,13 +71,14 @@ def test_worker_skips_api_only_secrets() -> None:
     except RuntimeError:
         pass
     else:
-        raise AssertionError("api role should require webhook/session/cors")
+        raise AssertionError("api role should require webhook/session")
     try:
         validate_runtime_settings(_prod(internal_job_secret=None), role="api")
     except RuntimeError as exc:
         assert "INTERNAL_JOB_SECRET" in str(exc)
     else:
         raise AssertionError("api role should require INTERNAL_JOB_SECRET")
+    validate_runtime_settings(_prod(api_cors_origins=""))
 
 
 def test_production_rejects_paid_flags() -> None:
