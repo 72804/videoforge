@@ -96,6 +96,31 @@ class ProjectPaths:
         return self.artifacts_dir / "visuals"
 
     @property
+    def inputs_dir(self) -> Path:
+        return self.root / "inputs"
+
+    def character_inputs_root(self) -> Path:
+        return self.inputs_dir / "characters"
+
+    def character_input_dir(self, character_id: str) -> Path:
+        return self.character_inputs_root() / character_id
+
+    def character_manifest_json(self) -> Path:
+        return self.artifacts_dir / "characters" / "character_manifest.json"
+
+    def generated_character_refs_dir(self) -> Path:
+        return self.visuals_dir / "character_refs"
+
+    def custom_v2_dir(self) -> Path:
+        return self.visuals_dir / "custom_v2"
+
+    def custom_v2_scene_image(self, scene_id: str, suffix: str = ".jpg") -> Path:
+        return self.custom_v2_dir() / scene_id / f"image{suffix}"
+
+    def custom_v2_scene_meta(self, scene_id: str) -> Path:
+        return self.custom_v2_dir() / scene_id / "image.meta.json"
+
+    @property
     def subtitles_dir(self) -> Path:
         return self.artifacts_dir / "subtitles"
 

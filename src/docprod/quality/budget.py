@@ -15,6 +15,7 @@ from docprod.quality.enums import (
     QualityProfile,
     SceneProductionClass,
 )
+from docprod.quality.locked import locked_video_models
 from docprod.quality.profiles import policy_for
 from docprod.quality.router import (
     estimate_model_cost,
@@ -49,6 +50,8 @@ def pick_from_chain(
     profile: QualityProfile,
     *,
     used_seconds: float = 0.0,
+    allow_manual_inputs: bool = False,
+    has_driving_video: bool = False,
 ) -> str:
     policy = policy_for(profile)
     for model_id in chain:
@@ -59,20 +62,20 @@ def pick_from_chain(
             continue
         if spec.adapter_status is AdapterStatus.DOCUMENTED_UNIMPLEMENTED:
             continue
+        if spec.manual_input_required and not has_driving_video and not allow_manual_inputs:
+            continue
         if not policy.allow_paid and not spec.local:
             continue
         if spec.local:
             return model_id
+        if not spec.implemented:
+            continue
         seconds = used_seconds or spec.min_duration_seconds or 0
         cost, conf = estimate_model_cost(model_id, seconds=seconds)
         if profile is QualityProfile.BALANCED and conf is CostConfidence.UNRESOLVED:
             continue
         st = status.get(spec.provider, ProviderStatus.UNCONFIGURED)
         if spec.implemented or st is not ProviderStatus.UNCONFIGURED:
-            return model_id
-        if spec.implemented:
-            return model_id
-        if profile in {QualityProfile.PREMIUM, QualityProfile.MAX_QUALITY} and spec.implemented:
             return model_id
     return "local-camera"
 
@@ -82,9 +85,16 @@ def allocate_video(
     profile: QualityProfile,
     *,
     status: dict[str, ProviderStatus] | None = None,
+    allow_manual_inputs: bool = False,
+    driving_videos: dict[str, str] | None = None,
+    locked_models: dict[str, str] | None = None,
 ) -> list[RouteDecision]:
     policy = policy_for(profile)
     avail = status or availability().providers
+    drives = driving_videos or {}
+    locked_map = (
+        locked_models if locked_models is not None else locked_video_models(plan, profile)
+    )
     cands: list[_Cand] = []
     static: list[RouteDecision] = []
     static_ids: set[str] = set()
@@ -97,7 +107,18 @@ def allocate_video(
         must_video = bool(meta.get("must_video"))
         must_perf = bool(meta.get("must_performance"))
         music_sync = bool(meta.get("music_sync_required"))
-        locked = str(meta.get("locked_provider") or "")
+        beat = str(meta.get("beat_id") or "")
+        locked = str(meta.get("locked_provider") or locked_map.get(beat) or "")
+        drive = drives.get(scene.id) or drives.get(beat) or ""
+        if locked:
+            spec = get_model(locked)
+            if (
+                spec is not None
+                and spec.manual_input_required
+                and not drive
+                and not allow_manual_inputs
+            ):
+                locked = ""
         if (
             klass is SceneProductionClass.TITLE_CARD
             or must_static
@@ -110,8 +131,12 @@ def allocate_video(
             static.append(decision)
             static_ids.add(scene.id)
             continue
-        video = must_video or must_perf or music_sync or wants_video(
-            klass, scores, profile, music_sync=music_sync
+        video = (
+            must_video
+            or must_perf
+            or music_sync
+            or bool(locked)
+            or wants_video(klass, scores, profile, music_sync=music_sync)
         )
         if not video or (profile is QualityProfile.ECONOMY and not must_video):
             decision = still_route(scene.id, klass, profile)
@@ -178,9 +203,22 @@ def allocate_video(
             out.append(decision)
             continue
         chain = fallback_chain(item.klass, profile)
-        model = item.locked or pick_from_chain(
-            chain, avail, profile, used_seconds=item.scene.duration
-        )
+        beat = str((item.scene.metadata or {}).get("beat_id") or "")
+        drive = drives.get(item.scene.id) or drives.get(beat) or ""
+        model = item.locked
+        if model:
+            spec = get_model(model)
+            if spec is None or (not spec.implemented and not spec.local):
+                model = ""
+        if not model:
+            model = pick_from_chain(
+                chain,
+                avail,
+                profile,
+                used_seconds=item.scene.duration,
+                allow_manual_inputs=allow_manual_inputs,
+                has_driving_video=bool(drive),
+            )
         spec = get_model(model)
         provider = spec.provider if spec else "local"
         used = item.scene.duration
@@ -188,7 +226,13 @@ def allocate_video(
         cost, conf = estimate_model_cost(model, seconds=used)
         wasted = wasted_seconds(billed, used)
         kind = upgrade_kind_for(item.klass, model)
-        driving = needs_driving_performance(item.scene, model_id=model)
+        driving = needs_driving_performance(
+            item.scene,
+            model_id=model,
+            driving_video=drive,
+            allow_manual_inputs=allow_manual_inputs,
+        )
+        manual = bool(spec and spec.manual_input_required and driving)
         out.append(
             RouteDecision(
                 scene_id=scene.id,
@@ -203,7 +247,11 @@ def allocate_video(
                     f"{kind.value}: story={item.scores.story_importance:.2f} "
                     f"motion={item.scores.motion_need:.2f} util={item.util:.2f} "
                     f"used={used:.1f}s billable={billed:.0f}s waste={wasted:.1f}s"
-                    + (" needs driving performance" if driving else "")
+                    + (
+                        " needs driving performance"
+                        if driving
+                        else " automated; no human performance"
+                    )
                 ),
                 quality_tier=policy.default_tier,
                 scores=item.scores,
@@ -218,6 +266,7 @@ def allocate_video(
                 effective_cost_per_used_second=cost_per_used_second(cost, used),
                 upgrade_kind=kind,
                 needs_driving_performance=driving,
+                manual_input_required=manual,
             )
         )
     return out

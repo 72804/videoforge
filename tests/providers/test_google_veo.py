@@ -412,3 +412,66 @@ def test_concurrent_download_failures_recover(tmp_path: Path) -> None:
     assert gens["n"] == 2
     assert failures["n"] == 4
 
+
+def test_resume_in_progress_polls_named_operation(tmp_path: Path) -> None:
+    path = tmp_path / "start.jpg"
+    _write_image(path, "JPEG")
+    request = _request(path)
+    request.asset_unit_id = "scene_0009"
+    prompt = combined_veo_prompt(request)
+    caps = capabilities_for("veo-3.1-lite-generate-preview")
+    from docprod.providers.google_veo import request_digest
+    from docprod.providers.veo_journal import GENERATION_IN_PROGRESS, write_journal
+
+    digest = request_digest(
+        request, model="veo-3.1-lite-generate-preview", capabilities=caps, prompt=prompt
+    )
+    cache = PaidArtifactCache(tmp_path / "paid")
+    write_journal(
+        cache.root,
+        digest,
+        {
+            "state": GENERATION_IN_PROGRESS,
+            "operation_name": "models/veo-3.1-lite-generate-preview/operations/gt0730snyloq",
+        },
+    )
+    gens = {"n": 0}
+    gets: list[object] = []
+
+    class Models:
+        def generate_videos(self, **_kwargs: object) -> None:
+            gens["n"] += 1
+            raise AssertionError("must not resubmit in-progress Veo op")
+
+    class Operations:
+        def get(self, operation: object, **_kwargs: object) -> object:
+            gets.append(operation)
+            assert getattr(operation, "name", None)
+            video = SimpleNamespace(name="files/resumed", uri="files/resumed")
+            return SimpleNamespace(
+                done=True,
+                name=getattr(operation, "name", ""),
+                response=SimpleNamespace(generated_videos=[SimpleNamespace(video=video)]),
+            )
+
+    class Files:
+        def download(self, file: object, destination: str | None = None, **kwargs: object) -> None:
+            assert destination is not None
+            Path(destination).write_bytes(b"resumed-mp4")
+
+    provider = GoogleVeoProvider(
+        settings=Settings(
+            _env_file=None,
+            allow_paid_apis=True,
+            gemini_api_key="unused",
+            video_model="veo-3.1-lite-generate-preview",
+        ),
+        client=SimpleNamespace(models=Models(), files=Files(), operations=Operations()),
+        cache=cache,
+    )
+    result = provider.generate_shot(request, confirm_paid=False)
+    assert gens["n"] == 0
+    assert gets
+    assert result.video_bytes == b"resumed-mp4"
+    assert result.metadata and result.metadata.get("billed_this_run") == "false"
+

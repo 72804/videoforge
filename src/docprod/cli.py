@@ -359,6 +359,86 @@ def produce_custom_drama_cmd(
         console.print(note)
 
 
+@app.command("export-driving-reference")
+def export_driving_reference_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+    scene: str = typer.Option("b07", "--scene"),
+) -> None:
+    """Cut local Cedar timing refs. No network / no paid APIs."""
+    from docprod.quality.driving_package import export_b07_reference_package
+
+    if scene != "b07":
+        _fail("Only b07 is implemented for driving-reference export")
+    project_dir, _project = _load_project(project_id)
+    try:
+        result = export_b07_reference_package(project_dir)
+    except Exception as exc:  # noqa: BLE001
+        _fail(str(exc))
+    span = result["span"]
+    console.print(f"line_start={span.master_start:.3f}")
+    console.print(f"line_end={span.master_end:.3f}")
+    console.print(f"speech_duration={span.speech_duration:.3f}")
+    console.print(f"wav={result['wav']}")
+    console.print(f"mp3={result['mp3'] if result['mp3_ok'] else 'unavailable'}")
+    console.print(f"assist={result['assist']}")
+    console.print("paid_calls=0")
+
+
+@app.command("validate-driving-video")
+def validate_driving_video_cmd(
+    path: Path = typer.Argument(..., help="Local driving-performance video"),
+    scene: str = typer.Option("b07", "--scene"),
+    project_id: str = typer.Option("birko_kemal_drama_canary", "--project"),
+    sync: bool = typer.Option(True, "--sync/--no-sync"),
+    clock: str = typer.Option("assist", "--clock", help="assist or reference"),
+) -> None:
+    """Local Act-Two source QC. No network."""
+    from docprod.quality.driving_package import (
+        b07_span,
+        sync_driving_to_cedar,
+        validate_driving_video,
+    )
+
+    media = validate_driving_video(path)
+    console.print(f"path={media.path}")
+    console.print(f"decodable={str(media.decodable).lower()}")
+    console.print(f"duration={media.duration}")
+    console.print(f"codec={media.video_codec}")
+    console.print(f"dimensions={media.width}x{media.height}")
+    console.print(f"aspect_ratio={media.aspect_ratio}")
+    console.print(f"fps={media.fps}")
+    console.print(f"file_size_bytes={media.size_bytes}")
+    console.print(f"audio_stream={str(media.has_audio).lower()}")
+    console.print(f"audio_codec={media.audio_codec}")
+    for item in media.warnings:
+        console.print(f"warning={item}")
+    for item in media.errors:
+        console.print(f"error={item}")
+    if not media.ok:
+        _fail("driving video failed local Act-Two checks")
+    if not sync:
+        console.print("sync=skipped")
+        console.print("paid_calls=0")
+        return
+    if scene != "b07":
+        _fail("sync is only implemented for --scene b07")
+    project_dir, _project = _load_project(project_id)
+    try:
+        span = b07_span(project_dir)
+        report = sync_driving_to_cedar(path, span, clock=clock)
+    except Exception as exc:  # noqa: BLE001
+        _fail(str(exc))
+    console.print(f"sync_status={report.status}")
+    console.print(f"line_onset_delta={report.onset_delta}")
+    console.print(f"line_end_delta={report.end_delta}")
+    console.print(f"duration_delta={report.duration_delta}")
+    for note in report.notes:
+        console.print(f"sync_note={note}")
+    console.print("paid_calls=0")
+    if report.status == "block":
+        _fail("driving speech timing exceeds 300ms vs Cedar", code=2)
+
+
 @app.command("quality-plan")
 def quality_plan_cmd(
     project_id: str = typer.Argument("birko_kemal_drama_canary"),
@@ -387,6 +467,213 @@ def quality_plan_cmd(
         console.print(f"markdown={bundle.markdown_path}")
         console.print(f"json={bundle.json_path}")
         console.print("paid_calls=0")
+
+
+@app.command("character-import")
+def character_import_cmd(
+    project_id: str = typer.Argument(...),
+    character: str = typer.Argument(...),
+    images: list[Path] = typer.Argument(..., exists=True, readable=True),
+) -> None:
+    """Copy local character photos into project inputs. No paid APIs."""
+    from docprod.quality.character_refs import import_character_images
+
+    project_dir, _project = _load_project(project_id)
+    entry, notes = import_character_images(project_dir, character, images)
+    console.print(f"character={entry.character_id}")
+    console.print(f"mode={entry.reference_mode.value}")
+    console.print(f"locked={str(entry.locked).lower()}")
+    console.print(f"identity_version={entry.identity_version}")
+    console.print(f"primary={entry.primary_reference}")
+    for note in notes:
+        console.print(note)
+    console.print("paid_calls=0")
+
+
+@app.command("character-status")
+def character_status_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+) -> None:
+    """Print character reference status. No paid APIs."""
+    from docprod.quality.character_refs import status_rows
+
+    project_dir, _project = _load_project(project_id)
+    rows = status_rows(project_dir)
+    for row in rows:
+        console.print(row["character"])
+        console.print(f"mode: {row['mode']}")
+        console.print(f"custom refs: {row['custom_refs']}")
+        console.print(f"generated refs: {row['generated_refs']}")
+        console.print(f"identity_version: {row['identity_version']}")
+        console.print(f"locked: {str(row['locked']).lower()}")
+        console.print("canonical:")
+        if row["canonical"]:
+            for item in row["canonical"]:
+                console.print(f"  {item}")
+        else:
+            console.print("  (none)")
+        console.print(f"validation: {', '.join(row['validation'])}")
+        console.print(f"dimensions: {', '.join(row['dimensions']) or 'n/a'}")
+        console.print(f"aspect ratios: {', '.join(row['aspect_ratios']) or 'n/a'}")
+        console.print(f"file hashes: {', '.join(h[:12] for h in row['sha256']) or 'n/a'}")
+        console.print("")
+    console.print("paid_calls=0")
+
+
+@app.command("character-set-primary")
+def character_set_primary_cmd(
+    project_id: str = typer.Argument(...),
+    character: str = typer.Argument(...),
+    reference: str = typer.Argument(...),
+) -> None:
+    """Choose the primary custom reference. No paid APIs."""
+    from docprod.quality.character_refs import set_primary_reference
+
+    project_dir, _project = _load_project(project_id)
+    entry = set_primary_reference(project_dir, character, reference)
+    console.print(f"character={entry.character_id}")
+    console.print(f"primary={entry.primary_reference}")
+    console.print("paid_calls=0")
+
+
+@app.command("character-contact-sheet")
+def character_contact_sheet_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+) -> None:
+    """Build a local character-reference contact sheet. No paid APIs."""
+    from docprod.quality.character_refs import contact_sheet_entries
+    from docprod.render.contact_sheet import build_contact_sheet
+
+    project_dir, _project = _load_project(project_id)
+    dest = project_dir.review_dir / "character_reference_contact_sheet.jpg"
+    entries = contact_sheet_entries(project_dir)
+    if not entries:
+        _fail("no character references found")
+    sheet = build_contact_sheet(project_dir, entries, columns=4, output=dest)
+    console.print(f"contact_sheet={sheet}")
+    console.print("paid_calls=0")
+
+
+@app.command("character-migration-plan")
+def character_migration_plan_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+) -> None:
+    """Dry-run which stills would need regen after identity change. No paid APIs."""
+    from docprod.models.scene import ScenePlan
+    from docprod.quality.character_refs import migration_summary, plan_character_migration
+    from docprod.storage.json_store import load_model
+
+    project_dir, _project = _load_project(project_id)
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    rows = plan_character_migration(project_dir, plan)
+    summary = migration_summary(rows)
+    lines = [
+        "# Character identity migration plan",
+        "",
+        f"estimated_image_generation_calls: {summary['estimated_image_generation_calls']}",
+        f"estimated_cost_usd: {summary['estimated_cost_usd']} ({summary['cost_confidence']})",
+        "paid_calls: 0",
+        "",
+    ]
+    for row in rows:
+        lines.extend(
+            [
+                f"## {row.scene_id}",
+                f"- characters visible: {', '.join(row.characters) or 'none'}",
+                f"- old reference version: {row.old_versions}",
+                f"- new reference version: {row.new_versions}",
+                f"- regeneration required: {str(row.regeneration_required).lower()}",
+                "",
+            ]
+        )
+    dest = project_dir.review_dir / "character_migration_plan.md"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    console.print(dest.read_text(encoding="utf-8"))
+    console.print(f"markdown={dest}")
+    console.print("paid_calls=0")
+
+
+@app.command("migrate-character-stills")
+def migrate_character_stills_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+    hard_cap_usd: float = typer.Option(1.0, "--hard-cap-usd"),
+) -> None:
+    """Regenerate custom-identity stills into custom_v2/. Never overwrites V1."""
+    from docprod.models.scene import ScenePlan
+    from docprod.pipeline.migrate_character_stills import (
+        build_old_new_contact_sheet,
+        execute_still_migration,
+        preflight_still_migration,
+        qc_migration_batch,
+        write_migration_preflight,
+    )
+    from docprod.storage.json_store import load_model
+
+    project_dir, _project = _load_project(project_id)
+    plan = load_model(project_dir.scene_plan_json, ScenePlan)
+    pre = preflight_still_migration(
+        project_dir, plan, hard_cap_usd=hard_cap_usd
+    )
+    json_path, md_path = write_migration_preflight(project_dir, pre)
+    console.print(md_path.read_text(encoding="utf-8"))
+    console.print(f"preflight_json={json_path}")
+    console.print(f"preflight_md={md_path}")
+    if not confirm_paid:
+        console.print("executed=false")
+        console.print("paid_calls=0")
+        return
+    result = execute_still_migration(
+        project_dir,
+        plan,
+        confirm_paid=True,
+        hard_cap_usd=hard_cap_usd,
+        progress=console.print,
+    )
+    qc = qc_migration_batch(project_dir, pre.jobs)
+    sheet = build_old_new_contact_sheet(project_dir, pre.jobs)
+    console.print(f"executed={str(result.get('executed')).lower()}")
+    console.print(f"attempted={result.get('attempted')}")
+    console.print(f"paid_calls={result.get('paid_calls')}")
+    console.print(f"cache_hits={result.get('cache_hits')}")
+    console.print(f"recovered={result.get('recovered')}")
+    console.print(f"failures={result.get('failures')}")
+    console.print(f"spent_usd={result.get('spent_usd')}")
+    console.print(f"remaining_usd={result.get('remaining_usd')}")
+    console.print(f"v1_modified={result.get('v1_modified')}")
+    console.print(f"qc_identity_ok={qc.get('identity_ok')}")
+    console.print(f"qc={project_dir.review_dir / 'character_still_migration_qc.json'}")
+    console.print(f"contact_sheet={sheet}")
+    console.print("veo_calls=0")
+    console.print("runway_calls=0")
+
+
+@app.command("execute-birko-v2")
+def execute_birko_v2_cmd(
+    project_id: str = typer.Argument("birko_kemal_drama_canary"),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Generate locked Birko V2 Veo Lite clips under the $3.20 hard cap. Never overwrites V1."""
+    from docprod.pipeline.execute_birko_v2 import execute_birko_v2
+
+    project_dir, project = _load_project(project_id)
+    result = execute_birko_v2(
+        project_dir,
+        project,
+        confirm_paid=confirm_paid,
+        progress=console.print,
+    )
+    console.print(f"stopped={str(result.stopped).lower()}")
+    if result.stop_reason:
+        console.print(f"stop_reason={result.stop_reason}")
+    console.print(f"expected_usd={result.preflight.expected_usd:.2f}")
+    console.print(f"actual_new_spend={result.veo_spend + result.runway_spend:.2f}")
+    console.print(f"veo_calls={result.veo_calls}")
+    console.print(f"runway_calls={result.runway_calls}")
+    console.print(f"report={result.report_path}")
+    if result.stopped:
+        _fail(result.stop_reason or "birko v2 stopped", code=2)
 
 
 @app.command("provider-status")
@@ -2373,6 +2660,115 @@ def export_schemas(
         path = output_dir / f"{name}.schema.json"
         path.write_text(json.dumps(model.model_json_schema(), indent=2) + "\n", encoding="utf-8")
         console.print(f"Wrote {path}")
+
+
+@app.command("telegram-api-seed")
+def telegram_api_seed(
+    store: Path = typer.Option(Path("product_data/store.json"), "--store"),
+) -> None:
+    """Idempotent local Mini App fixture. No paid APIs."""
+    from docprod.db.postgres_repo import PostgresRepository
+    from docprod.product.demo import DEMO_TELEGRAM_USER_ID, run_telegram_product_demo
+    from docprod.product.factory import build_product_service, persistence_mode
+    from docprod.product.persist import load_repository_file, save_repository
+    from docprod.product.services import ProductService
+    from docprod.product.storage import LocalStorageBackend
+
+    settings = get_settings()
+    if persistence_mode(settings) == "postgres":
+        service = build_product_service(settings, store=store)
+        repo = service.repo
+        if isinstance(repo, PostgresRepository):
+            repo.open()
+            repo.hydrate()
+            repo.snapshot()
+        if service.repo.user_by_telegram(DEMO_TELEGRAM_USER_ID) is not None:
+            console.print("telegram_product_demo already seeded")
+            if isinstance(repo, PostgresRepository):
+                repo.close()
+            return
+        run_telegram_product_demo(service=service)
+        if isinstance(repo, PostgresRepository):
+            repo.commit()
+            repo.close()
+        console.print("Seeded PostgreSQL product store")
+        return
+    repo = load_repository_file(store)
+    service = ProductService(repo, storage=LocalStorageBackend(store.parent / "blobs"))
+    if service.repo.user_by_telegram(DEMO_TELEGRAM_USER_ID) is not None:
+        console.print("telegram_product_demo already seeded")
+        return
+    run_telegram_product_demo(service=service)
+    save_repository(store, service.repo)
+    console.print(f"Seeded {store}")
+
+
+@app.command("telegram-api-serve")
+def telegram_api_serve(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8000, "--port"),
+) -> None:
+    """Serve the local Telegram Mini App API. Never prints secrets."""
+    import uvicorn
+
+    settings = get_settings()
+    console.print(f"API  http://{host}:{port}")
+    console.print(f"docs http://{host}:{port}/docs")
+    console.print(f"env  {settings.app_env}")
+    uvicorn.run("docprod.api.app:factory", factory=True, host=host, port=port, reload=False)
+
+
+@app.command("telegram-api-openapi")
+def telegram_api_openapi(
+    output: Path = typer.Option(Path("docs/openapi.json"), "--output"),
+) -> None:
+    from docprod.api.app import export_openapi
+
+    export_openapi(output)
+    console.print(f"Wrote {output}")
+
+
+@app.command("telegram-worker")
+def telegram_worker() -> None:
+    """Poll the durable generation queue. Mock execution only. No paid APIs."""
+    import os
+
+    from docprod.product.durable import DurableGenerationWorker
+    from docprod.product.factory import build_product_service
+
+    settings = get_settings()
+    configure_logging(settings)
+    service = build_product_service(settings)
+    worker_id = settings.worker_id.strip() or f"worker-{os.getpid()}"
+    DurableGenerationWorker(
+        service,
+        worker_id=worker_id,
+        poll_seconds=settings.worker_poll_seconds,
+        lease_seconds=settings.job_lease_seconds,
+    ).run_forever()
+
+
+@app.command("telegram-product-import-json")
+def telegram_product_import_json(
+    store: Path = typer.Option(Path("product_data/store.json"), "--store"),
+) -> None:
+    """Import product_data/store.json into PostgreSQL. Skips engine artifacts."""
+    from docprod.db.postgres_repo import PostgresRepository
+    from docprod.product.factory import build_repository, persistence_mode
+    from docprod.product.persist import load_repository_file
+
+    settings = get_settings()
+    if persistence_mode(settings) != "postgres":
+        console.print("Set PRODUCT_PERSISTENCE=postgres and DATABASE_URL to import")
+        raise typer.Exit(code=1)
+    repo = build_repository(settings)
+    if not isinstance(repo, PostgresRepository):
+        raise typer.Exit(code=1)
+    memory = load_repository_file(store)
+    repo.open()
+    repo.import_memory(memory)
+    repo.close()
+    console.print(f"Imported {store} into PostgreSQL")
 
 
 def main() -> None:

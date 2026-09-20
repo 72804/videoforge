@@ -32,6 +32,56 @@ def extract_provider_audio(video: Path, dest: Path) -> None:
         tmp.unlink(missing_ok=True)
 
 
+def mute_fit_to_window(
+    video: Path,
+    dest: Path,
+    *,
+    duration: float,
+    generated_seconds: float = 8.0,
+) -> None:
+    """Strip provider audio and trim or freeze-pad to the locked scene window.
+
+    Does not retime (setpts) — V2 clips that are shorter than the window hold
+    the last frame locally.
+    """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    probe = probe_media(video)
+    src = float(probe.duration or generated_seconds)
+    tmp = dest.with_suffix(".tmp.mp4")
+    vf = "scale=1280:720:flags=lanczos,fps=30,format=yuv420p"
+    if src + 0.04 < duration:
+        pad = max(0.04, duration - src)
+        vf = f"{vf},tpad=stop_mode=clone:stop_duration={pad:.4f}"
+    try:
+        run_ffmpeg(
+            [
+                "-i",
+                str(video),
+                "-an",
+                "-vf",
+                vf,
+                "-t",
+                f"{duration:.4f}",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "medium",
+                "-crf",
+                "20",
+                str(tmp),
+            ],
+            timeout=180,
+        )
+        tmp.replace(dest)
+    finally:
+        tmp.unlink(missing_ok=True)
+    out = probe_media(dest)
+    if out.has_audio:
+        raise RuntimeError("Visual derivative must not contain provider audio")
+
+
 def mute_and_normalize_visual(
     video: Path,
     dest: Path,

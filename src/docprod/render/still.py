@@ -92,7 +92,17 @@ def resolve_archive_still(paths: ProjectPaths, scene: Scene) -> VisualSource | N
     return None
 
 
-def resolve_unit_generated_still(paths: ProjectPaths, scene: Scene) -> tuple[Path, str] | None:
+def resolve_unit_generated_still(
+    paths: ProjectPaths,
+    scene: Scene,
+    *,
+    prefer_custom_identity: bool = True,
+) -> tuple[Path, str] | None:
+    if prefer_custom_identity:
+        custom = resolve_generated_still(paths, scene.id, prefer_custom_identity=True)
+        custom_path = paths.custom_v2_scene_image(scene.id)
+        if custom is not None and custom[0].resolve() == custom_path.resolve():
+            return custom
     unit = str(scene.metadata.get("asset_unit_id") or "")
     if unit:
         for meta_path, fallback in (
@@ -112,10 +122,33 @@ def resolve_unit_generated_still(paths: ProjectPaths, scene: Scene) -> tuple[Pat
                         candidate = fallback
                     if candidate.is_file():
                         return candidate, manifest.output_sha256
-    return resolve_generated_still(paths, scene.id)
+    return resolve_generated_still(
+        paths, scene.id, prefer_custom_identity=prefer_custom_identity
+    )
 
 
-def resolve_generated_still(paths: ProjectPaths, scene_id: str) -> tuple[Path, str] | None:
+def resolve_generated_still(
+    paths: ProjectPaths,
+    scene_id: str,
+    *,
+    prefer_custom_identity: bool = True,
+) -> tuple[Path, str] | None:
+    if prefer_custom_identity:
+        custom = paths.custom_v2_scene_image(scene_id)
+        custom_meta = paths.custom_v2_scene_meta(scene_id)
+        if custom.is_file():
+            if custom_meta.is_file():
+                try:
+                    manifest = load_model(custom_meta, GeneratedImageManifest)
+                except (OSError, ValueError):
+                    manifest = None
+                if (
+                    manifest
+                    and manifest.generation_status == "success"
+                    and (manifest.output_sha256 or file_sha256(custom))
+                ):
+                    return custom, manifest.output_sha256 or file_sha256(custom)
+            return custom, file_sha256(custom)
     meta_path = paths.scene_image_meta(scene_id)
     if not meta_path.is_file():
         return None
@@ -297,7 +330,8 @@ def resolve_title_card_still(paths: ProjectPaths, scene: Scene) -> VisualSource 
 
 
 def resolve_upgrade_clip(paths: ProjectPaths, scene: Scene) -> VisualSource | None:
-    clip = upgrade_clip_path(paths, scene.id)
+    beat = str((scene.metadata or {}).get("beat_id") or "")
+    clip = upgrade_clip_path(paths, scene.id, beat)
     if not clip.is_file():
         return None
     return VisualSource(

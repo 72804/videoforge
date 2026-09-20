@@ -19,6 +19,8 @@ cache/*
 tmp/*
 !tmp/.gitkeep
 
+product_data/
+
 *.mp4
 *.mov
 *.mkv

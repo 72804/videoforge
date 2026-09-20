@@ -1,0 +1,11 @@
+node_modules
+.next
+test-results
+playwright-report
+.env.local
+.env*.local
+.e2e-store.json
+.e2e-store.json.blobs
+blobs/
+*.tsbuildinfo
+

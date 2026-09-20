@@ -76,6 +76,9 @@ class GeneratedImageManifest(BaseModel):
     cache_hit: bool = False
     elapsed_seconds: float | None = None
     note: str | None = None
+    character_identity_versions: dict[str, str] = Field(default_factory=dict)
+    reference_paths: list[str] = Field(default_factory=list)
+    reference_sha256: dict[str, str] = Field(default_factory=dict)
 
 
 class ImageBatchSceneRecord(BaseModel):

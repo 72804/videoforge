@@ -58,10 +58,17 @@ def _plan() -> ScenePlan:
 
 
 class FakeImages:
-    def __init__(self, payload: bytes = JPEG_BYTES, *, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        payload: bytes = JPEG_BYTES,
+        *,
+        error: Exception | None = None,
+        usage: dict[str, int | float | str] | None = None,
+    ) -> None:
         self.calls: list[dict[str, object]] = []
         self.payload = payload
         self.error = error
+        self.usage_payload = usage if usage is not None else {"total_tokens": 12}
 
     def generate(self, **kwargs: object) -> SimpleNamespace:
         self.calls.append(kwargs)
@@ -74,7 +81,7 @@ class FakeImages:
                     revised_prompt="revised documentary still",
                 )
             ],
-            usage=SimpleNamespace(model_dump=lambda: {"total_tokens": 12}),
+            usage=SimpleNamespace(model_dump=lambda: dict(self.usage_payload)),
             model="gpt-image-2.5-flare",
         )
 
@@ -248,3 +255,34 @@ def test_api_failure_preserves_previous_image(tmp_path: Path) -> None:
     manifest = load_model(paths.scene_image_meta("scene_0003"), GeneratedImageManifest)
     assert manifest.generation_status == "success"
     assert "failed" not in manifest.generation_status
+
+
+def test_three_reference_files_submitted_together(tmp_path: Path) -> None:
+    images = FakeImages()
+    cfg = ImageGenerationConfig.from_settings(_settings())
+    refs = []
+    for name in ("a.jpg", "b.jpg", "c.jpg"):
+        path = tmp_path / name
+        path.write_bytes(JPEG_BYTES)
+        refs.append(path)
+    provider = OpenAIImageProvider(settings=_settings(), config=cfg, client=FakeClient(images))
+    provider.generate("three identities", confirm_paid=True, reference_images=refs)
+    payload = images.calls[0]["image"]
+    assert isinstance(payload, list)
+    assert len(payload) == 3
+
+
+def test_refuses_more_references_than_adapter_max(tmp_path: Path) -> None:
+    from docprod.providers.openai_image import OPENAI_IMAGE_EDIT_MAX_REFERENCE_FILES
+
+    images = FakeImages()
+    cfg = ImageGenerationConfig.from_settings(_settings())
+    refs = []
+    for index in range(OPENAI_IMAGE_EDIT_MAX_REFERENCE_FILES + 1):
+        path = tmp_path / f"r{index}.jpg"
+        path.write_bytes(JPEG_BYTES)
+        refs.append(path)
+    provider = OpenAIImageProvider(settings=_settings(), config=cfg, client=FakeClient(images))
+    with pytest.raises(ValueError, match="Refusing to drop identities"):
+        provider.generate("too many", confirm_paid=True, reference_images=refs)
+    assert images.calls == []

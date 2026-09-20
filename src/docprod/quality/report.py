@@ -81,7 +81,11 @@ def profile_summary(decisions: list[RouteDecision], cost: EpisodeCostPlan) -> di
         if d.selected_model
         in {"runway-gen-4.5", "runway-act-two", "higgsfield-genjutsu"}
     ]
-    dialogue = [d for d in video if d.upgrade_kind.value == "dialogue_lipsync"]
+    dialogue = [
+        d
+        for d in video
+        if d.upgrade_kind.value in {"dialogue_lipsync", "implied_dialogue_i2v"}
+    ]
     performance = [d for d in video if d.upgrade_kind.value == "performance_transfer"]
     policy = policy_for(cost.profile)
     used = sum(d.used_seconds for d in video)

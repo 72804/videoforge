@@ -37,3 +37,30 @@ def veo_cost_usd(seconds: float) -> float:
 
 def lyria_cost_usd(songs: int) -> float:
     return round(songs * LYRIA_35_USD_PER_SONG, 4)
+
+
+# Historical batch totals. Do not treat these as per-image list prices.
+MAPLE_7_IMAGE_BATCH_TOTAL_USD = 0.06698  # entire 7-image Maple batch
+BIRKO_DRAMA_IMAGE_PAID_CALLS = 24
+BIRKO_DRAMA_IMAGE_ATTRIBUTABLE_USD = 0.371
+# gpt-image-2.5-flare: usage-based $5 text-in / $8 image-in / $30 image-out per 1M tokens
+OPENAI_IMAGE_TOKEN_RATES_NOTE = (
+    "usage-based $5/$8/$30 per 1M tokens (text in / image in / image out); "
+    "no per-image list price"
+)
+IMAGE_MIGRATION_HARD_CAP_USD = 1.00
+# Conservative reserve per remaining paid still (includes extra image-in from refs).
+IMAGE_MIGRATION_CONSERVATIVE_CALL_USD = 0.05
+V2_VIDEO_VEO_USD = 3.20
+V2_VIDEO_GEN45_USD = 0.00
+V2_VIDEO_TOTAL_USD = 3.20
+CUSTOM_STILL_MIGRATION_USD = 0.235525
+
+
+def birko_implied_image_unit_usd() -> float:
+    return round(BIRKO_DRAMA_IMAGE_ATTRIBUTABLE_USD / BIRKO_DRAMA_IMAGE_PAID_CALLS, 6)
+
+
+def estimated_image_migration_usd(calls: int) -> float:
+    """Observed Birko usage scaled by call count. Not a quote; refs add image-in tokens."""
+    return round(birko_implied_image_unit_usd() * calls, 4)

@@ -15,10 +15,12 @@ from docprod.providers.veo_journal import (
     DOWNLOAD_FAILED,
     DOWNLOAD_SUCCEEDED,
     DOWNLOADABLE_STATES,
+    GENERATION_EMPTY,
     GENERATION_IN_PROGRESS,
     GENERATION_SUCCEEDED_REMOTE,
     REMOTE_ARTIFACT_EXPIRED,
     REQUEST_SUBMITTED,
+    RESUMABLE_STATES,
     load_journal,
     remote_expired,
     write_journal,
@@ -182,6 +184,10 @@ def request_digest(
         aspect_ratio=request.aspect_ratio,
         resolution=request.resolution,
         count=request.count,
+        extra={
+            "scene_id": request.asset_unit_id,
+            "identity_key": request.identity_key,
+        },
     )
 
 
@@ -259,6 +265,7 @@ class GoogleVeoProvider:
                     has_native_audio=True,
                     metadata={
                         "start_image": request.image_path.name,
+                        "start_sha256": file_sha256(request.image_path),
                         "cache_hit": "true",
                         "request_hash": digest,
                         "billed_this_run": "false",
@@ -271,6 +278,22 @@ class GoogleVeoProvider:
                     prompt=prompt,
                     digest=digest,
                     journal=journal,
+                )
+            if journal and journal.get("state") == GENERATION_EMPTY:
+                raise RuntimeError(
+                    "Veo returned no video for an existing billed operation; will not resubmit"
+                )
+            if (
+                journal
+                and journal.get("operation_name")
+                and journal.get("state") in RESUMABLE_STATES
+            ):
+                return self._poll_operation(
+                    request,
+                    prompt=prompt,
+                    digest=digest,
+                    operation=journal["operation_name"],
+                    billed_this_run=False,
                 )
         require_paid_call_allowed(self.name, confirm_paid=confirm_paid, settings=self._settings)
         from google.genai import types
@@ -296,6 +319,28 @@ class GoogleVeoProvider:
                 "state": REQUEST_SUBMITTED,
             },
         )
+        return self._poll_operation(
+            request,
+            prompt=prompt,
+            digest=digest,
+            operation=operation,
+            billed_this_run=True,
+        )
+
+    def _poll_operation(
+        self,
+        request: VideoShotRequest,
+        *,
+        prompt: str,
+        digest: str,
+        operation: object,
+        billed_this_run: bool,
+    ) -> VideoShotResult:
+        client = self._client_or_create()
+        if isinstance(operation, str):
+            from google.genai import types as genai_types
+
+            operation = genai_types.GenerateVideosOperation(name=operation)
         for delay in poll_delays():
             if getattr(operation, "done", True):
                 break
@@ -305,6 +350,7 @@ class GoogleVeoProvider:
                 {
                     **(load_journal(self._cache.root, digest) or {}),
                     "state": GENERATION_IN_PROGRESS,
+                    "operation_name": getattr(operation, "name", None) or "",
                 },
             )
             time.sleep(delay)
@@ -314,7 +360,21 @@ class GoogleVeoProvider:
         response = getattr(operation, "response", None) or getattr(operation, "result", None)
         videos = getattr(response, "generated_videos", None) if response is not None else None
         if not videos:
-            raise RuntimeError("Veo returned no video")
+            prior = load_journal(self._cache.root, digest) or {}
+            write_journal(
+                self._cache.root,
+                digest,
+                {
+                    **prior,
+                    "state": GENERATION_EMPTY,
+                    "operation_name": getattr(operation, "name", None)
+                    or prior.get("operation_name")
+                    or "",
+                },
+            )
+            raise RuntimeError(
+                "Veo returned no video for an existing billed operation; will not resubmit"
+            )
         video_file = videos[0].video
         resource = file_resource_name(video_file)
         prior = load_journal(self._cache.root, digest) or {}
@@ -335,7 +395,7 @@ class GoogleVeoProvider:
                 prompt=prompt,
                 digest=digest,
                 file_obj=video_file,
-                billed_this_run=True,
+                billed_this_run=billed_this_run,
             )
         except Exception:
             failed = load_journal(self._cache.root, digest) or {}
@@ -426,9 +486,11 @@ class GoogleVeoProvider:
             has_native_audio=True,
             metadata={
                 "start_image": request.image_path.name,
+                "start_sha256": file_sha256(request.image_path),
                 "request_hash": digest,
                 "billed_this_run": "true" if billed_this_run else "false",
                 "download_only": "false" if billed_this_run else "true",
                 "cache_hit": "false",
+                "operation_name": str(prior.get("operation_name") or ""),
             },
         )

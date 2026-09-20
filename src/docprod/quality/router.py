@@ -42,6 +42,31 @@ def estimate_model_cost(
     return None, CostConfidence.UNRESOLVED
 
 
+def automated_dialogue_chain(profile: QualityProfile) -> list[str]:
+    """Never requires a human driving take. Act-Two is optional-only, not listed."""
+    policy = policy_for(profile)
+    if profile is QualityProfile.LOCAL_ONLY:
+        return [
+            policy.dialogue_model,
+            "hunyuan-avatar-local",
+            "ltx-local",
+            "narration-over-image",
+            "local-camera",
+        ]
+    if profile is QualityProfile.ECONOMY:
+        return [policy.dialogue_model, "narration-over-image", "local-camera"]
+    return [
+        "audio-driven-lipsync",
+        "veo-3.1-standard",
+        policy.dialogue_model,
+        "runway-gen-4.5",
+        "veo-3.1-fast",
+        "veo-3.1-lite-generate-preview",
+        "narration-over-image",
+        "local-camera",
+    ]
+
+
 def preferred_video_model(production_class: SceneProductionClass, profile: QualityProfile) -> str:
     policy = policy_for(profile)
     mapping = {
@@ -61,12 +86,7 @@ def fallback_chain(production_class: SceneProductionClass, profile: QualityProfi
     policy = policy_for(profile)
     if profile is QualityProfile.LOCAL_ONLY:
         if production_class is SceneProductionClass.DIALOGUE_SHOT:
-            return [
-                policy.dialogue_model,
-                "hunyuan-avatar-local",
-                "ltx-local",
-                "local-camera",
-            ]
+            return automated_dialogue_chain(profile)
         if production_class in {
             SceneProductionClass.PERFORMANCE_SHOT,
             SceneProductionClass.MUSIC_SYNCED_PERFORMANCE,
@@ -81,21 +101,15 @@ def fallback_chain(production_class: SceneProductionClass, profile: QualityProfi
             "local-camera",
         ]
     if production_class is SceneProductionClass.DIALOGUE_SHOT:
-        return [
-            policy.dialogue_model,
-            "runway-act-two",
-            "narration-over-image",
-            "local-camera",
-        ]
+        return automated_dialogue_chain(profile)
     if production_class in {
         SceneProductionClass.PERFORMANCE_SHOT,
         SceneProductionClass.MUSIC_SYNCED_PERFORMANCE,
     }:
         return [
             policy.performance_model,
-            "runway-act-two",
-            "higgsfield-genjutsu",
             "runway-gen-4.5",
+            "veo-3.1-lite-generate-preview",
             "local-camera",
         ]
     return [
@@ -181,10 +195,14 @@ def still_route(scene_id: str, production_class: SceneProductionClass, profile: 
 def upgrade_kind_for(production_class: SceneProductionClass, model_id: str) -> UpgradeKind:
     if model_id in {"local-camera", "local-title", "narration-over-image"} or "image" in model_id:
         return UpgradeKind.STILL_LOCAL_MOTION
-    if production_class is SceneProductionClass.DIALOGUE_SHOT:
-        return UpgradeKind.DIALOGUE_LIPSYNC
     spec = get_model(model_id)
     caps = set(spec.capabilities) if spec else set()
+    if production_class is SceneProductionClass.DIALOGUE_SHOT:
+        if "accepts_target_audio" in caps or (
+            "lip_sync" in caps and "driving_video" not in caps
+        ):
+            return UpgradeKind.DIALOGUE_LIPSYNC
+        return UpgradeKind.IMPLIED_DIALOGUE_I2V
     if production_class in {
         SceneProductionClass.PERFORMANCE_SHOT,
         SceneProductionClass.MUSIC_SYNCED_PERFORMANCE,

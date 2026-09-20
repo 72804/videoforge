@@ -80,12 +80,7 @@ def build_cost_plan(
     video = _video_decisions(decisions, policy)
     cheap = [d for d in video if d.selected_model not in VIDEO_MODELS_PREMIUM]
     premium = [d for d in video if d.selected_model in VIDEO_MODELS_PREMIUM]
-    perf = [
-        d
-        for d in video
-        if d.upgrade_kind.value == "performance_transfer"
-        or d.production_class.value in {"performance_shot", "music_synced_performance"}
-    ]
+    perf = [d for d in video if d.upgrade_kind.value == "performance_transfer"]
     if cheap:
         lines.append(_line_from_group("cheap_video", cheap))
     if premium:

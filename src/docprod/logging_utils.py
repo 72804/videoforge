@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from docprod.config import Settings
+from docprod.observability import ContextFilter
 
 _LOGGER_NAME = "docprod"
 _VALID_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
@@ -30,11 +31,20 @@ def configure_logging(settings: Settings) -> logging.Logger:
     if not logger.handlers:
         handler = logging.StreamHandler()
         handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s")
+            logging.Formatter(
+                "%(asctime)s %(levelname)s %(name)s request_id=%(request_id)s "
+                "user_id=%(user_id)s project_id=%(project_id)s job_id=%(job_id)s "
+                "scene_id=%(scene_id)s generation_attempt_id=%(generation_attempt_id)s "
+                "provider=%(provider)s model=%(model)s: %(message)s"
+            )
         )
+        handler.addFilter(ContextFilter())
         logger.addHandler(handler)
+    filt = ContextFilter()
     for handler in logger.handlers:
         handler.setLevel(level)
+        if not any(isinstance(item, ContextFilter) for item in handler.filters):
+            handler.addFilter(filt)
     logger.propagate = False
     return logger
 

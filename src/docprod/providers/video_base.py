@@ -16,6 +16,7 @@ class VideoShotRequest:
     count: int = 1
     native_audio_prompt: str = ""
     asset_unit_id: str = ""
+    identity_key: str = ""
 
 
 @dataclass

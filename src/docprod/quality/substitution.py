@@ -11,8 +11,14 @@ V1_EPISODE = "birko_kemal_drama_v1.mp4"
 V2_EPISODE = "birko_kemal_drama_v2.mp4"
 
 
-def upgrade_clip_path(paths: ProjectPaths, scene_id: str) -> Path:
-    return paths.visuals_dir / "upgrades" / f"{scene_id}.mp4"
+def upgrade_clip_path(paths: ProjectPaths, scene_id: str, beat_id: str = "") -> Path:
+    upgrades = paths.visuals_dir / "upgrades"
+    scene_path = upgrades / f"{scene_id}.mp4"
+    if beat_id:
+        beat_path = upgrades / f"{beat_id}.mp4"
+        if beat_path.is_file() and not scene_path.is_file():
+            return beat_path
+    return scene_path
 
 
 def episode_output_name(*, version: int) -> str:

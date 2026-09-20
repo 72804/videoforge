@@ -337,7 +337,6 @@ def plan_custom_drama(
     dest.sound_plan_review_md().write_text(render_sound_plan_markdown(sound), encoding="utf-8")
     stills = [s for s in plan.scenes if not s.metadata.get("cinematic_title_card")]
     image_cfg = ImageGenerationConfig.from_settings()
-    hist = 0.06698
     result = CustomDramaPlanResult(
         project_id=project_id,
         script_words=script.word_count,
@@ -354,22 +353,19 @@ def plan_custom_drama(
             "scene_planner_llm": "$0 (local drama compiler)",
             "character_refs_proposed": (
                 f"{len(CHARACTER_REF_PLAN)} identity stills as generation inputs "
-                f"only, not timeline; ESTIMATED "
-                f"{len(CHARACTER_REF_PLAN)}×${hist:.5f}="
-                f"${len(CHARACTER_REF_PLAN)*hist:.4f}; not executed"
+                "only, not timeline; usage-based image price UNRESOLVED; "
+                "Maple $0.06698 was a 7-image BATCH total, not a unit price; not executed"
             ),
             "ai_stills": (
                 f"KNOWN model={image_cfg.model} quality={image_cfg.quality} "
                 f"size={image_cfg.size}; KNOWN token rates $5/$8/$30 per 1M "
-                "(text in / image in / image out); ESTIMATED "
-                f"{len(stills)}×${hist:.5f}=${len(stills)*hist:.4f} from "
-                "existing_image_cost_usd historical sample; per-image list "
-                "price UNRESOLVED (usage-based); not executed"
+                "(text in / image in / image out); per-image list price UNRESOLVED; "
+                "Birko 24-call attributable ~$0.371 is a batch observation, not a quote; "
+                "not executed"
             ),
             "image_generations_proposed": (
                 f"{len(stills)} timeline + {len(CHARACTER_REF_PLAN)} refs = "
-                f"{len(stills)+len(CHARACTER_REF_PLAN)}; ESTIMATED "
-                f"${(len(stills)+len(CHARACTER_REF_PLAN))*hist:.4f} historical"
+                f"{len(stills)+len(CHARACTER_REF_PLAN)}; list price UNRESOLVED"
             ),
             "title_cards": f"{len(title_names)} local cinematic cards — $0",
             "tts": (

@@ -63,6 +63,16 @@ class Settings(BaseSettings):
     local_tts_base_url: str = Field(default="")
     local_music_base_url: str = Field(default="")
     quality_ping_local: bool = Field(default=False)
+    app_env: str = Field(default="development")
+    api_session_secret: SecretStr | None = Field(default=None)
+    api_cors_origins: str = Field(default="")
+    telegram_bot_token: SecretStr | None = Field(default=None)
+    product_store_path: str = Field(default="")
+    database_url: str = Field(default="")
+    product_persistence: str = Field(default="json")
+    worker_id: str = Field(default="")
+    worker_poll_seconds: float = Field(default=1.0)
+    job_lease_seconds: int = Field(default=30)
 
     def openai_key_configured(self) -> bool:
         secret = self.openai_api_key

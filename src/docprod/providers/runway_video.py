@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import json
+import mimetypes
+import time
 from pathlib import Path
 from typing import Any
 from urllib.request import Request, urlopen
@@ -13,10 +16,22 @@ from docprod.providers.pricing import (
     RUNWAY_ACT_TWO_USD_PER_SEC,
     RUNWAY_GEN45_USD_PER_SEC,
 )
+from docprod.providers.veo_journal import (
+    CACHE_COMMITTED,
+    DOWNLOAD_FAILED,
+    DOWNLOAD_SUCCEEDED,
+    DOWNLOADABLE_STATES,
+    GENERATION_IN_PROGRESS,
+    GENERATION_SUCCEEDED_REMOTE,
+    REQUEST_SUBMITTED,
+    load_journal,
+    write_journal,
+)
 from docprod.quality.duration import billable_seconds
 from docprod.quality.enums import CostConfidence, PriceMode
 from docprod.quality.specs import DialogueShotRequest, PerformanceShotRequest, PricingSpec
 from docprod.storage.hashing import file_sha256
+from docprod.storage.identity import poll_delays
 
 RUNWAY_BASE = "https://api.dev.runwayml.com"
 RUNWAY_VERSION = "2024-11-06"
@@ -125,6 +140,17 @@ def act_two_from_requests(
     )
 
 
+def image_data_uri(path: Path) -> str:
+    mime, _ = mimetypes.guess_type(path.name)
+    if mime not in {"image/jpeg", "image/png", "image/webp"}:
+        suffix = path.suffix.lower()
+        mime = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png"}.get(
+            suffix, "image/jpeg"
+        )
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return f"data:{mime};base64,{encoded}"
+
+
 class RunwayVideoProvider:
     def __init__(self, *, settings: Settings | None = None, transport: Any | None = None) -> None:
         self.settings = settings or get_settings()
@@ -142,7 +168,7 @@ class RunwayVideoProvider:
     ) -> dict[str, Any]:
         if not image_path.is_file() and not dry_run:
             raise FileNotFoundError(image_path)
-        image_uri = f"file:{image_path}" if dry_run else str(image_path)
+        image_uri = f"file:{image_path}" if dry_run else image_data_uri(image_path)
         payload = build_gen45_payload(prompt=prompt, image_uri=image_uri, duration=duration)
         digest = video_cache_hash(
             model=GEN45_MODEL,
@@ -206,18 +232,32 @@ class RunwayVideoProvider:
         dry_run: bool,
         use_cache: bool,
     ) -> dict[str, Any]:
+        cache = PaidArtifactCache()
         if use_cache:
-            hit = PaidArtifactCache().get(kind, digest)
+            hit = cache.get(kind, digest)
             if hit is not None:
                 path, meta = hit
-                return {"cached": True, "path": str(path), "digest": digest, "meta": meta}
+                return {
+                    "cached": True,
+                    "path": str(path),
+                    "digest": digest,
+                    "meta": meta,
+                    "paid_calls": 0,
+                }
         if dry_run:
             return {"dry_run": True, "digest": digest, "payload": payload, "paid_calls": 0}
         require_paid_call_allowed("runway", confirm_paid=confirm_paid, settings=self.settings)
         key = _runway_key(self.settings)
         if self.transport is not None:
-            return {"remote": self.transport(payload, key), "digest": digest}
-        return {"remote": _post(payload, key), "digest": digest}
+            return {"remote": self.transport(payload, key), "digest": digest, "paid_calls": 1}
+        return _live_image_to_video(
+            cache=cache,
+            kind=kind,
+            digest=digest,
+            payload=payload,
+            api_key=key,
+            use_cache=use_cache,
+        )
 
 
 def _runway_key(settings: Settings) -> str:
@@ -226,16 +266,219 @@ def _runway_key(settings: Settings) -> str:
     return settings.runway_api_key.get_secret_value()  # type: ignore[union-attr]
 
 
+def _headers(api_key: str, *, json_body: bool = False) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "X-Runway-Version": RUNWAY_VERSION,
+    }
+    if json_body:
+        headers["Content-Type"] = "application/json"
+    return headers
+
+
 def _post(payload: dict[str, Any], api_key: str) -> dict[str, Any]:
     req = Request(
         payload["url"],
         data=json.dumps(payload["json"]).encode("utf-8"),
         method="POST",
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "X-Runway-Version": RUNWAY_VERSION,
-            "Content-Type": "application/json",
-        },
+        headers=_headers(api_key, json_body=True),
     )
     with urlopen(req, timeout=60) as resp:  # noqa: S310
         return json.loads(resp.read().decode("utf-8"))
+
+
+def _get_task(task_id: str, api_key: str) -> dict[str, Any]:
+    req = Request(
+        f"{RUNWAY_BASE}/v1/tasks/{task_id}",
+        method="GET",
+        headers=_headers(api_key),
+    )
+    with urlopen(req, timeout=60) as resp:  # noqa: S310
+        return json.loads(resp.read().decode("utf-8"))
+
+
+def _download_bytes(url: str) -> bytes:
+    req = Request(url, method="GET")
+    with urlopen(req, timeout=180) as resp:  # noqa: S310
+        payload = resp.read()
+    if not payload:
+        raise RuntimeError("Runway download produced no bytes")
+    return payload
+
+
+def _task_output_url(task: dict[str, Any]) -> str:
+    output = task.get("output")
+    if isinstance(output, list) and output:
+        first = output[0]
+        if isinstance(first, str) and first.startswith("http"):
+            return first
+        if isinstance(first, dict):
+            for key in ("url", "uri", "href"):
+                value = first.get(key)
+                if isinstance(value, str) and value.startswith("http"):
+                    return value
+    if isinstance(output, str) and output.startswith("http"):
+        return output
+    raise RuntimeError("Runway task succeeded but no downloadable output URL was present")
+
+
+def _live_image_to_video(
+    *,
+    cache: PaidArtifactCache,
+    kind: str,
+    digest: str,
+    payload: dict[str, Any],
+    api_key: str,
+    use_cache: bool,
+) -> dict[str, Any]:
+    journal = load_journal(cache.root, digest) if use_cache else None
+    if journal and journal.get("state") in DOWNLOADABLE_STATES:
+        task_id = str(journal.get("task_id") or "")
+        if not task_id:
+            raise RuntimeError(
+                "Runway journal is downloadable but missing task_id; billing state unknown — STOP"
+            )
+        task = _get_task(task_id, api_key)
+        return _commit_runway_task(
+            cache=cache,
+            kind=kind,
+            digest=digest,
+            payload=payload,
+            task=task,
+            billed_this_run=False,
+            recovered=True,
+        )
+    if journal and str(journal.get("task_id") or ""):
+        task_id = str(journal["task_id"])
+        status = str(journal.get("state") or "")
+        if status in {REQUEST_SUBMITTED, GENERATION_IN_PROGRESS}:
+            task = _poll_task(task_id, api_key, digest=digest, cache_root=cache.root)
+            return _commit_runway_task(
+                cache=cache,
+                kind=kind,
+                digest=digest,
+                payload=payload,
+                task=task,
+                billed_this_run=False,
+                recovered=True,
+            )
+        raise RuntimeError(
+            f"Runway journal state {status!r} is ambiguous; will not resubmit — STOP"
+        )
+    remote = _post(payload, api_key)
+    task_id = str(remote.get("id") or "")
+    if not task_id:
+        raise RuntimeError("Runway POST returned no task id; billing state unknown — STOP")
+    write_journal(
+        cache.root,
+        digest,
+        {
+            "provider": "runway",
+            "model": GEN45_MODEL,
+            "task_id": task_id,
+            "state": REQUEST_SUBMITTED,
+            "estimated_usd": payload.get("estimated_usd"),
+        },
+    )
+    task = _poll_task(task_id, api_key, digest=digest, cache_root=cache.root)
+    return _commit_runway_task(
+        cache=cache,
+        kind=kind,
+        digest=digest,
+        payload=payload,
+        task=task,
+        billed_this_run=True,
+        recovered=False,
+    )
+
+
+def _poll_task(task_id: str, api_key: str, *, digest: str, cache_root: Path) -> dict[str, Any]:
+    task: dict[str, Any] = {"id": task_id, "status": "PENDING"}
+    for delay in poll_delays():
+        task = _get_task(task_id, api_key)
+        status = str(task.get("status") or "").upper()
+        write_journal(
+            cache_root,
+            digest,
+            {
+                **(load_journal(cache_root, digest) or {}),
+                "provider": "runway",
+                "task_id": task_id,
+                "state": GENERATION_IN_PROGRESS,
+                "remote_status": status,
+            },
+        )
+        if status in {"SUCCEEDED", "SUCCESS", "COMPLETED"}:
+            write_journal(
+                cache_root,
+                digest,
+                {
+                    **(load_journal(cache_root, digest) or {}),
+                    "state": GENERATION_SUCCEEDED_REMOTE,
+                    "task_id": task_id,
+                },
+            )
+            return task
+        if status in {"FAILED", "CANCELLED", "CANCELED", "ERROR"}:
+            raise RuntimeError(f"Runway task {task_id} failed with status {status}")
+        time.sleep(delay)
+    raise RuntimeError(
+        f"Runway task {task_id} timed out; do not resubmit — inspect remote task first"
+    )
+
+
+def _commit_runway_task(
+    *,
+    cache: PaidArtifactCache,
+    kind: str,
+    digest: str,
+    payload: dict[str, Any],
+    task: dict[str, Any],
+    billed_this_run: bool,
+    recovered: bool,
+) -> dict[str, Any]:
+    status = str(task.get("status") or "").upper()
+    if status not in {"SUCCEEDED", "SUCCESS", "COMPLETED"}:
+        raise RuntimeError(f"Runway task not successful: {status or 'unknown'}")
+    url = _task_output_url(task)
+    try:
+        blob = _download_bytes(url)
+    except Exception:
+        prior = load_journal(cache.root, digest) or {}
+        write_journal(
+            cache.root,
+            digest,
+            {**prior, "state": DOWNLOAD_FAILED, "output_url": url},
+        )
+        raise
+    write_journal(
+        cache.root,
+        digest,
+        {**(load_journal(cache.root, digest) or {}), "state": DOWNLOAD_SUCCEEDED},
+    )
+    dest = cache.put(
+        kind,
+        digest,
+        blob,
+        suffix=".mp4",
+        meta={
+            "provider": "runway",
+            "model": GEN45_MODEL,
+            "estimated_usd": float(payload.get("estimated_usd") or 0),
+            "billed_this_run": billed_this_run,
+            "recovered": recovered,
+        },
+    )
+    write_journal(
+        cache.root,
+        digest,
+        {**(load_journal(cache.root, digest) or {}), "state": CACHE_COMMITTED},
+    )
+    return {
+        "cached": False,
+        "path": str(dest),
+        "digest": digest,
+        "paid_calls": 1 if billed_this_run else 0,
+        "recovered": recovered,
+        "estimated_usd": payload.get("estimated_usd"),
+    }

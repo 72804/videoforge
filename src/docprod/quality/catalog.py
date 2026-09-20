@@ -124,6 +124,7 @@ def _m(
     duration_options: tuple[int, ...] = (),
     min_duration_seconds: float | None = None,
     max_duration_seconds: float | None = None,
+    manual_input_required: bool = False,
 ) -> ModelSpec:
     status = adapter_status
     if status is None:
@@ -145,6 +146,7 @@ def _m(
         duration_options=duration_options,
         min_duration_seconds=min_duration_seconds,
         max_duration_seconds=max_duration_seconds,
+        manual_input_required=manual_input_required,
     )
 
 
@@ -353,7 +355,8 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             pricing=KNOWN_ACT_TWO,
             min_duration_seconds=3,
             max_duration_seconds=30,
-            notes="POST /v1/character_performance model act_two",
+            notes="POST /v1/character_performance model act_two; optional, never auto-required",
+            manual_input_required=True,
         ),
         _m(
             "higgsfield-genjutsu",
@@ -365,6 +368,26 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             min_duration_seconds=3,
             max_duration_seconds=30,
             notes="Product page only; no public REST body. Preflight uses 3–30s / 30 refs.",
+            manual_input_required=True,
+        ),
+        _m(
+            "audio-driven-lipsync",
+            "unassigned",
+            Modality.VIDEO,
+            caps=(
+                "accepts_target_audio",
+                "lip_sync",
+                "facial_motion",
+                "head_motion",
+                "body_motion",
+                "character_consistency",
+                "dialogue",
+            ),
+            tier=QualityTier.PREMIUM,
+            notes=(
+                "Placeholder slot for a documented audio-driven dialogue adapter. "
+                "No network payload until an official schema exists."
+            ),
         ),
         _m(
             "ltx-local",

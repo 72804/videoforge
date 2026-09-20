@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 from docprod.models.scene import Scene
-from docprod.quality.classify import classify_scene
-from docprod.quality.enums import SceneProductionClass
+from docprod.quality.catalog import get_model
 from docprod.quality.specs import DrivingPerformancePlan
 
 _BEAT_MOTIONS: dict[str, list[str]] = {
     "b07": [
-        "enter frame or already at the counter",
-        "place cola on the wood",
-        "glance at the grocer",
-        "small smirk",
-        "speak “Kemal’e yaz.” then “O öder.”",
-        "wink",
-        "hold the final expression",
+        "T=0.00–1.50 (reference clock): settle; cola/hand action on “Bir kola aldı”",
+        "T=1.50–2.10: mouth “Kemal’e yaz.” at Cedar pace (do not imitate the voice)",
+        "T=2.10–2.92: hold while Cedar pauses",
+        "T=2.92–3.56: stay still through “Bakkal baktı”",
+        "T=4.28–5.22: small confident wink / smirk (Cedar “göz kırptı”)",
+        "hold through ~8s; do not voice-match Cedar",
     ],
     "b15": [
         "hold ground inside the apartment",
@@ -38,13 +36,29 @@ _BEAT_MOTIONS: dict[str, list[str]] = {
 }
 
 
-def needs_driving_performance(scene: Scene, *, model_id: str = "") -> bool:
-    if "act-two" in model_id or "genjutsu" in model_id:
+def model_requires_manual_driving(model_id: str) -> bool:
+    spec = get_model(model_id)
+    return bool(spec and spec.manual_input_required)
+
+
+def needs_driving_performance(
+    scene: Scene,
+    *,
+    model_id: str = "",
+    driving_video: str = "",
+    allow_manual_inputs: bool = False,
+) -> bool:
+    """True only when a transfer model is selected AND a driving clip is usable.
+
+    Human recording is never implied. Missing driving + allow_manual_inputs=false
+    means the router must pick an automated fallback instead.
+    """
+    _ = scene
+    if not model_requires_manual_driving(model_id):
+        return False
+    if driving_video:
         return True
-    klass = classify_scene(scene)
-    if klass is SceneProductionClass.MUSIC_SYNCED_PERFORMANCE:
-        return True
-    return False
+    return allow_manual_inputs
 
 
 def driving_plan_for(scene: Scene) -> DrivingPerformancePlan:
@@ -52,19 +66,27 @@ def driving_plan_for(scene: Scene) -> DrivingPerformancePlan:
     chars = [str(c) for c in (scene.metadata or {}).get("characters") or []]
     motions = list(_BEAT_MOTIONS.get(beat) or _motions_from_intent(scene))
     camera = "locked medium shot"
-    if "wide" in scene.visual_intent.casefold() or "door" in scene.visual_intent.casefold():
+    if beat == "b07":
+        camera = "locked medium, chest/waist-up, eye level or slightly below"
+    elif "wide" in scene.visual_intent.casefold() or "door" in scene.visual_intent.casefold():
         camera = "locked wide, no handheld whip-pans"
+    duration_note = f"~{scene.duration:.1f} sec scene window (record 3–30s; Act-Two requires ≥3s)"
+    if beat == "b07":
+        duration_note = (
+            "record 7–9s driving take (Act-Two bills driving length, 3–30s); "
+            f"episode scene window is ~{scene.duration:.1f}s after trim"
+        )
     lines = [
         f"Scene: {scene.visual_intent.strip()}",
         "",
-        f"Duration: ~{scene.duration:.1f} sec (record 3–30s; Act-Two requires ≥3s)",
+        f"Duration: {duration_note}",
         "",
         "Performance:",
         *[f"- {item}" for item in motions],
         "",
         f"Camera: {camera}",
         "",
-        "Audio: use final dialogue timing; do not mime a celebrity.",
+        "Audio: play b07_recording_assist.wav in one earbud; match Cedar timing only.",
         "",
         f"Narration/dialogue in scene: {scene.narration.strip()}",
     ]
@@ -77,7 +99,7 @@ def driving_plan_for(scene: Scene) -> DrivingPerformancePlan:
         number_of_performers=max(1, len(chars)),
         recording_instructions="\n".join(lines),
         reference_character_bindings=chars,
-        needs_driving_performance=True,
+        needs_driving_performance=False,
     )
 
 

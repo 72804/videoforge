@@ -15,6 +15,9 @@ from docprod.providers.image_config import GeneratedImageManifest, ImageGenerati
 from docprod.providers.openai_image import OpenAIImageProvider, image_request_hash
 from docprod.providers.paid_cache import PaidArtifactCache
 from docprod.providers.veo_mapping import average_hash, hash_similarity
+from docprod.quality.character_refs import (
+    should_generate_identity_sheet,
+)
 from docprod.render.contact_sheet import build_contact_sheet
 from docprod.storage.hashing import file_sha256
 from docprod.storage.json_store import atomic_write_bytes, load_model, save_json, save_model
@@ -164,6 +167,8 @@ def plan_drama_visual_jobs(
     jobs: list[DramaVisualJob] = []
     ref_dir = character_ref_dir(paths)
     for index, item in enumerate(CHARACTER_REF_PLAN):
+        if not should_generate_identity_sheet(paths, str(item["id"])):
+            continue
         prompt = _ref_prompt(item)
         request_hash = image_request_hash(
             prompt=prompt,
@@ -215,7 +220,9 @@ def plan_drama_visual_jobs(
     return jobs, image_cfg
 
 
-def _bind_references(jobs: list[DramaVisualJob]) -> None:
+def _bind_references(jobs: list[DramaVisualJob], paths: ProjectPaths | None = None) -> None:
+    """V1 timeline stills bind generated identity sheets only."""
+    _ = paths
     by_character: dict[str, Path] = {}
     for job in jobs:
         if job.kind != "character_ref":
@@ -275,10 +282,14 @@ def execute_generate_drama_visuals(
 ) -> DramaVisualResult:
     cfg = settings or get_settings()
     jobs, image_cfg = plan_drama_visual_jobs(paths, plan, settings=cfg)
-    _bind_references(jobs)
+    _bind_references(jobs, paths)
     stills = [job for job in jobs if job.kind == "timeline"]
     refs = [job for job in jobs if job.kind == "character_ref"]
-    hist = 0.06698
+    hist_note = (
+        "Maple $0.06698 was a 7-image BATCH total, not a per-image price. "
+        "Birko 24 image calls attributable ~$0.371 usage-based. "
+        "No per-image list price (gpt-image-2.5-flare $5/$8/$30 per 1M)."
+    )
     if progress:
         progress("DRAMA VISUAL GENERATION PLAN (not yet calling API)")
         progress(f"model={image_cfg.model}")
@@ -287,7 +298,7 @@ def execute_generate_drama_visuals(
         progress(f"planned_generation_count={len(jobs)}")
         progress(f"character_refs={len(refs)} timeline={len(stills)}")
         progress("KNOWN token rates $5/$8/$30 per 1M (text in / image in / image out)")
-        progress(f"historical_estimate={len(jobs)}×${hist:.5f}=${len(jobs) * hist:.4f}")
+        progress(hist_note)
         progress("title_cards=local only; no image spend")
     collage = collage_violations(plan)
     adapter = provider or OpenAIImageProvider(settings=cfg, config=image_cfg)
@@ -486,7 +497,7 @@ def execute_generate_drama_visuals(
         cache_entries=cache_entries,
         failed=failed,
         usages=usages,
-        estimated_usd=round(len(jobs) * hist, 4),
+        estimated_usd=0.0,
         measured_usd=measured,
         ref_paths=ref_paths,
         timeline_dir=str(paths.visuals_dir),

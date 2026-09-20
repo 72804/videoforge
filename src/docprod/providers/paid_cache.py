@@ -22,21 +22,23 @@ def veo_request_hash(
     aspect_ratio: str,
     resolution: str,
     count: int,
+    extra: dict[str, str] | None = None,
 ) -> str:
-    return content_hash(
-        {
-            "provider": "google",
-            "kind": "veo",
-            "model": model,
-            "image_sha256": image_sha256,
-            "prompt": prompt,
-            "negative_prompt": negative_prompt,
-            "duration_seconds": duration_seconds,
-            "aspect_ratio": aspect_ratio,
-            "resolution": resolution,
-            "count": count,
-        }
-    )
+    payload = {
+        "provider": "google",
+        "kind": "veo",
+        "model": model,
+        "image_sha256": image_sha256,
+        "prompt": prompt,
+        "negative_prompt": negative_prompt,
+        "duration_seconds": duration_seconds,
+        "aspect_ratio": aspect_ratio,
+        "resolution": resolution,
+        "count": count,
+    }
+    if extra:
+        payload.update(extra)
+    return content_hash(payload)
 
 
 def lyria_request_hash(

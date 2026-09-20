@@ -10,6 +10,7 @@ from docprod.quality.enums import (
     ProviderStatus,
     QualityProfile,
     QualityTier,
+    ReferenceMode,
     SceneProductionClass,
     SfxClass,
     UpgradeKind,
@@ -53,6 +54,7 @@ class ModelSpec(BaseModel):
     duration_options: tuple[int, ...] = ()
     min_duration_seconds: float | None = None
     max_duration_seconds: float | None = None
+    manual_input_required: bool = False
 
 
 class ProviderSpec(BaseModel):
@@ -127,6 +129,7 @@ class RouteDecision(BaseModel):
     effective_cost_per_used_second: float | None = None
     upgrade_kind: UpgradeKind = UpgradeKind.STILL_LOCAL_MOTION
     needs_driving_performance: bool = False
+    manual_input_required: bool = False
 
 
 class CharacterProfile(BaseModel):
@@ -138,6 +141,12 @@ class CharacterProfile(BaseModel):
     canonical_refs: list[str] = Field(default_factory=list)
     appearance_notes: str = ""
     generation_hashes: list[str] = Field(default_factory=list)
+    reference_mode: ReferenceMode = ReferenceMode.AUTO_GENERATED
+    locked: bool = False
+    identity_version: str = ""
+    custom_references: list[str] = Field(default_factory=list)
+    generated_references: list[str] = Field(default_factory=list)
+    primary_reference: str = ""
 
 
 class CharacterReferenceSet(BaseModel):
@@ -145,6 +154,19 @@ class CharacterReferenceSet(BaseModel):
 
     project_id: str
     profiles: list[CharacterProfile] = Field(default_factory=list)
+    manifest_path: str = ""
+    ui_operations: tuple[str, ...] = (
+        "upload_character",
+        "replace_character",
+        "add_reference_angle",
+        "choose_primary",
+        "lock_identity",
+        "view_references",
+        "remove_reference",
+        "regenerate_character",
+        "apply_to_future_scenes",
+        "apply_to_entire_episode",
+    )
 
 
 class DialogueShotRequest(BaseModel):
@@ -161,6 +183,28 @@ class DialogueShotRequest(BaseModel):
     camera_instructions: str = ""
 
 
+class AudioDrivenDialogueRequest(BaseModel):
+    """Provider-neutral lipsync request. Distinct from human driving video."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    character_refs: list[str] = Field(default_factory=list)
+    source_image: str = ""
+    source_video: str = ""
+    dialogue_audio: str = ""
+    dialogue_text: str = ""
+    emotion: str = ""
+    duration: float = 0.0
+    camera_framing: str = ""
+    accepts_target_audio: bool = True
+    lip_sync: bool = True
+    facial_motion: bool = True
+    head_motion: bool = True
+    body_motion: bool = False
+    character_consistency: bool = True
+
+
 class PerformanceShotRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -172,6 +216,18 @@ class PerformanceShotRequest(BaseModel):
     shot_duration: float
     camera_preservation: bool = True
     motion_preservation: bool = True
+
+
+class DrivingPerformanceRequest(BaseModel):
+    """Optional human/auto driving clip for Act-Two/Genjutsu. Never a default dependency."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scene_id: str
+    driving_video: str = ""
+    character_refs: list[str] = Field(default_factory=list)
+    source_kind: str = "none"
+    celebrity_likeness: bool = False
 
 
 class DrivingPerformanceAsset(BaseModel):
@@ -216,7 +272,7 @@ class DrivingPerformancePlan(BaseModel):
     number_of_performers: int = 1
     recording_instructions: str = ""
     reference_character_bindings: list[str] = Field(default_factory=list)
-    needs_driving_performance: bool = True
+    needs_driving_performance: bool = False
 
 
 class TtsComparisonRow(BaseModel):

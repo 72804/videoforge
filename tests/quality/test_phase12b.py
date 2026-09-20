@@ -144,8 +144,11 @@ def test_driving_plan_text() -> None:
     plan_doc = driving_plan_for(scene)
     text = plan_doc.recording_instructions
     assert "Kemal" in text or "yaz" in text.casefold()
-    assert plan_doc.needs_driving_performance is True
-    assert needs_driving_performance(scene, model_id="runway-act-two") is True
+    assert plan_doc.needs_driving_performance is False
+    assert needs_driving_performance(scene, model_id="runway-act-two") is False
+    assert needs_driving_performance(
+        scene, model_id="runway-act-two", allow_manual_inputs=True
+    ) is True
 
 
 def test_cost_bounds_unresolved_not_cheaper() -> None:

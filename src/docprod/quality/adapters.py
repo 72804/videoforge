@@ -6,8 +6,13 @@ from docprod.exceptions import DocumentedUnimplementedError, UnimplementedProvid
 from docprod.providers.higgsfield import HiggsfieldGenjutsuAdapter, HiggsfieldKlingAdapter
 from docprod.providers.runway_video import RunwayVideoProvider, act_two_from_requests
 from docprod.quality.catalog import get_model
+from docprod.quality.duration import billable_seconds
 from docprod.quality.enums import AdapterStatus, ProviderStatus
-from docprod.quality.specs import DialogueShotRequest, PerformanceShotRequest
+from docprod.quality.specs import (
+    AudioDrivenDialogueRequest,
+    DialogueShotRequest,
+    PerformanceShotRequest,
+)
 
 
 class ProviderAdapter:
@@ -37,21 +42,42 @@ class ProviderAdapter:
         )
 
     def generate_dialogue(self, request: DialogueShotRequest) -> dict[str, object]:
+        if self.model_id == "runway-gen-4.5":
+            seconds = int(billable_seconds("runway-gen-4.5", request.duration))
+            return runway_dry_run_i2v(request.camera_instructions or request.dialogue_text, seconds)
+        if self.model_id == "audio-driven-lipsync":
+            raise UnimplementedProviderError(
+                "audio-driven-lipsync has no documented adapter; implied I2V fallback applies"
+            )
         if self.model_id == "runway-act-two":
+            if not (request.source_video or "").strip():
+                raise UnimplementedProviderError(
+                    "Act-Two skipped: no driving video (manual input not required)"
+                )
             return act_two_from_requests(
                 dialogue=request,
                 character_uri=request.source_image or "file:character",
-                driving_uri=request.source_video or "file:driving",
+                driving_uri=request.source_video,
             )
         _ = request
         raise UnimplementedProviderError(
             f"{self.model_id} dialogue adapter is unimplemented (dry-run only)."
         )
 
+    def generate_audio_driven(self, request: AudioDrivenDialogueRequest) -> dict[str, object]:
+        _ = request
+        raise UnimplementedProviderError(
+            "No documented audio-driven lipsync adapter; do not guess a payload."
+        )
+
     def generate_performance(self, request: PerformanceShotRequest) -> dict[str, object]:
         if self.model_id == "higgsfield-genjutsu":
             return HiggsfieldGenjutsuAdapter().plan(request, dry_run=True)
         if self.model_id == "runway-act-two":
+            if not (request.driving_video or "").strip():
+                raise UnimplementedProviderError(
+                    "Act-Two skipped: no driving video (manual input not required)"
+                )
             refs = request.character_refs
             character_uri = refs[0] if refs else "file:character"
             return act_two_from_requests(

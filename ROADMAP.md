@@ -1,114 +1,58 @@
 # Docprod roadmap
 
-This document records product direction that is **not** in the current pipeline.
+The generation engine in this repository remains. The first commercial
+surface is a **Telegram Mini App + Telegram Bot** for editable AI video
+projects. A standalone public HTTP API is postponed, not discarded.
 
-Phase 8 implements sourced web research, a citation dossier, and a Turkish documentary script.
-Phase 9 compiles that script into a semantic scene plan. It does **not** generate assets
-and does **not** implement the creator-control surfaces below.
-
----
-
-## LATE-STAGE CREATOR CONTROLS
-
-**Status: DEFERRED / NOT IMPLEMENTED**
-
-Do not treat any of these as available in Phase 8.
-
-### 1. Prompt-driven custom content creation
-
-Deferred:
-
-- generate a new scene from a prompt
-- change an existing visual using a prompt
-- custom narration prompt
-- custom document/map graphic prompt
-- custom SFX/music prompt
-- arbitrary user-provided creative instructions
-
-The research/script models use fixed, versioned instructions. There is no free-form creative prompt console.
-
-### 2. Scene-by-scene timeline editor
-
-Deferred:
-
-- timeline UI
-- inspect scenes in an editor
-- reorder
-- split
-- merge
-- trim/extend
-- replace visual
-- replace narration
-- regenerate one scene
-- disable/remove scene
-- lock approved scene
-- upload a manual replacement asset
-
-Phase 8 stops after research and script review artifacts. It does not scene-plan or edit a timeline.
-
-### 3. Model/provider chooser
-
-Deferred:
-
-- research model picker
-- writing model picker
-- image model picker
-- video model picker
-- TTS model picker
-- transcription/alignment model picker
-- global defaults UI
-- per-project overrides UI
-- per-scene overrides
-
-Phase 8 exposes **config defaults only** (`RESEARCH_MODEL`, `DOSSIER_MODEL`, `WRITER_MODEL`, `VIDEO_MODEL`, `MUSIC_MODEL`, and existing image/TTS settings). There is no chooser UI. Google media adapters remain provider-neutral config, not a UI picker.
-
-### 4. Versioning / manual override safety
-
-Deferred:
-
-- scene revisions
-- undo/revert
-- preserve approved assets
-- compare generations
-- never overwrite locked human decisions
-
-Paid stages may reuse a cached successful result when the request hash is unchanged. That is not a revision history or lock system.
+Phase 8–12 remain historical engine work (research, semantic planning,
+quality router, Birko/Maple canaries). They are not the product UI.
 
 ---
 
-## PHASE 12 — QUALITY ROUTER / CINEMATIC ENGINE
+## CURRENT
 
-**Status: PLANNING IMPLEMENTED / PRODUCTION EXECUTION NOT ENABLED**
+### 13B Telegram backend API
 
-Code, tests, and dry-run cost plans exist. Paid multi-model production is **not**
-wired to a one-shot execute command.
+FastAPI `/api/v1` over `ProductService`. Mock worker, HMAC sessions,
+dev-only simulated payments. No paid providers. No PostgreSQL.
 
-Implemented:
+---
 
-- production classes and quality profiles (`ECONOMY` … `LOCAL_ONLY`)
-- capability catalog + dry-run cost planner
-- greedy budget allocation
-- dialogue / performance request objects + unimplemented adapters
-- provider-status / model-catalog / quality-plan CLI
+## NEXT
 
-### Phase 12B — premium adapters (dry-run)
+| Phase | Scope |
+|---|---|
+| 13B | Telegram backend API over `ProductService` |
+| 13C | PostgreSQL + migrations |
+| 13D | Async worker/queue calling the existing engine |
+| 13E | Telegram bot (`/start`, Mini App button, notifications) |
+| 13F | Telegram Stars payments (server-confirmed, idempotent) |
+| 14A | Mini App shell |
+| 14B | Create Video flow |
+| 14C | Character manager |
+| 14D | Generation/progress UI |
+| 14E | Project viewer |
+| 14F | Scene editor |
+| 14G | Regeneration/version UI |
+| 14H | Export/share |
+| 15A | Production object storage (S3/R2) |
+| 15B | Deployment/scaling |
+| 15C | Analytics/admin |
+| 16 | Public automation API (if still desired) |
 
-- Runway Gen-4.5 I2V and Act-Two character performance (official API)
-- Eleven v3 TTS, SFX, Music (official API; no generation in this phase)
-- Higgsfield Genjutsu / Kling I2V: documented-unimplemented (no public REST body)
-- Billable vs used seconds, cost bounds, driving-performance instructions
-- V2 episode filename `birko_kemal_drama_v2.mp4` (does not overwrite V1)
+---
 
-### Deferred creator UI
+## Explicitly not now
 
-- quality-profile selector
-- per-scene provider override
-- model picker
-- scene lock / regen scene
-- performance driving-video upload
-- audio provider override
-- cost slider / budget control
-- preview-before-spend
+Full polished Mini App, Stripe, subscriptions, public developer API,
+desktop Premiere-style timeline, social publishing, YouTube/TikTok
+automation, new model adapters, Runway product work.
 
-Do not treat these as available in the current CLI beyond dry-run reports.
+---
 
+## Late-stage creator controls (engine)
+
+Prompt-driven scene edit, per-scene regen, model pickers, and versioning
+are now scheduled through **14B–14G** on Telegram, not as a generic SaaS
+web app. Engine primitives already include quality profiles, custom
+character refs, and paid-job journals.

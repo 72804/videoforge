@@ -112,5 +112,12 @@ class UpgradeKind(StrEnum):
     SIMPLE_I2V = "simple_i2v"
     REACTION_I2V = "reaction_i2v"
     DIALOGUE_LIPSYNC = "dialogue_lipsync"
+    IMPLIED_DIALOGUE_I2V = "implied_dialogue_i2v"
     HERO_CINEMATIC = "hero_cinematic"
     PERFORMANCE_TRANSFER = "performance_transfer"
+
+
+class ReferenceMode(StrEnum):
+    AUTO_GENERATED = "AUTO_GENERATED"
+    CUSTOM = "CUSTOM"
+    HYBRID = "HYBRID"

@@ -17,6 +17,9 @@ from docprod.config import Settings, get_settings, require_openai_api_key, requi
 from docprod.providers.image_config import ImageGenerationConfig
 from docprod.storage.hashing import content_hash
 
+# Adapter submits a list to images.edit. There is no 2-file truncation in this client.
+OPENAI_IMAGE_EDIT_MAX_REFERENCE_FILES = 16
+
 
 def image_request_hash(
     *,
@@ -113,6 +116,12 @@ class OpenAIImageProvider:
         require_paid_call_allowed("openai", confirm_paid=confirm_paid, settings=self.settings)
         require_openai_api_key(self.settings)
         refs = [Path(path) for path in (reference_images or []) if Path(path).is_file()]
+        if len(refs) > OPENAI_IMAGE_EDIT_MAX_REFERENCE_FILES:
+            raise ValueError(
+                f"OpenAI image edit supports at most "
+                f"{OPENAI_IMAGE_EDIT_MAX_REFERENCE_FILES} reference files; "
+                f"got {len(refs)}. Refusing to drop identities."
+            )
         kwargs: dict[str, Any] = {
             "model": self.config.model,
             "prompt": prompt,
