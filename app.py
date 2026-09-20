@@ -1,7 +1,7 @@
-"""Vercel FastAPI entrypoint.
+"""Vercel FastAPI zero-config entrypoint.
 
-The FastAPI framework preset serves the whole ASGI app (not file-based /api routing).
-Routes remain /health, /ready, /telegram/webhook, /api/v1/*.
+Vercel serves this ASGI `app` for every public path (not file-based /api routing).
+Do not put the FastAPI app in api/index.py: that legacy layout only maps /api.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parents[1]
+_ROOT = Path(__file__).resolve().parent
 _SRC = _ROOT / "src"
 if str(_SRC) not in sys.path:
     sys.path.insert(0, str(_SRC))

@@ -46,7 +46,7 @@ dev = [
 testpaths = ["tests"]
 
 [tool.vercel]
-entrypoint = "api.index:app"
+entrypoint = "app:app"
 
 [tool.ruff]
 src = ["src", "tests"]

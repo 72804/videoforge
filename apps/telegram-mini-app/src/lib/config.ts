@@ -10,6 +10,11 @@ export function resolveApiBase(appEnv: string, rawBase: string): string {
       "Production Mini App requires NEXT_PUBLIC_API_BASE_URL as a public https URL (not localhost).",
     );
   }
+  if (/\/api(\/v1)?$/i.test(base)) {
+    throw new Error(
+      "NEXT_PUBLIC_API_BASE_URL must be the API origin only (no /api or /api/v1 suffix).",
+    );
+  }
   return base;
 }
 

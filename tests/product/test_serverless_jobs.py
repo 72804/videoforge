@@ -190,9 +190,36 @@ def test_inline_generate_completes_without_dev_runner() -> None:
 
 
 def test_vercel_entrypoint_file_reuses_create_app() -> None:
-    text = Path("api/index.py").read_text(encoding="utf-8")
+    text = Path("app.py").read_text(encoding="utf-8")
     assert "app_from_settings" in text
     assert "app = app_from_settings()" in text
-    assert "create_app" not in text.replace("app_from_settings", "")
     pyproject = Path("pyproject.toml").read_text(encoding="utf-8")
-    assert 'entrypoint = "api.index:app"' in pyproject
+    assert 'entrypoint = "app:app"' in pyproject
+    assert not Path("api/index.py").exists()
+    vercel = Path("vercel.json").read_text(encoding="utf-8")
+    assert '"framework": "fastapi"' in vercel
+    assert '"app.py"' in vercel
+
+
+def test_public_api_contract_is_root_not_api_prefix() -> None:
+    from fastapi.testclient import TestClient
+
+    from docprod.api.app import create_app
+
+    application = create_app(env="test")
+    client = TestClient(application)
+    assert client.get("/health").status_code == 200
+    assert client.get("/ready").status_code == 200
+    assert client.get("/api/health").status_code == 404
+    assert client.get("/api/ready").status_code == 404
+    assert client.get("/api/v1/models").status_code == 200
+    assert client.post("/telegram/webhook", json={}).status_code == 200
+    assert client.post("/internal/jobs/run").status_code == 401
+    paths = application.openapi()["paths"]
+    assert "/health" in paths
+    assert "/ready" in paths
+    assert "/telegram/webhook" in paths
+    assert "/internal/jobs/run" in paths
+    assert "/api/v1/models" in paths
+    assert "/api/health" not in paths
+    assert client.get("/docs").status_code == 200

@@ -6,7 +6,7 @@ Railway + Docker worker from Phase 15.5 is **optional / superseded** for product
 
 ## Already works
 
-- FastAPI factory: `uv run docprod telegram-api-serve`; Vercel entrypoint `api/index.py` → `app_from_settings()`
+- FastAPI factory: `uv run docprod telegram-api-serve`; Vercel entrypoint `app.py` → `app_from_settings()` (FastAPI framework preset, not `api/index.py`)
 - Local worker: `uv run docprod telegram-worker` (not used on Vercel)
 - Bounded mock jobs: inline generate path + `POST /internal/jobs/run` + `telegram-jobs-run`
 - Local polling: `uv run docprod telegram-bot` (refuses `APP_ENV=production`)

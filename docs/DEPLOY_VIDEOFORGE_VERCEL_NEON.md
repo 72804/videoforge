@@ -7,7 +7,9 @@ A single Vercel project would mix Next.js and FastAPI roots. That is not simpler
 
 Repo: `https://github.com/72804/videoforge.git`
 
-The FastAPI app is a Vercel Python **framework preset** entrypoint (`api/index.py` → `app`). There is no Node proxy. Routes stay `/health`, `/ready`, `/telegram/webhook`, `/api/v1/*`.
+The FastAPI app is a Vercel **zero-config FastAPI** entrypoint: repo-root `app.py` exports `app = app_from_settings()`. Every request hits that ASGI app. Routes stay `/health`, `/ready`, `/telegram/webhook`, `/internal/jobs/run`, `/api/v1/*`. There is no `/api/health`. Do not use `api/index.py` (legacy file-based functions only serve `/api`).
+
+`https://videoforge-dusky.vercel.app` is the **Mini App** (Next.js). It is not the API. `/health` there is a Next.js 404. Point `NEXT_PUBLIC_API_BASE_URL` at the **API project** origin only (no `/api` suffix).
 
 ## Human checklist
 
@@ -27,7 +29,10 @@ export DATABASE_URL='...'
 uv run docprod telegram-migrate
 ```
 
-4. Vercel → **Add New** → **Project** → import `72804/videoforge`. Name it **VideoForge API**. **Root Directory: repository root** (leave empty / `.`). Framework: FastAPI / Python.
+4. Vercel → **Add New** → **Project** → import `72804/videoforge`. Name it **VideoForge API**.
+   - **Root Directory:** repository root (leave empty / `.`).
+   - **Framework Preset:** FastAPI (not Next.js). `vercel.json` also sets `"framework": "fastapi"`.
+   - If the dashboard still says Next.js, override it. A Next.js API project will serve the Mini App HTML and 404 `/health`.
 5. Set API environment variables (Section “API env”). Deploy.
 6. Open `https://<api-vercel-domain>/health` then `/ready`. Expect `generation_mode=mock`, `payment_mode=telegram`, database ready.
 7. Vercel → **Add New** → **Project** → same repo. Name it **VideoForge Mini App**. **Root Directory: `apps/telegram-mini-app`**.
@@ -38,7 +43,7 @@ NEXT_PUBLIC_APP_ENV=production
 NEXT_PUBLIC_API_BASE_URL=https://<api-vercel-domain>
 ```
 
-Must be public `https://`. Localhost is rejected at production build.
+Must be public `https://` with **no path**. Do not use the Mini App domain. Do not append `/api` or `/api/v1`.
 9. Deploy the Mini App. Copy its origin, e.g. `https://<mini-app-domain>`.
 10. On the **API** project set:
 
@@ -66,9 +71,28 @@ Do **not** enable `ALLOW_PAID_GENERATION` or `ALLOW_PAID_APIS`. Do **not** conne
 | Project | Root | Runtime |
 |---|---|---|
 | VideoForge Mini App | `apps/telegram-mini-app` | Next.js |
-| VideoForge API | repository root | Python FastAPI (`api/index.py`) |
+| VideoForge API | repository root | Python FastAPI (`app.py`) |
 
 Frontend never receives `DATABASE_URL`, bot token, session secret, webhook secret, or `INTERNAL_JOB_SECRET`.
+
+## Public API URLs (FastAPI project only)
+
+After the **API** project deploys (FastAPI, not Next.js):
+
+| Method | Path |
+|---|---|
+| GET | `https://<api-vercel-domain>/health` |
+| GET | `https://<api-vercel-domain>/ready` |
+| POST | `https://<api-vercel-domain>/telegram/webhook` |
+| POST | `https://<api-vercel-domain>/internal/jobs/run` |
+| * | `https://<api-vercel-domain>/api/v1/*` |
+| GET | `https://<api-vercel-domain>/docs` (OpenAPI UI) |
+
+These are **not** valid:
+
+- `https://<mini-app-domain>/health`
+- `https://<api-vercel-domain>/api/health`
+- `NEXT_PUBLIC_API_BASE_URL=https://<api>/api` (would become `/api/api/v1`)
 
 ## Mock jobs without a permanent worker
 

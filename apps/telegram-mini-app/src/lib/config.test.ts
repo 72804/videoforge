@@ -15,5 +15,7 @@ describe("production API URL guard", () => {
       /NEXT_PUBLIC_API_BASE_URL/,
     );
     expect(resolveApiBase("production", "https://api.example")).toBe("https://api.example");
+    expect(() => resolveApiBase("production", "https://api.example/api")).toThrow(/origin only/);
+    expect(() => resolveApiBase("production", "https://api.example/api/v1")).toThrow(/origin only/);
   });
 });
