@@ -1,5 +1,7 @@
 # Documentary Video Pipeline (`docprod`)
 
+**VideoForge Mini App production: Vercel + Neon.** See [docs/DEPLOY_VIDEOFORGE_VERCEL_NEON.md](docs/DEPLOY_VIDEOFORGE_VERCEL_NEON.md). Generation is mock; paid AI is off.
+
 Local-first CLI for an AI-assisted documentary YouTube production system.
 
 **Current phase: 3** — deterministic scene planner plus an FFmpeg **development
@@ -91,4 +93,4 @@ uv run ruff check .
 - Final 1080p/4K export profiles
 - Music, SFX
 - Thumbnails, titles, UI
-- Databases, queues, Docker, FastAPI
+- Paid image/video/TTS providers (blocked until Phase 16)

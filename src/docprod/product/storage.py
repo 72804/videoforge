@@ -45,6 +45,22 @@ class LocalStorageBackend:
         return "file://" + quote(str(self._path(key).resolve()))
 
 
+class PlaceholderStorageBackend:
+    """Production mock storage. Bytes are not persisted. /media must not imply a durable disk."""
+
+    def put_bytes(self, key: str, data: bytes, *, content_type: str = "") -> str:
+        return key
+
+    def get_bytes(self, key: str) -> bytes:
+        raise KeyError(key)
+
+    def exists(self, key: str) -> bool:
+        return False
+
+    def url_for(self, key: str) -> str:
+        return f"placeholder://{key}"
+
+
 class MemoryStorageBackend:
     def __init__(self) -> None:
         self._blobs: dict[str, bytes] = {}

@@ -3,10 +3,11 @@ from __future__ import annotations
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import NullPool
 
 
 def sqlalchemy_database_url(database_url: str) -> str:
-    """Accept Railway postgres:// / postgresql:// URLs for SQLAlchemy+psycopg."""
+    """Accept Neon/Railway postgres:// URLs for SQLAlchemy+psycopg."""
     raw = database_url.strip()
     if raw.startswith("postgres://"):
         raw = "postgresql://" + raw[len("postgres://") :]
@@ -15,15 +16,26 @@ def sqlalchemy_database_url(database_url: str) -> str:
     return raw
 
 
-def make_engine(database_url: str, *, echo: bool = False) -> Engine:
+def uses_serverless_pool(database_url: str) -> bool:
+    lowered = database_url.lower()
+    return "-pooler." in lowered or "pgbouncer=true" in lowered
+
+
+def make_engine(
+    database_url: str,
+    *,
+    echo: bool = False,
+    serverless: bool | None = None,
+) -> Engine:
     if not database_url:
         raise ValueError("DATABASE_URL is required for postgres persistence")
-    return create_engine(
-        sqlalchemy_database_url(database_url),
-        echo=echo,
-        pool_pre_ping=True,
-        future=True,
-    )
+    url = sqlalchemy_database_url(database_url)
+    kwargs: dict = {"echo": echo, "pool_pre_ping": True, "future": True}
+    if serverless is None:
+        serverless = uses_serverless_pool(url)
+    if serverless:
+        kwargs["poolclass"] = NullPool
+    return create_engine(url, **kwargs)
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

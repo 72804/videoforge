@@ -93,6 +93,8 @@ class Settings(BaseSettings):
     worker_id: str = Field(default="")
     worker_poll_seconds: float = Field(default=1.0)
     job_lease_seconds: int = Field(default=30)
+    job_execution_mode: str = Field(default="")
+    internal_job_secret: SecretStr | None = Field(default=None)
 
     def openai_key_configured(self) -> bool:
         secret = self.openai_api_key
@@ -212,7 +214,7 @@ def api_bind_address(
     app_env: str = "development",
     port_env: str | None = None,
 ) -> tuple[str, int]:
-    """Local default 127.0.0.1:8000. Railway PORT binds 0.0.0.0."""
+    """Local default 127.0.0.1:8000. Injected PORT binds 0.0.0.0."""
     env = app_env.strip().lower()
     injected = port_env if port_env is not None else os.environ.get("PORT", "")
     bind_port = int(port if port is not None else (str(injected).strip() or "8000"))
@@ -227,6 +229,15 @@ def api_bind_address(
 
 def cors_origin_list(raw: str) -> list[str]:
     return [part.strip().rstrip("/") for part in raw.split(",") if part.strip()]
+
+
+def resolve_job_execution_mode(settings: Settings) -> str:
+    mode = settings.job_execution_mode.strip().lower()
+    if mode in {"inline", "worker"}:
+        return mode
+    if settings.app_env.strip().lower() == "production":
+        return "inline"
+    return "worker"
 
 
 def validate_runtime_settings(settings: Settings, *, role: str = "api") -> None:
@@ -268,6 +279,8 @@ def validate_runtime_settings(settings: Settings, *, role: str = "api") -> None:
         raise RuntimeError("API_SESSION_SECRET is required in production.")
     if not _secret(settings, "telegram_webhook_secret"):
         raise RuntimeError("TELEGRAM_WEBHOOK_SECRET is required in production.")
+    if not _secret(settings, "internal_job_secret"):
+        raise RuntimeError("INTERNAL_JOB_SECRET is required in production.")
     origins = cors_origin_list(settings.api_cors_origins)
     if not origins:
         raise RuntimeError("CORS_ALLOWED_ORIGINS is required in production.")

@@ -8,6 +8,7 @@ from datetime import timedelta
 from docprod.db.postgres_repo import PostgresRepository
 from docprod.logging_utils import get_logger
 from docprod.observability import log_scope
+from docprod.product.enums import JobStatus
 from docprod.product.models import WorkerHeartbeat, utcnow
 from docprod.product.notifications import MockNotificationSender, drain_outbox
 from docprod.product.services import ProductService
@@ -88,6 +89,60 @@ class DurableGenerationWorker:
             with log_scope(job_id=job.id, user_id=job.user_id, project_id=job.project_id):
                 log.info("claimed generation job")
                 self._beat(job.id)
+                try:
+                    self.mock.run_job(job.id)
+                except Exception:
+                    log.exception("worker job failed")
+                    try:
+                        self.service.fail_job(
+                            job.id,
+                            public_message="Generation failed.",
+                            error_code="WORKER_FAILURE",
+                        )
+                    except Exception:
+                        log.exception("could not persist safe job failure")
+            drain_outbox(self.service.repo, self.sender)
+            self._beat(None)
+            return True
+
+        return bool(self._with_unit(_once))
+
+    def run_bounded(self, *, max_jobs: int = 1) -> int:
+        """Run at most max_jobs queued work units. Never loops forever."""
+        limit = max(0, int(max_jobs))
+        ran = 0
+        for _ in range(limit):
+            if not self.tick():
+                break
+            ran += 1
+        return ran
+
+    def run_job_id(self, job_id: str) -> bool:
+        """Claim and mock-execute one server-generated job id. Idempotent if already terminal."""
+
+        def _once() -> bool:
+            self._beat()
+            job = self.service.repo.jobs.get(job_id)
+            if job is None:
+                drain_outbox(self.service.repo, self.sender)
+                return False
+            if job.status in {
+                JobStatus.COMPLETED,
+                JobStatus.FAILED,
+                JobStatus.CANCELLED,
+            }:
+                drain_outbox(self.service.repo, self.sender)
+                return False
+            stamp = utcnow()
+            expired = job.lease_expires_at is None or job.lease_expires_at <= stamp
+            if job.claimed_by and job.claimed_by != self.worker_id and not expired:
+                return False
+            job.claimed_by = self.worker_id
+            job.claimed_at = stamp
+            job.heartbeat_at = stamp
+            job.lease_expires_at = stamp + self.lease
+            job.updated_at = stamp
+            with log_scope(job_id=job.id, user_id=job.user_id, project_id=job.project_id):
                 try:
                     self.mock.run_job(job.id)
                 except Exception:

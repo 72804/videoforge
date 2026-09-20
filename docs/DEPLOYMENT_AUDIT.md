@@ -1,31 +1,35 @@
-# Deployment audit (Phase 15.5)
+# Deployment audit
 
-Prepared for Vercel Mini App + Railway API/worker/Postgres. Generation stays mocked.
+Production target: **Vercel Mini App + Vercel FastAPI + Neon PostgreSQL**. Generation stays mocked.
+
+Railway + Docker worker from Phase 15.5 is **optional / superseded** for production. Dockerfile remains for a future dedicated worker.
 
 ## Already works
 
-- FastAPI factory: `uv run docprod telegram-api-serve` (`--host`, `--port`; `PORT` binds `0.0.0.0`)
-- Worker: `uv run docprod telegram-worker` (no public HTTP loop)
+- FastAPI factory: `uv run docprod telegram-api-serve`; Vercel entrypoint `api/index.py` → `app_from_settings()`
+- Local worker: `uv run docprod telegram-worker` (not used on Vercel)
+- Bounded mock jobs: inline generate path + `POST /internal/jobs/run` + `telegram-jobs-run`
 - Local polling: `uv run docprod telegram-bot` (refuses `APP_ENV=production`)
-- Webhook: `POST /telegram/webhook` + `uv run docprod telegram-webhook-set` / `telegram-webhook-info`
-- Health: `GET /health` (liveness), `GET /ready` (DB + modes, no Telegram call)
-- Alembic: `uv run alembic upgrade head` via `DATABASE_URL`
-- Postgres: `PRODUCT_PERSISTENCE=postgres` + SQLAlchemy/psycopg (Railway `postgres://` normalized)
-- CORS: `CORS_ALLOWED_ORIGINS` / `API_CORS_ORIGINS`
-- Mini App: `apps/telegram-mini-app` (`npm run build`)
-- Production validation for mock generation and disabled paid APIs
+- Webhook: `POST /telegram/webhook` + `telegram-webhook-set` / `telegram-webhook-info`
+- Health: `GET /health`, `GET /ready`
+- Alembic: `uv run alembic upgrade head` or `uv run docprod telegram-migrate` (explicit, not per request)
+- Postgres: `PRODUCT_PERSISTENCE=postgres` + SQLAlchemy/psycopg (Neon `postgres://` and pooled `-pooler.` URLs)
+- CORS: `CORS_ALLOWED_ORIGINS` exact origins
+- Mini App: `apps/telegram-mini-app`
+- Production flags: mock generation, paid APIs off
 - Secrets ignored: `.env`, `.env.*` (except committed examples)
 
-## Needs operator setup (not automated here)
+## Operator setup (not automated)
 
-- GitHub repo, Railway project + Postgres, Vercel project
+- Neon project + private `DATABASE_URL`
+- Two Vercel projects from `72804/videoforge`
 - Public HTTPS Mini App and API domains
 - BotFather Mini App / menu button / domain
 - Telegram webhook after API domain exists
-- `API_SESSION_SECRET` and `TELEGRAM_WEBHOOK_SECRET` generated privately
+- `API_SESSION_SECRET`, `TELEGRAM_WEBHOOK_SECRET`, `INTERNAL_JOB_SECRET` generated privately
 
-## Gaps documented, not solved in 15.5
+## Known limits this phase
 
-- Mock asset bytes use `LocalStorageBackend` on ephemeral disk and are **not shared** between API and worker containers. Job status and bot notifications still work; `/media` thumbnails may 404 after restart or across services. Object storage is later.
+- Production mock bytes are placeholders. `/media` does not imply durable disk. Object storage is next before real generation.
 - No Redis. No R2/S3. No paid providers.
-- No existing Docker/compose/Vercel/Railway config before this phase (Dockerfile added).
+- No infinite worker on Vercel.

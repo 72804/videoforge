@@ -19,8 +19,11 @@ The application does **not** call `create_all` at runtime.
 
 ```bash
 uv run alembic upgrade head
+uv run docprod telegram-migrate
 uv run alembic downgrade -1
 ```
+
+Never run Alembic from a Vercel request handler. Production Neon: set `DATABASE_URL` (pooled URL is fine) and run the upgrade **once** from your laptop.
 
 Initial revision: `alembic/versions/20260920_0001_initial_product.py`.
 

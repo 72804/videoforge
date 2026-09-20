@@ -1,5 +1,10 @@
-from docprod.config import Settings, api_bind_address, validate_runtime_settings
-from docprod.db.engine import sqlalchemy_database_url
+from docprod.config import (
+    Settings,
+    api_bind_address,
+    resolve_job_execution_mode,
+    validate_runtime_settings,
+)
+from docprod.db.engine import make_engine, sqlalchemy_database_url, uses_serverless_pool
 
 
 def _prod(**overrides: object) -> Settings:
@@ -15,6 +20,7 @@ def _prod(**overrides: object) -> Settings:
         "telegram_mini_app_url": "https://app.example",
         "api_session_secret": "session-secret",
         "telegram_webhook_secret": "webhook-secret",
+        "internal_job_secret": "internal-job-secret",
         "api_cors_origins": "https://app.example",
         "_env_file": None,
     }
@@ -66,6 +72,12 @@ def test_worker_skips_api_only_secrets() -> None:
         pass
     else:
         raise AssertionError("api role should require webhook/session/cors")
+    try:
+        validate_runtime_settings(_prod(internal_job_secret=None), role="api")
+    except RuntimeError as exc:
+        assert "INTERNAL_JOB_SECRET" in str(exc)
+    else:
+        raise AssertionError("api role should require INTERNAL_JOB_SECRET")
 
 
 def test_production_rejects_paid_flags() -> None:
@@ -93,6 +105,36 @@ def test_bind_address_uses_port_env() -> None:
     host, port = api_bind_address(host="127.0.0.1", port=9000, port_env="8080")
     assert host == "127.0.0.1"
     assert port == 9000
+
+
+def test_neon_postgres_url_normalized() -> None:
+    neon = (
+        "postgres://u:p@ep-abc-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require"
+    )
+    converted = sqlalchemy_database_url(neon)
+    assert converted.startswith("postgresql+psycopg://")
+    assert "sslmode=require" in converted
+    assert uses_serverless_pool(converted)
+    assert uses_serverless_pool(
+        "postgresql://u:p@ep-abc.region.aws.neon.tech/db?pgbouncer=true"
+    )
+    engine = make_engine(neon, serverless=True)
+    assert engine.pool.__class__.__name__ == "NullPool"
+    local = make_engine("postgresql://u:p@127.0.0.1/docprod", serverless=False)
+    assert local.pool.__class__.__name__ != "NullPool"
+
+
+def test_job_execution_mode_defaults() -> None:
+    assert (
+        resolve_job_execution_mode(_prod()) == "inline"
+    )
+    assert (
+        resolve_job_execution_mode(
+            Settings(app_env="development", job_execution_mode="", _env_file=None)
+        )
+        == "worker"
+    )
+    assert resolve_job_execution_mode(_prod(job_execution_mode="worker")) == "worker"
 
 
 def test_railway_postgres_url_normalized() -> None:

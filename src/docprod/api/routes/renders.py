@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import Response
 
-from docprod.api.dependencies import current_user, get_service
+from docprod.api.dependencies import current_user, get_ctx, get_service, run_queued_job
 from docprod.api.errors import map_product_error
 from docprod.api.idempotency import lookup, remember
 from docprod.api.schemas import GenerateRequest, JobAccepted
@@ -23,6 +23,7 @@ router = APIRouter(tags=["renders"])
 def render_project(
     project_id: str,
     body: GenerateRequest,
+    request: Request,
     user: TelegramUser = Depends(current_user),
     service: ProductService = Depends(get_service),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -37,6 +38,7 @@ def render_project(
         job = service.queue_generation(
             user.id, project_id, body.quote_id, kind="render"
         )
+        job = run_queued_job(get_ctx(request), job)
     except ProductError as exc:
         raise map_product_error(exc) from exc
     accepted = JobAccepted(job_id=job.id, status=job.status.value)

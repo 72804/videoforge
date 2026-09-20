@@ -3,14 +3,18 @@ from __future__ import annotations
 from pathlib import Path
 
 from docprod.config import Settings
-from docprod.db.engine import make_engine, make_session_factory
+from docprod.db.engine import make_engine, make_session_factory, uses_serverless_pool
 from docprod.db.postgres_repo import PostgresRepository
 from docprod.product.limits import ProductLimits
 from docprod.product.persist import load_repository_file
 from docprod.product.plans import PricingPolicy
 from docprod.product.repository import MemoryRepository
 from docprod.product.services import ProductService
-from docprod.product.storage import LocalStorageBackend, MemoryStorageBackend, StorageBackend
+from docprod.product.storage import (
+    LocalStorageBackend,
+    PlaceholderStorageBackend,
+    StorageBackend,
+)
 
 
 def persistence_mode(settings: Settings) -> str:
@@ -22,17 +26,24 @@ def persistence_mode(settings: Settings) -> str:
 
 def build_repository(settings: Settings, *, store: Path | None = None) -> MemoryRepository:
     if persistence_mode(settings) == "postgres":
-        engine = make_engine(settings.database_url)
+        serverless = (
+            settings.app_env.strip().lower() == "production"
+            or uses_serverless_pool(settings.database_url)
+        )
+        engine = make_engine(settings.database_url, serverless=serverless)
         return PostgresRepository(make_session_factory(engine))
     path = store or Path(settings.product_store_path or "product_data/store.json")
     return load_repository_file(path)
 
 
 def build_storage(settings: Settings, *, store: Path | None = None) -> StorageBackend:
-    path = store or Path(settings.product_store_path or "product_data/store.json")
-    if persistence_mode(settings) == "json" or path:
+    if persistence_mode(settings) == "postgres":
+        if settings.app_env.strip().lower() == "production":
+            return PlaceholderStorageBackend()
+        path = store or Path(settings.product_store_path or "product_data/store.json")
         return LocalStorageBackend(path.parent / "blobs")
-    return MemoryStorageBackend()
+    path = store or Path(settings.product_store_path or "product_data/store.json")
+    return LocalStorageBackend(path.parent / "blobs")
 
 
 def build_product_service(

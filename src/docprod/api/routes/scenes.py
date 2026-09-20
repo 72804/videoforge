@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header
+from fastapi import APIRouter, Depends, Header, Request
 
-from docprod.api.dependencies import current_user, get_service
+from docprod.api.dependencies import current_user, get_ctx, get_service, run_queued_job
 from docprod.api.errors import map_product_error
 from docprod.api.idempotency import lookup, remember
 from docprod.api.schemas import (
@@ -199,6 +199,7 @@ def restore_version(
 
 def _regen(
     *,
+    request: Request,
     user: TelegramUser,
     service: ProductService,
     body: GenerateRequest,
@@ -218,6 +219,7 @@ def _regen(
         job = service.queue_generation(
             user.id, scene.project_id, body.quote_id, kind=kind, scene_id=scene_id
         )
+        job = run_queued_job(get_ctx(request), job)
     except ProductError as exc:
         raise map_product_error(exc) from exc
     accepted = JobAccepted(job_id=job.id, status=job.status.value)
@@ -242,11 +244,13 @@ def _regen(
 def regenerate_image(
     scene_id: str,
     body: GenerateRequest,
+    request: Request,
     user: TelegramUser = Depends(current_user),
     service: ProductService = Depends(get_service),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> JobAccepted:
     return _regen(
+        request=request,
         user=user,
         service=service,
         body=body,
@@ -266,11 +270,13 @@ def regenerate_image(
 def regenerate_video(
     scene_id: str,
     body: GenerateRequest,
+    request: Request,
     user: TelegramUser = Depends(current_user),
     service: ProductService = Depends(get_service),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> JobAccepted:
     return _regen(
+        request=request,
         user=user,
         service=service,
         body=body,

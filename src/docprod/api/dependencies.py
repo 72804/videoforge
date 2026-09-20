@@ -7,7 +7,8 @@ from fastapi import Header, Request
 from docprod.api.errors import api_error
 from docprod.api.session import SessionIssuer
 from docprod.product.errors import AuthError
-from docprod.product.models import TelegramUser
+from docprod.product.models import GenerationJob, TelegramUser
+from docprod.product.notifications import MockNotificationSender, NotificationSender
 from docprod.product.services import ProductService
 from docprod.product.worker import MockGenerationWorker
 from docprod.telegram.client import TelegramClient
@@ -25,6 +26,9 @@ class AppContext:
     generation_mode: str = "mock"
     webhook_secret: str = ""
     mini_app_url: str = ""
+    job_execution_mode: str = "worker"
+    internal_job_secret: str = ""
+    notifier: NotificationSender | None = None
 
 
 def get_ctx(request: Request) -> AppContext:
@@ -52,3 +56,19 @@ def current_user(
     if user is None:
         raise api_error(401, "AUTH_INVALID", "Unknown session user.")
     return user
+
+
+def run_queued_job(ctx: AppContext, job: GenerationJob) -> GenerationJob:
+    """Optionally execute mock generation in-process. Local default leaves jobs queued."""
+    if ctx.job_execution_mode != "inline":
+        return job
+    from docprod.product.durable import DurableGenerationWorker
+
+    DurableGenerationWorker(
+        ctx.service,
+        worker_id="serverless",
+        sender=ctx.notifier or MockNotificationSender(),
+        generation_mode=ctx.generation_mode,
+        allow_paid_generation=False,
+    ).run_job_id(job.id)
+    return ctx.service.repo.jobs[job.id]

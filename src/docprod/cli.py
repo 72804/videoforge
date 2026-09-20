@@ -2861,6 +2861,47 @@ def telegram_webhook_set() -> None:
     console.print(f"webhook url={info.get('url', url)}")
 
 
+@app.command("telegram-migrate")
+def telegram_migrate() -> None:
+    """Run Alembic upgrade head against DATABASE_URL. Never call this per request."""
+    from alembic import command
+    from alembic.config import Config
+
+    from docprod.db.engine import sqlalchemy_database_url
+
+    settings = get_settings()
+    url = settings.database_url.strip()
+    if not url:
+        console.print("DATABASE_URL is required")
+        raise typer.Exit(code=1)
+    sqlalchemy_database_url(url)
+    command.upgrade(Config("alembic.ini"), "head")
+    console.print("alembic upgrade head complete")
+
+
+@app.command("telegram-jobs-run")
+def telegram_jobs_run(
+    max_jobs: int = typer.Option(1, "--max-jobs", min=1, max=20),
+) -> None:
+    """Bounded mock job drain for local recovery. Does not loop forever."""
+    from docprod.product.durable import DurableGenerationWorker
+    from docprod.product.factory import build_product_service
+
+    settings = get_settings()
+    from docprod.config import validate_runtime_settings
+
+    validate_runtime_settings(settings, role="worker")
+    service = build_product_service(settings)
+    ran = DurableGenerationWorker(
+        service,
+        worker_id=settings.worker_id.strip() or "cli-bounded",
+        sender=_worker_sender(settings),
+        generation_mode=settings.generation_mode.strip().lower() or "mock",
+        allow_paid_generation=False,
+    ).run_bounded(max_jobs=max_jobs)
+    console.print(f"ran={ran}")
+
+
 @app.command("telegram-webhook-info")
 def telegram_webhook_info() -> None:
     from docprod.telegram.client import HttpxTelegramClient
@@ -2877,6 +2918,7 @@ def telegram_webhook_info() -> None:
     console.print(f"pending={info.get('pending_update_count', 0)}")
 
 
+@app.command("telegram-product-import-json")
 def telegram_product_import_json(
     store: Path = typer.Option(Path("product_data/store.json"), "--store"),
 ) -> None:

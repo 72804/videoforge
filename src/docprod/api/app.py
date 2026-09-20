@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import json
 from pathlib import Path
 
@@ -36,6 +37,16 @@ from docprod.product.worker import MockGenerationWorker
 from docprod.telegram.client import FakeTelegramClient, HttpxTelegramClient, TelegramClient
 
 
+def _secrets_match(given: str, expected: str) -> bool:
+    if not expected:
+        return False
+    left = given.encode("utf-8")
+    right = expected.encode("utf-8")
+    if len(left) != len(right):
+        return False
+    return hmac.compare_digest(left, right)
+
+
 def create_app(
     *,
     service: ProductService | None = None,
@@ -50,6 +61,9 @@ def create_app(
     webhook_secret: str = "",
     mini_app_url: str = "",
     allow_paid_generation: bool = False,
+    job_execution_mode: str = "worker",
+    internal_job_secret: str = "",
+    notifier=None,
 ) -> FastAPI:
     if service is None:
         repo = load_repository_file(persist_path) if persist_path else None
@@ -77,6 +91,9 @@ def create_app(
         generation_mode=generation_mode,
         webhook_secret=webhook_secret,
         mini_app_url=mini_app_url,
+        job_execution_mode=job_execution_mode,
+        internal_job_secret=internal_job_secret,
+        notifier=notifier,
     )
     app = FastAPI(
         title="Docprod Telegram Mini App API",
@@ -201,15 +218,13 @@ def create_app(
 
     @app.post("/telegram/webhook", tags=["telegram"], operation_id="telegramWebhook")
     async def telegram_webhook(request: Request) -> dict[str, bool]:
-        import hmac
-
         from docprod.telegram.updates import dispatch_update
 
         secret = ctx.webhook_secret
         header = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
         if ctx.env == "production" and not secret:
             raise HTTPException(status_code=401, detail="webhook secret required")
-        if secret and not hmac.compare_digest(header, secret):
+        if secret and not _secrets_match(header, secret):
             raise HTTPException(status_code=401, detail="invalid webhook secret")
         try:
             payload = await request.json()
@@ -223,6 +238,24 @@ def create_app(
             return {"ok": True}
         return {"ok": True}
 
+    @app.post("/internal/jobs/run", tags=["internal"], operation_id="runQueuedJobs")
+    def run_queued_jobs(request: Request) -> dict[str, int]:
+        from docprod.product.durable import DurableGenerationWorker
+        from docprod.product.notifications import MockNotificationSender
+
+        expected = ctx.internal_job_secret
+        header = request.headers.get("X-Internal-Job-Secret", "")
+        if not _secrets_match(header, expected):
+            raise HTTPException(status_code=401, detail="invalid internal job secret")
+        ran = DurableGenerationWorker(
+            ctx.service,
+            worker_id="serverless",
+            sender=ctx.notifier or MockNotificationSender(),
+            generation_mode=ctx.generation_mode,
+            allow_paid_generation=False,
+        ).run_bounded(max_jobs=1)
+        return {"ran": ran}
+
     @app.post("/api/v1/dev/jobs/{job_id}/run", tags=["dev-payments"], operation_id="devRunJob")
     def run_job(job_id: str) -> dict[str, str]:
         if ctx.env not in {"development", "test"}:
@@ -235,8 +268,14 @@ def create_app(
 
 
 def app_from_settings() -> FastAPI:
-    from docprod.config import cors_origin_list, get_settings, validate_runtime_settings
+    from docprod.config import (
+        cors_origin_list,
+        get_settings,
+        resolve_job_execution_mode,
+        validate_runtime_settings,
+    )
     from docprod.logging_utils import get_logger
+    from docprod.product.notifications import MockNotificationSender, TelegramNotificationSender
 
     settings = get_settings()
     validate_runtime_settings(settings, role="api")
@@ -262,6 +301,15 @@ def app_from_settings() -> FastAPI:
         telegram: TelegramClient = HttpxTelegramClient(token)
     else:
         telegram = FakeTelegramClient()
+    notifier = MockNotificationSender()
+    if token:
+        notifier = TelegramNotificationSender(
+            telegram,
+            mini_app_url=settings.telegram_mini_app_url.strip(),
+        )
+    internal = ""
+    if settings.internal_job_secret is not None:
+        internal = settings.internal_job_secret.get_secret_value().strip()
     log = get_logger("api")
     log.info(
         "Payment mode: %s | Generation mode: %s | ALLOW_PAID_GENERATION=%s",
@@ -281,6 +329,9 @@ def app_from_settings() -> FastAPI:
         webhook_secret=webhook_secret,
         mini_app_url=settings.telegram_mini_app_url.strip(),
         allow_paid_generation=settings.allow_paid_generation,
+        job_execution_mode=resolve_job_execution_mode(settings),
+        internal_job_secret=internal,
+        notifier=notifier,
     )
 
 
