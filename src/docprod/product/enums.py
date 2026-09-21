@@ -67,6 +67,7 @@ class AttemptStatus(StrEnum):
     RECOVERING_REMOTE = "RECOVERING_REMOTE"
     SUCCEEDED = "SUCCEEDED"
     FAILED = "FAILED"
+    FAILED_UNBILLED = "FAILED_UNBILLED"
 
 
 class PlanItemType(StrEnum):

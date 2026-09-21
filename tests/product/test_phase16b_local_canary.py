@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ from typer.testing import CliRunner
 
 from docprod.cli import app
 from docprod.config import Settings
-from docprod.product.canary_adapters import FakeCanaryAdapters
+from docprod.product.canary_adapters import AdapterResult, FakeCanaryAdapters
 from docprod.product.canary_cost import (
     CANARY_IMAGE_QUALITY,
     CANARY_IMAGE_SIZE,
@@ -190,12 +191,13 @@ def test_stage_b_check_reports_blockers_without_http() -> None:
     assert report["blockers"]
 
 
-def test_execute_with_fakes_uses_ledger_and_identity() -> None:
+def test_execute_with_fakes_uses_ledger_and_identity(tmp_path: Path) -> None:
     adapters = FakeCanaryAdapters()
     result = execute_local_canary(
         settings=_live_settings(),
         adapters=adapters,
         use_ffmpeg=False,
+        root=tmp_path,
     )
     assert result["status"] == JobStatus.COMPLETED.value
     assert adapters.video_submits == 1
@@ -241,3 +243,228 @@ def test_local_canary_worker_refuses_foreign_job() -> None:
     worker.run_job(job.id)
     assert svc.repo.jobs[job.id].status is JobStatus.FAILED
     assert adapters.calls == []
+
+
+def _write_jpeg(path: Path) -> None:
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 96), (20, 20, 20)).save(path, "JPEG", quality=85)
+    # Meet the real-artifact size floor used by resume detection.
+    path.write_bytes(path.read_bytes() + b"\x00" * 9000)
+
+
+def test_veo_lite_accepts_portrait_and_rejects_unknown(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from docprod.providers.google_veo import preflight_veo_request
+    from docprod.providers.video_base import VideoShotRequest
+    from docprod.providers.video_capabilities import capabilities_for
+
+    caps = capabilities_for("veo-3.1-lite-generate-preview")
+    assert "9:16" in caps.aspect_ratios
+    assert "16:9" in caps.aspect_ratios
+    image = tmp_path / "start.jpg"
+    Image.new("RGB", (64, 96), (20, 20, 20)).save(image, "JPEG", quality=85)
+    ok = VideoShotRequest(
+        prompt="Scene:\nmotion",
+        negative_prompt="",
+        image_path=image,
+        duration_seconds=8,
+        aspect_ratio="9:16",
+        resolution="720p",
+    )
+    assert preflight_veo_request(ok, caps)
+    bad = VideoShotRequest(
+        prompt="Scene:\nmotion",
+        negative_prompt="",
+        image_path=image,
+        duration_seconds=8,
+        aspect_ratio="4:3",
+        resolution="720p",
+    )
+    with pytest.raises(ValueError, match="Unsupported Veo aspect ratio"):
+        preflight_veo_request(bad, caps)
+
+
+def test_veo_preflight_failure_is_failed_unbilled(tmp_path: Path) -> None:
+    adapters = FakeCanaryAdapters()
+    adapters.preflight_error = "Unsupported Veo aspect ratio '9:16'"
+    result = execute_local_canary(
+        settings=_live_settings(),
+        adapters=adapters,
+        use_ffmpeg=False,
+        root=tmp_path,
+    )
+    assert result["status"] == JobStatus.FAILED.value
+    store = tmp_path / "product_store.json"
+    assert store.is_file()
+    payload = json.loads(store.read_text())
+    attempts = list(payload.get("attempts", {}).values())
+    videos = [row for row in attempts if row["item_type"] == "video"]
+    assert videos
+    assert videos[0]["status"] == AttemptStatus.FAILED_UNBILLED.value
+    assert not videos[0]["remote_operation_id"]
+    assert adapters.video_submits == 0
+    assert "tts" not in adapters.calls
+
+
+def test_resume_skips_successful_stills(tmp_path: Path) -> None:
+    work = tmp_path / "artifacts" / "work"
+    _write_jpeg(work / "character_ref.jpg")
+    for index in range(3):
+        _write_jpeg(work / f"still_{index}.jpg")
+    adapters = FakeCanaryAdapters()
+    execute_local_canary(
+        settings=_live_settings(),
+        adapters=adapters,
+        use_ffmpeg=False,
+        root=tmp_path,
+    )
+    assert "script" not in adapters.calls
+    assert adapters.calls.count("image") == 0
+    assert adapters.video_submits == 1
+    assert "tts" in adapters.calls
+
+
+def test_failed_unbilled_is_not_submitted() -> None:
+    attempt = GenerationAttempt(
+        job_id="j",
+        item_type=PlanItemType.VIDEO,
+        provider="google",
+        model="veo-3.1-lite-generate-preview",
+        status=AttemptStatus.FAILED_UNBILLED,
+        estimated_provider_cost=0.4,
+    )
+    assert must_not_resubmit(attempt) is False
+
+
+def test_partial_canary_crash_persists_state(tmp_path: Path) -> None:
+    class CrashAdapters(FakeCanaryAdapters):
+        def generate_image(self, prompt: str, *, reference_images: list[Path] | None = None):
+            self.calls.append("image")
+            _ = prompt, reference_images
+            if self.calls.count("image") >= 2:
+                raise RuntimeError("simulated crash")
+            return AdapterResult(
+                data=b"\xff\xd8fakejpeg",
+                usage={"input_tokens": 400, "output_tokens": 1584},
+            )
+
+    adapters = CrashAdapters()
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        execute_local_canary(
+            settings=_live_settings(),
+            adapters=adapters,
+            use_ffmpeg=False,
+            root=tmp_path,
+        )
+    payload = json.loads((tmp_path / "product_store.json").read_text())
+    assert payload["attempts"]
+    assert payload["jobs"]
+
+
+def test_veo_remote_id_recovery_does_not_resubmit(tmp_path: Path) -> None:
+    from docprod.product.canary_ledger import save_ledger
+
+    work = tmp_path / "artifacts" / "work"
+    _write_jpeg(work / "character_ref.jpg")
+    for index in range(3):
+        _write_jpeg(work / f"still_{index}.jpg")
+    save_ledger(
+        {
+            "operations": {
+                "veo": {
+                    "state": "RECOVERABLE",
+                    "remote_operation_id": "operations/abc123",
+                    "reserved_usd": 0.4,
+                    "provider": "google",
+                    "model": "veo-3.1-lite-generate-preview",
+                }
+            }
+        },
+        tmp_path,
+    )
+    adapters = FakeCanaryAdapters()
+    execute_local_canary(
+        settings=_live_settings(),
+        adapters=adapters,
+        use_ffmpeg=False,
+        root=tmp_path,
+    )
+    assert adapters.video_submits == 0
+    assert "video-recover" in adapters.calls
+    assert "video" not in adapters.calls
+
+
+def test_uncertain_paid_state_blocks(tmp_path: Path) -> None:
+    from docprod.product.canary_ledger import save_ledger
+
+    work = tmp_path / "artifacts" / "work"
+    _write_jpeg(work / "character_ref.jpg")
+    for index in range(3):
+        _write_jpeg(work / f"still_{index}.jpg")
+    save_ledger(
+        {
+            "operations": {
+                "veo": {
+                    "state": "UNCERTAIN",
+                    "reserved_usd": 0.4,
+                    "provider": "google",
+                    "model": "veo-3.1-lite-generate-preview",
+                }
+            }
+        },
+        tmp_path,
+    )
+    adapters = FakeCanaryAdapters()
+    result = execute_local_canary(
+        settings=_live_settings(),
+        adapters=adapters,
+        use_ffmpeg=False,
+        root=tmp_path,
+    )
+    assert result["status"] == JobStatus.FAILED.value
+    assert adapters.video_submits == 0
+    assert "tts" not in adapters.calls
+
+
+def test_cost_cap_includes_prior_spend(tmp_path: Path) -> None:
+    from docprod.product.canary_ledger import save_ledger
+
+    work = tmp_path / "artifacts" / "work"
+    _write_jpeg(work / "character_ref.jpg")
+    for index in range(3):
+        _write_jpeg(work / f"still_{index}.jpg")
+    save_ledger(
+        {
+            "operations": {
+                "script": {
+                    "state": "SUCCEEDED",
+                    "reserved_usd": 1.75,
+                    "provider": "openai",
+                    "model": "gpt-5.6-luna",
+                }
+            }
+        },
+        tmp_path,
+    )
+    adapters = FakeCanaryAdapters()
+    result = execute_local_canary(
+        settings=_live_settings(),
+        adapters=adapters,
+        use_ffmpeg=False,
+        root=tmp_path,
+    )
+    assert adapters.video_submits == 0
+    assert result["status"] == JobStatus.FAILED.value
+
+
+def test_status_stage_is_zero_network() -> None:
+    result = CliRunner().invoke(app, ["generation-canary", "--stage", "status"])
+    assert result.exit_code == 0
+    assert "LOCAL CANARY STATUS" in result.stdout
+    assert "provider_http_calls=0" in result.stdout
+    assert "sk-" not in result.stdout
+    assert "OPENAI_API_KEY" not in result.stdout
+

@@ -268,7 +268,7 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             duration_options=(8,),
             min_duration_seconds=8,
             max_duration_seconds=8,
-            notes="Implemented Veo 3.1 Lite I2V 8s 720p",
+            notes="Implemented Veo 3.1 Lite I2V 8s 720p; aspect 16:9 and 9:16",
         ),
         _m(
             "veo-3.1-fast",

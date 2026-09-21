@@ -13,7 +13,7 @@ from docprod.product.canary_cost import (
     CANARY_VEO_RESOLUTION,
     CANARY_VEO_SECONDS,
 )
-from docprod.providers.google_veo import GoogleVeoProvider
+from docprod.providers.google_veo import GoogleVeoProvider, preflight_veo_request
 from docprod.providers.image_config import ImageGenerationConfig
 from docprod.providers.openai_image import OpenAIImageProvider
 from docprod.providers.openai_tts import OpenAITTSProvider
@@ -41,6 +41,8 @@ class CanaryAdapters(Protocol):
     def generate_video(self, prompt: str, image_path: Path, *, scene_id: str) -> AdapterResult: ...
 
     def recover_video(self, prompt: str, image_path: Path, *, scene_id: str) -> AdapterResult: ...
+
+    def preflight_video(self, prompt: str, image_path: Path, *, scene_id: str) -> None: ...
 
     def generate_tts(self, script: str) -> AdapterResult: ...
 
@@ -127,6 +129,10 @@ class LiveOpenAICanaryAdapters:
         )
         return self._from_shot(shot)
 
+    def preflight_video(self, prompt: str, image_path: Path, *, scene_id: str) -> None:
+        request = self._request(prompt, image_path, scene_id)
+        preflight_veo_request(request, self.veo.capabilities)
+
     def generate_tts(self, script: str) -> AdapterResult:
         audio, usage = self.tts.synthesize(
             script,
@@ -172,6 +178,7 @@ class FakeCanaryAdapters:
         self.script_scenes = 3
         self.video_submits = 0
         self.remote_id = "fake-veo-op-1"
+        self.preflight_error: str | None = None
 
     def generate_script(self, prompt: str) -> AdapterResult:
         self.calls.append("script")
@@ -221,6 +228,11 @@ class FakeCanaryAdapters:
             remote_operation_id=self.remote_id,
             billed_this_run=False,
         )
+
+    def preflight_video(self, prompt: str, image_path: Path, *, scene_id: str) -> None:
+        _ = prompt, image_path, scene_id
+        if self.preflight_error:
+            raise ValueError(self.preflight_error)
 
     def generate_tts(self, script: str) -> AdapterResult:
         self.calls.append("tts")

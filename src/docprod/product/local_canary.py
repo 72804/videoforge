@@ -48,17 +48,17 @@ def canary_root() -> Path:
     return default_projects_root() / CANARY_SLUG
 
 
-def stage_a_paths() -> dict[str, Path]:
-    root = canary_root()
+def stage_a_paths(root: Path | None = None) -> dict[str, Path]:
+    base = canary_root() if root is None else root
     return {
-        "root": root,
-        "store": root / "product_store.json",
-        "plan": root / "artifacts" / "review" / "stage_a_plan.json",
-        "report": root / "artifacts" / "review" / "stage_a_report.md",
-        "check": root / "artifacts" / "review" / "stage_b_check.json",
-        "final": root / "artifacts" / "render" / "final" / "documentary_preview.mp4",
-        "work": root / "artifacts" / "work",
-        "storage": root / "storage",
+        "root": base,
+        "store": base / "product_store.json",
+        "plan": base / "artifacts" / "review" / "stage_a_plan.json",
+        "report": base / "artifacts" / "review" / "stage_a_report.md",
+        "check": base / "artifacts" / "review" / "stage_b_check.json",
+        "final": base / "artifacts" / "render" / "final" / "documentary_preview.mp4",
+        "work": base / "artifacts" / "work",
+        "storage": base / "storage",
     }
 
 
@@ -120,7 +120,7 @@ def seed_canary_project(service: ProductService) -> tuple[str, str]:
     return user.id, project.id
 
 
-def plan_local_canary() -> dict[str, Any]:
+def plan_local_canary(*, root: Path | None = None) -> dict[str, Any]:
     """Stage A: frozen cost plan. Zero provider HTTP."""
     service = build_canary_service()
     user_id, project_id = seed_canary_project(service)
@@ -159,7 +159,7 @@ def plan_local_canary() -> dict[str, Any]:
         + typical_tts_usd(),
         6,
     )
-    paths = stage_a_paths()
+    paths = stage_a_paths(root)
     payload: dict[str, Any] = {
         "stage": "A",
         "slug": CANARY_SLUG,
@@ -247,7 +247,13 @@ def plan_local_canary() -> dict[str, Any]:
     paths["root"].mkdir(parents=True, exist_ok=True)
     paths["plan"].parent.mkdir(parents=True, exist_ok=True)
     paths["final"].parent.mkdir(parents=True, exist_ok=True)
-    save_repository(paths["store"], service.repo)
+    from docprod.product.canary_ledger import discover_operations
+
+    has_paid = any(
+        row.get("state") == "SUCCEEDED" for row in discover_operations(root).values()
+    )
+    if not has_paid:
+        save_repository(paths["store"], service.repo)
     paths["plan"].write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     paths["report"].write_text(_markdown_report(payload), encoding="utf-8")
     return payload
@@ -386,6 +392,7 @@ def execute_local_canary(
     settings: Settings | None = None,
     adapters=None,
     use_ffmpeg: bool = True,
+    root: Path | None = None,
 ) -> dict[str, Any]:
     from docprod.product.canary_adapters import LiveOpenAICanaryAdapters
     from docprod.product.canary_worker import LocalCanaryWorker
@@ -395,10 +402,10 @@ def execute_local_canary(
 
     cfg = settings if settings is not None else get_settings()
     assert_canary_execute_allowed(cfg)
-    payload = plan_local_canary()
+    payload = plan_local_canary(root=root)
     service = build_canary_service()
     user_id, project_id = seed_canary_project(service)
-    paths = stage_a_paths()
+    paths = stage_a_paths(root)
     service.storage = LocalStorageBackend(paths["storage"])
     project = service.repo.projects[project_id]
     spec = build_engine_spec(
@@ -432,9 +439,16 @@ def execute_local_canary(
         allow_paid_apis=cfg.allow_paid_apis,
         dry_run=cfg.real_generation_dry_run,
         use_ffmpeg=use_ffmpeg,
+        store_path=paths["store"],
+        canary_root=paths["root"],
     )
-    worker.run_job(job.id)
-    save_repository(paths["store"], service.repo)
+    try:
+        worker.run_job(job.id)
+    finally:
+        save_repository(paths["store"], service.repo)
+        from docprod.product.canary_ledger import status_local_canary
+
+        status_local_canary(paths["root"])
     stored = service.repo.jobs[job.id]
     return {
         "job_id": job.id,

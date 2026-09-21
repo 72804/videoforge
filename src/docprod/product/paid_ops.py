@@ -55,6 +55,8 @@ def accounted_usd(job: GenerationJob, repo: MemoryRepository) -> float:
     """Known actuals plus reserved/estimated in-flight and completed-without-usage."""
     total = 0.0
     for attempt in repo.attempts_for_job(job.id):
+        if attempt.status is AttemptStatus.FAILED_UNBILLED:
+            continue
         if attempt.status is AttemptStatus.FAILED and not attempt.remote_operation_id:
             continue
         if attempt.actual_provider_cost is not None:

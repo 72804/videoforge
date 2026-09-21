@@ -2950,7 +2950,11 @@ def telegram_webhook_info() -> None:
 
 @app.command("generation-canary")
 def generation_canary(
-    stage: str = typer.Option("plan", "--stage", help="plan (Stage A) or execute (Stage B)"),
+    stage: str = typer.Option(
+        "plan",
+        "--stage",
+        help="plan, check, status (zero-network), or execute",
+    ),
     slug: str = typer.Option(
         "videoforge_local_canary",
         "--slug",
@@ -2995,6 +2999,13 @@ def generation_canary(
         console.print("provider_http_calls=0 stars=0")
         console.print("Stage B not executed. Re-run with --stage execute only after approval.")
         return
+    if token in {"status"}:
+        from docprod.product.canary_ledger import status_local_canary
+
+        report = status_local_canary()
+        console.print(report["text"])
+        console.print("provider_http_calls=0")
+        return
     if token in {"check"}:
         report = check_local_canary()
         if report["ready"]:
@@ -3019,7 +3030,7 @@ def generation_canary(
         console.print(execution_summary(payload))
         execute_local_canary()
         return
-    console.print("stage must be plan, check, or execute")
+    console.print("stage must be plan, check, status, or execute")
     raise typer.Exit(code=1)
 
 

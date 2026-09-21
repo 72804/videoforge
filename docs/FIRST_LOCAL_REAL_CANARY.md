@@ -99,11 +99,18 @@ Worker ledger marks `SUBMITTED` with `remote_operation_id` immediately after sub
 ```bash
 uv run docprod generation-canary --stage plan
 uv run docprod generation-canary --stage check
-# do not run until approval:
-uv run docprod generation-canary --stage execute
+uv run docprod generation-canary --stage status
+# do not run until explicit resume approval:
+# uv run docprod generation-canary --stage execute
 ```
 
+`--stage status` is zero-network. It reconstructs paid operations from local artifacts and the ledger sidecar.
+
 `--stage check` validates flags, key presence (not values), FFmpeg, catalog models, plan, cap, directories. Zero HTTP.
+
+Partial paid runs must **resume**: reuse successful script/images, retry Veo only if FAILED_UNBILLED (no remote id), recover if a remote id exists, stop on UNCERTAIN.
+
+Veo 3.1 Lite preview supports `16:9` and `9:16`. Local preflight must not mark SUBMITTED.
 
 `--stage execute` prints:
 

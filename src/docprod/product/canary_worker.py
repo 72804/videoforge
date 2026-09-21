@@ -15,6 +15,7 @@ from docprod.product.canary_cost import (
     tts_cost_from_usage,
     veo_cost,
 )
+from docprod.product.canary_ledger import is_real_jpeg, is_real_media
 from docprod.product.canary_render import render_canary_preview
 from docprod.product.engine_bridge import (
     FIRST_CANARY_PROVIDERS,
@@ -37,12 +38,14 @@ from docprod.product.errors import ProductError
 from docprod.product.failure import FailureCategory
 from docprod.product.models import CharacterReference
 from docprod.product.paid_ops import (
+    CostCapExceeded,
     accounted_usd,
     assert_within_cap,
     existing_paid_attempt,
     must_not_resubmit,
     request_fingerprint,
 )
+from docprod.product.persist import save_repository
 from docprod.product.real_worker import LIVE_DISABLED, RealGenerationWorker
 from docprod.storage.hashing import file_sha256
 from docprod.storage.paths import default_projects_root
@@ -112,6 +115,8 @@ class LocalCanaryWorker(RealGenerationWorker):
         final_path: Path,
         slug: str,
         use_ffmpeg: bool = True,
+        store_path: Path | None = None,
+        canary_root: Path | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(service, **kwargs)
@@ -120,7 +125,120 @@ class LocalCanaryWorker(RealGenerationWorker):
         self.final_path = final_path
         self.slug = slug
         self.use_ffmpeg = use_ffmpeg
+        self.store_path = store_path
+        self.canary_root = canary_root
         self._files: dict[str, Path] = {}
+
+    def _persist(self) -> None:
+        super()._persist()
+        if self.store_path is not None:
+            save_repository(self.store_path, self.service.repo)
+
+    def _hydrate_artifacts(self) -> None:
+        mapping = {
+            "character_ref": (".jpg", is_real_jpeg),
+            "tts": (".wav", is_real_media),
+        }
+        for key, (suffix, check) in mapping.items():
+            path = self.work_root / f"{key}{suffix}"
+            if check(path):
+                self._files[key] = path
+        for path in sorted(self.work_root.glob("still_*.jpg")):
+            if is_real_jpeg(path):
+                self._files[path.stem] = path
+        for path in sorted(self.work_root.glob("video_*.mp4")):
+            if is_real_media(path):
+                self._files[path.stem] = path
+        script = self.work_root / "script.json"
+        if script.is_file():
+            self._files["script"] = script
+
+    def _discovered_ops(self) -> dict[str, dict[str, Any]]:
+        from docprod.product.canary_ledger import discover_operations
+
+        root = self.canary_root
+        if root is None:
+            root = self.work_root.parent.parent
+        return discover_operations(root)
+
+    def _discovered_veo(self) -> dict[str, Any]:
+        return self._discovered_ops().get("veo") or {}
+
+    def _account_existing(self, job_id: str) -> None:
+        job = self.service.repo.jobs[job_id]
+        if job.progress.get("resume_seeded"):
+            return
+        ops = self._discovered_ops()
+        for name, row in ops.items():
+            state = str(row.get("state") or "")
+            if state == "SUCCEEDED":
+                item = {
+                    "script": PlanItemType.SCRIPT,
+                    "character_ref": PlanItemType.STILL,
+                    "tts": PlanItemType.TTS,
+                    "veo": PlanItemType.VIDEO,
+                }.get(name, PlanItemType.STILL if name.startswith("scene_still_") else None)
+                if item is None or name == "render":
+                    continue
+                self.service.record_attempt(
+                    job_id,
+                    item_type=item,
+                    provider=str(row.get("provider") or "unknown"),
+                    model=str(row.get("model") or ""),
+                    outcome=ProviderOutcome.SUCCEEDED,
+                    billed=ProviderBilledStatus.UNKNOWN,
+                    status=AttemptStatus.SUCCEEDED,
+                    request_hash=request_fingerprint(
+                        provider=str(row.get("provider") or "unknown"),
+                        model=str(row.get("model") or ""),
+                        item_type=item,
+                        scene_id=None,
+                        extra={"resume_seed": name},
+                    ),
+                    estimated_provider_cost=float(row.get("reserved_usd") or 0.0),
+                    actual_provider_cost=row.get("actual_usd"),
+                )
+            elif name == "veo" and row.get("remote_operation_id"):
+                self.service.record_attempt(
+                    job_id,
+                    item_type=PlanItemType.VIDEO,
+                    provider="google",
+                    model=str(row.get("model") or FIRST_CANARY_PROVIDERS["video_model"]),
+                    outcome=ProviderOutcome.SKIPPED,
+                    billed=ProviderBilledStatus.UNKNOWN,
+                    status=AttemptStatus.SUBMITTED,
+                    remote_operation_id=str(row["remote_operation_id"]),
+                    request_hash=request_fingerprint(
+                        provider="google",
+                        model=str(row.get("model") or ""),
+                        item_type=PlanItemType.VIDEO,
+                        scene_id=None,
+                        extra={"resume_seed": "veo"},
+                    ),
+                    estimated_provider_cost=float(row.get("reserved_usd") or 0.0),
+                )
+            elif name == "veo" and state == "UNCERTAIN":
+                self.service.record_attempt(
+                    job_id,
+                    item_type=PlanItemType.VIDEO,
+                    provider="google",
+                    model=str(row.get("model") or FIRST_CANARY_PROVIDERS["video_model"]),
+                    outcome=ProviderOutcome.FAILED,
+                    billed=ProviderBilledStatus.UNKNOWN,
+                    status=AttemptStatus.FAILED,
+                    remote_operation_id="uncertain",
+                    request_hash=request_fingerprint(
+                        provider="google",
+                        model=str(row.get("model") or ""),
+                        item_type=PlanItemType.VIDEO,
+                        scene_id=None,
+                        extra={"resume_seed": "veo-uncertain"},
+                    ),
+                    estimated_provider_cost=float(row.get("reserved_usd") or 0.0),
+                    safe_error_message="uncertain paid state from prior run",
+                )
+        job.progress["resume_seeded"] = True
+        self._persist()
 
     def _is_canary_job(self, job_id: str) -> bool:
         job = self.service.repo.jobs[job_id]
@@ -131,6 +249,19 @@ class LocalCanaryWorker(RealGenerationWorker):
         if not self._is_canary_job(job_id):
             super()._run_full(job_id)
             return
+        try:
+            self._run_canary(job_id)
+        except (ProductError, ValueError, CostCapExceeded) as exc:
+            job = self.service.repo.jobs[job_id]
+            job.progress["safe_error"] = str(exc)[:240]
+            if job.status is not JobStatus.FAILED:
+                self._fail(job_id, FailureCategory.INTERNAL_FAILURE, "INTERNAL_FAILURE")
+        finally:
+            self._persist()
+
+    def _run_canary(self, job_id: str) -> None:
+        self._hydrate_artifacts()
+        self._account_existing(job_id)
         job = self.service.repo.jobs[job_id]
         project = self.service.repo.projects[job.project_id]
         spec = build_engine_spec(
@@ -152,36 +283,51 @@ class LocalCanaryWorker(RealGenerationWorker):
         persist_engine_outline(self.service.repo, project, spec)
         self._freeze(job_id, spec)
         self._ensure_status(job_id, JobStatus.GENERATING_SCRIPT)
-        script_item = next(item for item in spec.frozen_items if item.type is PlanItemType.SCRIPT)
-        script_result = self._ledger_call(
-            job_id,
-            item_type=PlanItemType.SCRIPT,
-            provider=FIRST_CANARY_PROVIDERS["script"],
-            model=script_item.model,
-            usd=script_item.estimated_provider_usd,
-            extra={"prompt": project.prompt},
-            runner=lambda: self.adapters.generate_script(project.prompt),
-            cost_from_usage=text_cost_from_usage,
+        skip_script = (
+            any(key.startswith("still_") for key in self._files) or "script" in self._files
         )
+        script_result: AdapterResult | None
+        if skip_script:
+            script_result = None
+        else:
+            script_item = next(
+                item for item in spec.frozen_items if item.type is PlanItemType.SCRIPT
+            )
+            script_result = self._ledger_call(
+                job_id,
+                item_type=PlanItemType.SCRIPT,
+                provider=FIRST_CANARY_PROVIDERS["script"],
+                model=script_item.model,
+                usd=script_item.estimated_provider_usd,
+                extra={"prompt": project.prompt},
+                runner=lambda: self.adapters.generate_script(project.prompt),
+                cost_from_usage=text_cost_from_usage,
+                file_key="script",
+                suffix=".json",
+            )
         spec = self._apply_script(job_id, spec, script_result)
+        still_count = len([key for key in self._files if key.startswith("still_")])
+        if still_count > spec.scene_count:
+            spec = self._expand_spec(job_id, spec, still_count)
         self._ensure_status(job_id, JobStatus.GENERATING_IMAGES)
         self._generate_identity_and_stills(job_id, spec)
         self._ensure_status(job_id, JobStatus.GENERATING_VIDEO)
         self._generate_video(job_id, spec)
         self._ensure_status(job_id, JobStatus.GENERATING_AUDIO)
         narration = " ".join(scene.narration for scene in spec.scenes)
-        self._ledger_call(
-            job_id,
-            item_type=PlanItemType.TTS,
-            provider=FIRST_CANARY_PROVIDERS["tts"],
-            model=FIRST_CANARY_PROVIDERS["tts_model"],
-            usd=reserve_tts_usd(),
-            extra={"language": project.language, "chars": len(narration)},
-            runner=lambda: self.adapters.generate_tts(narration),
-            cost_from_usage=tts_cost_from_usage,
-            file_key="tts",
-            suffix=".wav",
-        )
+        if "tts" not in self._files:
+            self._ledger_call(
+                job_id,
+                item_type=PlanItemType.TTS,
+                provider=FIRST_CANARY_PROVIDERS["tts"],
+                model=FIRST_CANARY_PROVIDERS["tts_model"],
+                usd=reserve_tts_usd(),
+                extra={"language": project.language, "chars": len(narration)},
+                runner=lambda: self.adapters.generate_tts(narration),
+                cost_from_usage=tts_cost_from_usage,
+                file_key="tts",
+                suffix=".wav",
+            )
         self._ensure_status(job_id, JobStatus.RENDERING)
         self._render_final(job_id, spec)
 
@@ -207,6 +353,46 @@ class LocalCanaryWorker(RealGenerationWorker):
         job.reserved_provider_cost = spec.estimated_provider_usd
         self._unit(job_id, "story", completed=1, total=1)
         self._unit(job_id, "scene_planning", completed=spec.scene_count, total=spec.scene_count)
+
+    def _expand_spec(
+        self, job_id: str, spec: EngineProjectSpec, scene_count: int
+    ) -> EngineProjectSpec:
+        scenes = list(spec.scenes)
+        template = scenes[-1]
+        while len(scenes) < scene_count:
+            index = len(scenes)
+            scenes.append(
+                EngineSceneSpec(
+                    order_index=index,
+                    visual_prompt=template.visual_prompt,
+                    motion_prompt="subtle camera drift",
+                    narration=template.narration,
+                    duration_seconds=template.duration_seconds,
+                    production_class=template.production_class,
+                    image_model=template.image_model,
+                    video_model="local-camera",
+                    wants_video=False,
+                    character_ids=list(template.character_ids),
+                )
+            )
+        job = self.service.repo.jobs[job_id]
+        project = self.service.repo.projects[job.project_id]
+        updated = EngineProjectSpec(
+            content_kind=spec.content_kind,
+            duration_seconds=sum(scene.duration_seconds for scene in scenes),
+            scene_count=len(scenes),
+            quality_profile=spec.quality_profile,
+            aspect_ratio=spec.aspect_ratio,
+            language=spec.language,
+            characters=spec.characters,
+            scenes=tuple(scenes),
+            frozen_items=spec.frozen_items,
+            estimated_provider_usd=spec.estimated_provider_usd,
+            hard_max_usd=spec.hard_max_usd,
+        )
+        persist_engine_outline(self.service.repo, project, updated, replace=True)
+        self._freeze(job_id, updated)
+        return updated
 
     def _apply_script(
         self, job_id: str, spec: EngineProjectSpec, result: AdapterResult | None
@@ -282,28 +468,32 @@ class LocalCanaryWorker(RealGenerationWorker):
         ref_paths: list[Path] = []
         if characters:
             character = characters[0]
-            prompt = (
-                f"Photoreal cinematic portrait of {character.name}. "
-                f"{character.description} Neutral basement lighting, 9:16, single person."
-            )
-            result = self._ledger_call(
-                job_id,
-                item_type=PlanItemType.STILL,
-                provider=FIRST_CANARY_PROVIDERS["image"],
-                model=FIRST_CANARY_PROVIDERS["image_model"],
-                usd=reserve_image_usd(with_reference=False),
-                scene_id=CHARACTER_REF_SCENE_ID,
-                extra={
-                    "kind": "character_reference",
-                    "size": "1024x1536",
-                    "quality": "medium",
-                },
-                runner=lambda: self.adapters.generate_image(prompt),
-                cost_from_usage=image_cost_from_usage,
-                file_key="character_ref",
-                suffix=".jpg",
-            )
-            if result is not None:
+            existing = self._files.get("character_ref")
+            if existing is not None:
+                result = AdapterResult(data=existing.read_bytes())
+            else:
+                prompt = (
+                    f"Photoreal cinematic portrait of {character.name}. "
+                    f"{character.description} Neutral basement lighting, 9:16, single person."
+                )
+                result = self._ledger_call(
+                    job_id,
+                    item_type=PlanItemType.STILL,
+                    provider=FIRST_CANARY_PROVIDERS["image"],
+                    model=FIRST_CANARY_PROVIDERS["image_model"],
+                    usd=reserve_image_usd(with_reference=False),
+                    scene_id=CHARACTER_REF_SCENE_ID,
+                    extra={
+                        "kind": "character_reference",
+                        "size": "1024x1536",
+                        "quality": "medium",
+                    },
+                    runner=lambda: self.adapters.generate_image(prompt),
+                    cost_from_usage=image_cost_from_usage,
+                    file_key="character_ref",
+                    suffix=".jpg",
+                )
+            if result is not None and "character_ref" in self._files:
                 path = self._files["character_ref"]
                 record = CharacterReference(
                     character_id=character.id,
@@ -323,7 +513,21 @@ class LocalCanaryWorker(RealGenerationWorker):
         for index, scene in enumerate(scenes):
             spec_scene = spec.scenes[index]
             version = self.service._active_version(scene)
+            file_key = f"still_{index}"
             if version.image_asset_version_id and not version.image_stale:
+                self._bump(job_id, "images")
+                continue
+            if file_key in self._files:
+                data = self._files[file_key].read_bytes()
+                self._attach(
+                    job.user_id,
+                    scene.id,
+                    kind=AssetKind.IMAGE,
+                    data=data,
+                    mime="image/jpeg",
+                    model=spec_scene.image_model,
+                    provider=FIRST_CANARY_PROVIDERS["image"],
+                )
                 self._bump(job_id, "images")
                 continue
             result = self._ledger_call(
@@ -370,6 +574,36 @@ class LocalCanaryWorker(RealGenerationWorker):
             still = self._files.get(f"still_{index}")
             if still is None:
                 raise ProductError("Veo scene is missing its generated still")
+            if f"video_{index}" in self._files:
+                self._bump(job_id, "video")
+                continue
+            veo_row = self._discovered_veo()
+            remote_id = veo_row.get("remote_operation_id")
+            if isinstance(remote_id, str) and remote_id.startswith("fake"):
+                remote_id = None
+            if veo_row.get("state") == "UNCERTAIN":
+                raise ProductError("remote paid operation is uncertain; stopping without resubmit")
+            if remote_id:
+
+                def _recover_existing(
+                    path: Path = still, prompt: str = spec_scene.motion_prompt
+                ) -> AdapterResult:
+                    return self.adapters.recover_video(prompt, path, scene_id=scene.id)
+
+                result = _recover_existing()
+                self._store_file(f"video_{index}", ".mp4", result)
+                if result is not None:
+                    self._attach(
+                        job.user_id,
+                        scene.id,
+                        kind=AssetKind.VIDEO,
+                        data=result.data,
+                        mime="video/mp4",
+                        model=spec_scene.video_model,
+                        provider=FIRST_CANARY_PROVIDERS["video"],
+                    )
+                self._bump(job_id, "video")
+                continue
 
             def _run(path: Path = still, prompt: str = spec_scene.motion_prompt) -> AdapterResult:
                 return self.adapters.generate_video(prompt, path, scene_id=scene.id)
@@ -378,6 +612,11 @@ class LocalCanaryWorker(RealGenerationWorker):
                 path: Path = still, prompt: str = spec_scene.motion_prompt
             ) -> AdapterResult:
                 return self.adapters.recover_video(prompt, path, scene_id=scene.id)
+
+            def _preflight(
+                path: Path = still, prompt: str = spec_scene.motion_prompt
+            ) -> None:
+                self.adapters.preflight_video(prompt, path, scene_id=scene.id)
 
             result = self._ledger_call(
                 job_id,
@@ -390,6 +629,7 @@ class LocalCanaryWorker(RealGenerationWorker):
                 remote=True,
                 runner=_run,
                 recover=_recover,
+                preflight=_preflight,
                 file_key=f"video_{index}",
                 suffix=".mp4",
             )
@@ -452,6 +692,7 @@ class LocalCanaryWorker(RealGenerationWorker):
         remote: bool = False,
         runner,
         recover=None,
+        preflight=None,
         cost_from_usage=None,
         file_key: str | None = None,
         suffix: str = "",
@@ -465,18 +706,21 @@ class LocalCanaryWorker(RealGenerationWorker):
             extra=extra,
         )
         existing = existing_paid_attempt(self.service.repo, job_id, fingerprint)
+        if existing and existing.status is AttemptStatus.FAILED_UNBILLED:
+            existing.status = AttemptStatus.PENDING
         if existing and must_not_resubmit(existing):
             if existing.status is AttemptStatus.SUCCEEDED:
                 return None
-            if recover is None:
-                raise ProductError("remote paid operation is uncertain; stopping without resubmit")
-            result = recover()
-            existing.status = AttemptStatus.SUCCEEDED
-            existing.provider_outcome = ProviderOutcome.SUCCEEDED
-            existing.completed_at = self.service.clock()
-            existing.updated_at = self.service.clock()
-            self._store_file(file_key, suffix, result)
-            return result
+            if existing.remote_operation_id and recover is not None:
+                result = recover()
+                existing.status = AttemptStatus.SUCCEEDED
+                existing.provider_outcome = ProviderOutcome.SUCCEEDED
+                existing.completed_at = self.service.clock()
+                existing.updated_at = self.service.clock()
+                self._store_file(file_key, suffix, result)
+                self._persist()
+                return result
+            raise ProductError("remote paid operation is uncertain; stopping without resubmit")
         spent = accounted_usd(job, self.service.repo)
         if existing is None or existing.status is AttemptStatus.PENDING:
             assert_within_cap(job, usd, spent=spent)
@@ -510,12 +754,44 @@ class LocalCanaryWorker(RealGenerationWorker):
                 path.write_bytes(placeholder)
                 self._files[file_key] = path
             return AdapterResult(data=placeholder, text="{}")
-        self.paid_calls += 1
+        attempt.status = AttemptStatus.PENDING
+        attempt.updated_at = self.service.clock()
+        self._persist()
+        try:
+            if preflight is not None:
+                preflight()
+        except Exception as exc:
+            attempt.status = AttemptStatus.FAILED_UNBILLED
+            attempt.provider_billed = ProviderBilledStatus.NOT_BILLED
+            attempt.provider_outcome = ProviderOutcome.FAILED
+            attempt.safe_error_message = str(exc)[:240]
+            attempt.completed_at = self.service.clock()
+            attempt.updated_at = self.service.clock()
+            self._persist()
+            raise
         if remote:
             attempt.status = AttemptStatus.SUBMITTED
             attempt.updated_at = self.service.clock()
             self._persist()
-        result = runner()
+        try:
+            result = runner()
+        except Exception as exc:
+            attempt.safe_error_message = str(exc)[:240]
+            attempt.updated_at = self.service.clock()
+            attempt.provider_outcome = ProviderOutcome.FAILED
+            if remote:
+                if not attempt.remote_operation_id:
+                    attempt.provider_billed = ProviderBilledStatus.UNKNOWN
+                self._persist()
+                raise ProductError(
+                    "remote paid operation is uncertain; stopping without resubmit"
+                ) from exc
+            attempt.status = AttemptStatus.FAILED_UNBILLED
+            attempt.provider_billed = ProviderBilledStatus.NOT_BILLED
+            attempt.completed_at = self.service.clock()
+            self._persist()
+            raise
+        self.paid_calls += 1
         if remote:
             attempt.remote_operation_id = result.remote_operation_id or attempt.remote_operation_id
             self._persist()
@@ -526,6 +802,7 @@ class LocalCanaryWorker(RealGenerationWorker):
         attempt.completed_at = self.service.clock()
         attempt.updated_at = self.service.clock()
         self._store_file(file_key, suffix, result)
+        self._persist()
         return result
 
     def _store_file(self, file_key: str | None, suffix: str, result: AdapterResult) -> None:
