@@ -2948,6 +2948,62 @@ def telegram_webhook_info() -> None:
     console.print(f"pending={info.get('pending_update_count', 0)}")
 
 
+@app.command("generation-canary")
+def generation_canary(
+    stage: str = typer.Option("plan", "--stage", help="plan (Stage A) or execute (Stage B)"),
+    slug: str = typer.Option(
+        "videoforge_local_canary",
+        "--slug",
+        help="Must be the dedicated canary slug",
+    ),
+) -> None:
+    """Local VideoForge canary. Stage A plans with zero paid HTTP. Stage B is gated."""
+    from docprod.product.errors import ProductError
+    from docprod.product.local_canary import (
+        CANARY_SLUG,
+        assert_canary_execute_allowed,
+        plan_local_canary,
+        stage_b_required_env,
+    )
+
+    if slug.strip() != CANARY_SLUG:
+        console.print(f"refusing non-canary slug {slug!r}; expected {CANARY_SLUG}")
+        raise typer.Exit(code=1)
+    token = stage.strip().lower()
+    if token in {"plan", "a", "stage-a"}:
+        payload = plan_local_canary()
+        console.print(f"stage=A slug={payload['slug']}")
+        console.print(
+            f"scenes={payload['scene_count']} duration_s={payload['duration_seconds']} "
+            f"aspect={payload['aspect_ratio']}"
+        )
+        console.print(
+            f"images={payload['counts']['image_generations']} "
+            f"video_shots={payload['counts']['video_shots']} "
+            f"video_s={payload['counts']['video_seconds']} "
+            f"tts=1"
+        )
+        console.print(
+            f"estimated_usd={payload['estimated_provider_usd']} cap={payload['hard_cap_usd']}"
+        )
+        console.print(f"final={payload['final_output']}")
+        console.print("provider_http_calls=0 stars=0")
+        console.print("Stage B not executed. Re-run with --stage execute only after approval.")
+        return
+    if token in {"execute", "b", "stage-b"}:
+        try:
+            assert_canary_execute_allowed()
+        except ProductError as exc:
+            console.print(str(exc))
+            console.print("Required local env (never Vercel):")
+            for line in stage_b_required_env():
+                console.print(f"  {line}")
+            raise typer.Exit(code=1) from None
+        raise typer.Exit(code=1)
+    console.print("stage must be plan or execute")
+    raise typer.Exit(code=1)
+
+
 @app.command("telegram-product-import-json")
 def telegram_product_import_json(
     store: Path = typer.Option(Path("product_data/store.json"), "--store"),
