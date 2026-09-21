@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from docprod.product.canary_cost import (
+    CHARACTER_REF_SCENE_ID,
+    reserve_image_usd,
+    reserve_script_usd,
+    reserve_tts_usd,
+    veo_cost,
+)
 from docprod.product.enums import DurationMode, PlanItemType, ReferenceMode
 from docprod.product.models import (
     Character,
@@ -17,7 +24,6 @@ from docprod.product.plans import PricingPolicy, assemble_plan
 from docprod.product.repository import MemoryRepository
 from docprod.quality.enums import QualityProfile, SceneProductionClass
 from docprod.quality.router import (
-    estimate_model_cost,
     preferred_video_model,
     still_route,
     wants_video,
@@ -197,16 +203,30 @@ def build_engine_spec(
     refs = map_character_set(project, characters, references)
     char_ids = [row.character_id for row in refs.profiles]
     remaining_video = CANARY_MAX_VIDEO_SHOTS if profile is not QualityProfile.ECONOMY else 0
+    needs_generated_ref = bool(char_ids) and not any(
+        profile.custom_references or profile.generated_references for profile in refs.profiles
+    )
     scenes: list[EngineSceneSpec] = []
     items: list[GenerationPlanItem] = [
         GenerationPlanItem(
             type=PlanItemType.SCRIPT,
             model=FIRST_CANARY_PROVIDERS["script_model"],
             quantity=1,
-            estimated_provider_usd=_cost(FIRST_CANARY_PROVIDERS["script_model"], seconds=0) or 0.02,
+            estimated_provider_usd=reserve_script_usd(),
             customer_stars=0,
         )
     ]
+    if needs_generated_ref:
+        items.append(
+            GenerationPlanItem(
+                type=PlanItemType.STILL,
+                model=FIRST_CANARY_PROVIDERS["image_model"],
+                quantity=1,
+                estimated_provider_usd=reserve_image_usd(with_reference=False),
+                customer_stars=0,
+                scene_id=CHARACTER_REF_SCENE_ID,
+            )
+        )
     for index in range(scene_count):
         klass = classify_beat(index, scene_count, project.prompt)
         scores = beat_scores(klass)
@@ -233,7 +253,7 @@ def build_engine_spec(
                 character_ids=char_ids,
             )
         )
-        image_cost = _cost(image_model, seconds=0) or 0.05
+        image_cost = reserve_image_usd(with_reference=needs_generated_ref or bool(char_ids))
         items.append(
             GenerationPlanItem(
                 type=PlanItemType.STILL,
@@ -245,7 +265,7 @@ def build_engine_spec(
             )
         )
         if animate:
-            video_cost = _cost(video_model, seconds=8) or 0.40
+            video_cost = veo_cost(8)
             items.append(
                 GenerationPlanItem(
                     type=PlanItemType.VIDEO,
@@ -256,13 +276,12 @@ def build_engine_spec(
                     scene_id=str(index),
                 )
             )
-    tts_cost = _cost(FIRST_CANARY_PROVIDERS["tts_model"], seconds=duration) or 0.03
     items.append(
         GenerationPlanItem(
             type=PlanItemType.TTS,
             model=FIRST_CANARY_PROVIDERS["tts_model"],
             quantity=max(1, int(duration * 12)),
-            estimated_provider_usd=tts_cost,
+            estimated_provider_usd=reserve_tts_usd(),
             customer_stars=0,
         )
     )
@@ -306,6 +325,8 @@ def persist_engine_outline(
     repo: MemoryRepository,
     project: Project,
     spec: EngineProjectSpec,
+    *,
+    replace: bool = False,
 ) -> ScriptVersion:
     body_lines = [f"CUSTOM_STORY: {project.prompt}", "", f"Duration: {spec.duration_seconds:.0f}s"]
     for scene in spec.scenes:
@@ -318,8 +339,14 @@ def persist_engine_outline(
     repo.scripts[script.id] = script
     project.active_script_version_id = script.id
     existing = repo.scenes_for(project.id)
-    if existing:
+    if existing and not replace:
         return script
+    if replace:
+        for scene in existing:
+            version_id = scene.active_version_id
+            if version_id:
+                repo.scene_versions.pop(version_id, None)
+            repo.scenes.pop(scene.id, None)
     for spec_scene in spec.scenes:
         scene = Scene(project_id=project.id, order_index=spec_scene.order_index)
         version = SceneVersion(
@@ -384,14 +411,10 @@ def frozen_plan_payload(plan: GenerationPlan, spec: EngineProjectSpec) -> dict:
                 "quantity": item.quantity,
                 "seconds": 8 if item.type is PlanItemType.VIDEO else None,
                 "estimated_provider_usd": item.estimated_provider_usd,
+                "reserved_provider_usd": item.estimated_provider_usd,
                 "scene_id": item.scene_id,
             }
             for item in plan.items
         ],
         "providers": dict(FIRST_CANARY_PROVIDERS),
     }
-
-
-def _cost(model_id: str, *, seconds: float) -> float | None:
-    usd, _conf = estimate_model_cost(model_id, seconds=seconds or None)
-    return usd

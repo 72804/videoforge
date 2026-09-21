@@ -2962,6 +2962,9 @@ def generation_canary(
     from docprod.product.local_canary import (
         CANARY_SLUG,
         assert_canary_execute_allowed,
+        check_local_canary,
+        execute_local_canary,
+        execution_summary,
         plan_local_canary,
         stage_b_required_env,
     )
@@ -2984,11 +2987,24 @@ def generation_canary(
             f"tts=1"
         )
         console.print(
-            f"estimated_usd={payload['estimated_provider_usd']} cap={payload['hard_cap_usd']}"
+            f"expected_usd={payload['estimated_provider_usd']} "
+            f"reserved_usd={payload['reserved_provider_usd']} "
+            f"cap={payload['hard_cap_usd']}"
         )
         console.print(f"final={payload['final_output']}")
         console.print("provider_http_calls=0 stars=0")
         console.print("Stage B not executed. Re-run with --stage execute only after approval.")
+        return
+    if token in {"check"}:
+        report = check_local_canary()
+        if report["ready"]:
+            console.print("READY TO EXECUTE")
+        else:
+            console.print("BLOCKED")
+            for item in report["blockers"]:
+                console.print(f"- {item}")
+            raise typer.Exit(code=1)
+        console.print("provider_http_calls=0")
         return
     if token in {"execute", "b", "stage-b"}:
         try:
@@ -2999,8 +3015,11 @@ def generation_canary(
             for line in stage_b_required_env():
                 console.print(f"  {line}")
             raise typer.Exit(code=1) from None
-        raise typer.Exit(code=1)
-    console.print("stage must be plan or execute")
+        payload = plan_local_canary()
+        console.print(execution_summary(payload))
+        execute_local_canary()
+        return
+    console.print("stage must be plan, check, or execute")
     raise typer.Exit(code=1)
 
 

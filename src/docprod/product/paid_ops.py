@@ -39,19 +39,24 @@ def existing_paid_attempt(
 
 
 def must_not_resubmit(attempt: GenerationAttempt) -> bool:
-    if not attempt.remote_operation_id:
-        return False
-    return attempt.status in {
+    if attempt.status is AttemptStatus.SUCCEEDED:
+        return True
+    if attempt.status in {
         AttemptStatus.SUBMITTED,
         AttemptStatus.RECOVERING_REMOTE,
-        AttemptStatus.SUCCEEDED,
-        AttemptStatus.PENDING,
-    }
+    }:
+        return True
+    if attempt.status is AttemptStatus.FAILED and attempt.remote_operation_id:
+        return True
+    return False
 
 
 def accounted_usd(job: GenerationJob, repo: MemoryRepository) -> float:
+    """Known actuals plus reserved/estimated in-flight and completed-without-usage."""
     total = 0.0
     for attempt in repo.attempts_for_job(job.id):
+        if attempt.status is AttemptStatus.FAILED and not attempt.remote_operation_id:
+            continue
         if attempt.actual_provider_cost is not None:
             total += attempt.actual_provider_cost
         else:
