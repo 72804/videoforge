@@ -310,10 +310,13 @@ def test_veo_preflight_failure_is_failed_unbilled(tmp_path: Path) -> None:
 
 
 def test_resume_skips_successful_stills(tmp_path: Path) -> None:
+    from docprod.product.canary_ledger import status_local_canary
+
     work = tmp_path / "artifacts" / "work"
     _write_jpeg(work / "character_ref.jpg")
     for index in range(3):
         _write_jpeg(work / f"still_{index}.jpg")
+    status_local_canary(tmp_path)
     adapters = FakeCanaryAdapters()
     execute_local_canary(
         settings=_live_settings(),
@@ -365,7 +368,7 @@ def test_partial_canary_crash_persists_state(tmp_path: Path) -> None:
 
 
 def test_veo_remote_id_recovery_does_not_resubmit(tmp_path: Path) -> None:
-    from docprod.product.canary_ledger import save_ledger
+    from docprod.product.canary_ledger import save_ledger, status_local_canary
 
     work = tmp_path / "artifacts" / "work"
     _write_jpeg(work / "character_ref.jpg")
@@ -385,6 +388,7 @@ def test_veo_remote_id_recovery_does_not_resubmit(tmp_path: Path) -> None:
         },
         tmp_path,
     )
+    status_local_canary(tmp_path)
     adapters = FakeCanaryAdapters()
     execute_local_canary(
         settings=_live_settings(),
@@ -398,7 +402,7 @@ def test_veo_remote_id_recovery_does_not_resubmit(tmp_path: Path) -> None:
 
 
 def test_uncertain_paid_state_blocks(tmp_path: Path) -> None:
-    from docprod.product.canary_ledger import save_ledger
+    from docprod.product.canary_ledger import save_ledger, status_local_canary
 
     work = tmp_path / "artifacts" / "work"
     _write_jpeg(work / "character_ref.jpg")
@@ -417,6 +421,7 @@ def test_uncertain_paid_state_blocks(tmp_path: Path) -> None:
         },
         tmp_path,
     )
+    status_local_canary(tmp_path)
     adapters = FakeCanaryAdapters()
     result = execute_local_canary(
         settings=_live_settings(),
@@ -430,7 +435,7 @@ def test_uncertain_paid_state_blocks(tmp_path: Path) -> None:
 
 
 def test_cost_cap_includes_prior_spend(tmp_path: Path) -> None:
-    from docprod.product.canary_ledger import save_ledger
+    from docprod.product.canary_ledger import save_ledger, status_local_canary
 
     work = tmp_path / "artifacts" / "work"
     _write_jpeg(work / "character_ref.jpg")
@@ -449,6 +454,7 @@ def test_cost_cap_includes_prior_spend(tmp_path: Path) -> None:
         },
         tmp_path,
     )
+    status_local_canary(tmp_path)
     adapters = FakeCanaryAdapters()
     result = execute_local_canary(
         settings=_live_settings(),
@@ -467,4 +473,91 @@ def test_status_stage_is_zero_network() -> None:
     assert "provider_http_calls=0" in result.stdout
     assert "sk-" not in result.stdout
     assert "OPENAI_API_KEY" not in result.stdout
+    assert "Unallocated safety margin:" in result.stdout
+    assert "Remaining cap headroom:" not in result.stdout
+
+
+def test_cap_margin_arithmetic() -> None:
+    from docprod.product.canary_ledger import spend_summary
+
+    spend = spend_summary(
+        {
+            "script": {"state": "SUCCEEDED", "reserved_usd": 0.0136},
+            "ref": {"state": "SUCCEEDED", "reserved_usd": 0.085},
+            "s1": {"state": "SUCCEEDED", "reserved_usd": 0.105},
+            "s2": {"state": "SUCCEEDED", "reserved_usd": 0.105},
+            "s3": {"state": "SUCCEEDED", "reserved_usd": 0.105},
+            "s4": {"state": "SUCCEEDED", "reserved_usd": 0.105},
+            "veo": {"state": "FAILED_UNBILLED", "reserved_usd": 0.4},
+            "tts": {"state": "NOT_STARTED", "reserved_usd": 0.4812},
+        }
+    )
+    assert spend["committed_usd"] == 0.5186
+    assert spend["remaining_reserved_usd"] == 0.8812
+    assert spend["worst_case_usd"] == 1.3998
+    assert spend["unspent_cap_usd"] == 1.4814
+    assert spend["unallocated_margin_usd"] == 0.6002
+    assert "headroom_usd" not in spend
+
+
+def test_script_resume_requires_durable_spec(tmp_path: Path) -> None:
+    work = tmp_path / "artifacts" / "work"
+    _write_jpeg(work / "character_ref.jpg")
+    for index in range(3):
+        _write_jpeg(work / f"still_{index}.jpg")
+    adapters = FakeCanaryAdapters()
+    result = execute_local_canary(
+        settings=_live_settings(),
+        adapters=adapters,
+        use_ffmpeg=False,
+        root=tmp_path,
+    )
+    assert result["status"] == JobStatus.FAILED.value
+    assert "script" not in adapters.calls
+    assert adapters.video_submits == 0
+
+
+def test_unrelated_stale_still_is_not_adopted(tmp_path: Path) -> None:
+    from docprod.product.canary_ledger import status_local_canary
+
+    work = tmp_path / "artifacts" / "work"
+    _write_jpeg(work / "character_ref.jpg")
+    for index in range(3):
+        _write_jpeg(work / f"still_{index}.jpg")
+    _write_jpeg(work / "still_9.jpg")
+    report = status_local_canary(tmp_path)
+    assert report["resume_spec"]["authoritative_scene_count"] == 3
+    assert any("still_9" in path for path in report["resume_spec"]["ignored_stills"])
+    adapters = FakeCanaryAdapters()
+    execute_local_canary(
+        settings=_live_settings(),
+        adapters=adapters,
+        use_ffmpeg=False,
+        root=tmp_path,
+    )
+    assert adapters.calls.count("image") == 0
+
+
+def test_four_live_stills_reconcile_to_four_scenes(tmp_path: Path) -> None:
+    from docprod.product.canary_ledger import status_local_canary
+
+    work = tmp_path / "artifacts" / "work"
+    review = tmp_path / "artifacts" / "review"
+    review.mkdir(parents=True)
+    review.joinpath("stage_a_plan.json").write_text(
+        json.dumps({"scene_count": 3, "duration_seconds": 24.0, "character": "Nolan", "scenes": []})
+    )
+    _write_jpeg(work / "character_ref.jpg")
+    for index in range(4):
+        _write_jpeg(work / f"still_{index}.jpg")
+    report = status_local_canary(tmp_path)
+    assert report["resume_spec"]["authoritative_scene_count"] == 4
+    assert report["resume_spec"]["stage_a_scene_count"] == 3
+    assert report["spend"]["committed_usd"] == 0.5186
+
+
+def test_check_stage_is_zero_network() -> None:
+    result = CliRunner().invoke(app, ["generation-canary", "--stage", "check"])
+    assert "provider_http_calls=0" in result.stdout
+    assert "sk-" not in result.stdout
 

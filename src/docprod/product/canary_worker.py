@@ -143,9 +143,12 @@ class LocalCanaryWorker(RealGenerationWorker):
             path = self.work_root / f"{key}{suffix}"
             if check(path):
                 self._files[key] = path
-        for path in sorted(self.work_root.glob("still_*.jpg")):
+        for index in range(16):
+            path = self.work_root / f"still_{index}.jpg"
             if is_real_jpeg(path):
-                self._files[path.stem] = path
+                self._files[f"still_{index}"] = path
+            else:
+                break
         for path in sorted(self.work_root.glob("video_*.mp4")):
             if is_real_media(path):
                 self._files[path.stem] = path
@@ -171,7 +174,7 @@ class LocalCanaryWorker(RealGenerationWorker):
         ops = self._discovered_ops()
         for name, row in ops.items():
             state = str(row.get("state") or "")
-            if state == "SUCCEEDED":
+            if state in {"SUCCEEDED", "SUCCEEDED_RESPONSE_LOST"}:
                 item = {
                     "script": PlanItemType.SCRIPT,
                     "character_ref": PlanItemType.STILL,
@@ -283,12 +286,17 @@ class LocalCanaryWorker(RealGenerationWorker):
         persist_engine_outline(self.service.repo, project, spec)
         self._freeze(job_id, spec)
         self._ensure_status(job_id, JobStatus.GENERATING_SCRIPT)
-        skip_script = (
-            any(key.startswith("still_") for key in self._files) or "script" in self._files
-        )
-        script_result: AdapterResult | None
-        if skip_script:
-            script_result = None
+        from docprod.product.canary_ledger import durable_downstream_spec
+
+        durable = durable_downstream_spec(self.canary_root)
+        stills_exist = any(key.startswith("still_") for key in self._files)
+        if durable is not None:
+            spec = self._apply_resume_spec(job_id, spec, durable)
+        elif stills_exist:
+            raise ProductError(
+                "BLOCKED: paid script JSON missing and no durable resume spec; "
+                "refusing to call script provider"
+            )
         else:
             script_item = next(
                 item for item in spec.frozen_items if item.type is PlanItemType.SCRIPT
@@ -305,10 +313,8 @@ class LocalCanaryWorker(RealGenerationWorker):
                 file_key="script",
                 suffix=".json",
             )
-        spec = self._apply_script(job_id, spec, script_result)
-        still_count = len([key for key in self._files if key.startswith("still_")])
-        if still_count > spec.scene_count:
-            spec = self._expand_spec(job_id, spec, still_count)
+            spec = self._apply_script(job_id, spec, script_result)
+        self._trim_stills(spec)
         self._ensure_status(job_id, JobStatus.GENERATING_IMAGES)
         self._generate_identity_and_stills(job_id, spec)
         self._ensure_status(job_id, JobStatus.GENERATING_VIDEO)
@@ -354,29 +360,56 @@ class LocalCanaryWorker(RealGenerationWorker):
         self._unit(job_id, "story", completed=1, total=1)
         self._unit(job_id, "scene_planning", completed=spec.scene_count, total=spec.scene_count)
 
-    def _expand_spec(
-        self, job_id: str, spec: EngineProjectSpec, scene_count: int
+    def _trim_stills(self, spec: EngineProjectSpec) -> None:
+        allowed = {f"still_{index}" for index in range(spec.scene_count)}
+        for key in [item for item in self._files if item.startswith("still_")]:
+            if key not in allowed:
+                self._files.pop(key, None)
+
+    def _apply_resume_spec(
+        self, job_id: str, spec: EngineProjectSpec, durable: dict[str, Any]
     ) -> EngineProjectSpec:
-        scenes = list(spec.scenes)
-        template = scenes[-1]
-        while len(scenes) < scene_count:
-            index = len(scenes)
+        payload = durable.get("payload") if isinstance(durable, dict) else None
+        if durable.get("kind") == "script.json" and isinstance(payload, dict):
+            return self._apply_script(
+                job_id,
+                spec,
+                AdapterResult(data=json.dumps(payload).encode(), text=json.dumps(payload)),
+            )
+        rows = payload.get("scenes") if isinstance(payload, dict) else None
+        if not isinstance(rows, list) or len(rows) < 2:
+            return spec
+        job = self.service.repo.jobs[job_id]
+        project = self.service.repo.projects[job.project_id]
+        scenes: list[EngineSceneSpec] = []
+        remaining_video = 1
+        for index, row in enumerate(rows):
+            if not isinstance(row, dict):
+                continue
+            template = spec.scenes[min(index, len(spec.scenes) - 1)]
+            wants = bool(row.get("wants_video")) and remaining_video > 0
+            if wants:
+                remaining_video -= 1
             scenes.append(
                 EngineSceneSpec(
                     order_index=index,
-                    visual_prompt=template.visual_prompt,
-                    motion_prompt="subtle camera drift",
-                    narration=template.narration,
-                    duration_seconds=template.duration_seconds,
+                    visual_prompt=str(row.get("visual_prompt") or template.visual_prompt),
+                    motion_prompt=str(row.get("motion_prompt") or template.motion_prompt),
+                    narration=str(row.get("narration") or template.narration),
+                    duration_seconds=float(
+                        row.get("duration_seconds") or template.duration_seconds
+                    ),
                     production_class=template.production_class,
                     image_model=template.image_model,
-                    video_model="local-camera",
-                    wants_video=False,
+                    video_model=(
+                        FIRST_CANARY_PROVIDERS["video_model"] if wants else "local-camera"
+                    ),
+                    wants_video=wants,
                     character_ids=list(template.character_ids),
                 )
             )
-        job = self.service.repo.jobs[job_id]
-        project = self.service.repo.projects[job.project_id]
+        if len(scenes) < 2:
+            return spec
         updated = EngineProjectSpec(
             content_kind=spec.content_kind,
             duration_seconds=sum(scene.duration_seconds for scene in scenes),

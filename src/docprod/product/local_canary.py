@@ -342,6 +342,9 @@ def check_local_canary(settings: Settings | None = None) -> dict[str, Any]:
     """Stage B preflight. Zero provider HTTP."""
     cfg = settings if settings is not None else get_settings()
     payload = plan_local_canary()
+    from docprod.product.canary_ledger import status_local_canary
+
+    live = status_local_canary()
     blockers: list[str] = []
     if cfg.generation_mode.strip().lower() != "real":
         blockers.append("GENERATION_MODE must be real")
@@ -382,6 +385,9 @@ def check_local_canary(settings: Settings | None = None) -> dict[str, Any]:
         "blockers": blockers,
         "provider_http_calls": 0,
         "plan": payload,
+        "live_scene_count": live["resume_spec"]["authoritative_scene_count"],
+        "stage_a_scene_count": live["resume_spec"]["stage_a_scene_count"],
+        "resume_safety": live["text"].split("Resume safety: ")[-1].split("\n")[0],
     }
     paths["check"].write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report

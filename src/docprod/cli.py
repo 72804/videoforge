@@ -3014,7 +3014,13 @@ def generation_canary(
             console.print("BLOCKED")
             for item in report["blockers"]:
                 console.print(f"- {item}")
+            console.print("provider_http_calls=0")
             raise typer.Exit(code=1)
+        console.print(
+            f"live_scenes={report.get('live_scene_count')} "
+            f"stage_a_scenes={report.get('stage_a_scene_count')}"
+        )
+        console.print(f"resume_safety={report.get('resume_safety')}")
         console.print("provider_http_calls=0")
         return
     if token in {"execute", "b", "stage-b"}:

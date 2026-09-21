@@ -104,7 +104,9 @@ uv run docprod generation-canary --stage status
 # uv run docprod generation-canary --stage execute
 ```
 
-`--stage status` is zero-network. It reconstructs paid operations from local artifacts and the ledger sidecar.
+`--stage status` is zero-network. It writes `artifacts/review/resume_spec.json`.
+Live scene count is 4 paid stills even though Stage A printed 3 scenes.
+The paid Luna JSON was not durable; resume uses the resume spec, never a second script call.
 
 `--stage check` validates flags, key presence (not values), FFmpeg, catalog models, plan, cap, directories. Zero HTTP.
 
