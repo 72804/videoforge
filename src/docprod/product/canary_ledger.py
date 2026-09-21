@@ -19,6 +19,7 @@ CANARY_HARD_CAP_USD = 2.0
 MIN_REAL_JPEG = 8_000
 MIN_REAL_MEDIA = 8_000
 RESUME_SPEC_VERSION = 1
+LOCAL_RECOVERY_SOURCE = "local_recovery_after_lost_paid_script"
 
 
 def canary_root(root: Path | None = None) -> Path:
@@ -31,6 +32,98 @@ def ledger_path(root: Path | None = None) -> Path:
 
 def resume_spec_path(root: Path | None = None) -> Path:
     return canary_root(root) / "artifacts" / "review" / "resume_spec.json"
+
+
+def resume_story_path(root: Path | None = None) -> Path:
+    return canary_root(root) / "artifacts" / "review" / "resume_story.md"
+
+
+def merge_local_recovery(built: dict[str, Any], root: Path | None = None) -> dict[str, Any]:
+    """Keep a frozen local recovery story; refresh still paths/hashes only."""
+    existing = load_resume_spec(root)
+    if not existing or existing.get("script_source") != LOCAL_RECOVERY_SOURCE:
+        return built
+    frozen_narration = str(existing.get("full_narration") or "").strip()
+    fresh = {
+        int(row.get("order_index", -1)): row
+        for row in built.get("scenes") or []
+        if isinstance(row, dict)
+    }
+    scenes: list[dict[str, Any]] = []
+    for row in existing.get("scenes") or []:
+        if not isinstance(row, dict):
+            continue
+        merged = dict(row)
+        update = fresh.get(int(row.get("order_index", -1)))
+        if update:
+            if update.get("still_path"):
+                merged["still_path"] = update["still_path"]
+            if update.get("sha256"):
+                merged["sha256"] = update["sha256"]
+        scenes.append(merged)
+    existing["scenes"] = scenes
+    existing["authoritative_scene_count"] = built.get(
+        "authoritative_scene_count", existing.get("authoritative_scene_count")
+    )
+    existing["stage_a_scene_count"] = built.get(
+        "stage_a_scene_count", existing.get("stage_a_scene_count")
+    )
+    existing["ignored_stills"] = built.get("ignored_stills") or []
+    joined = " ".join(str(row.get("narration") or "") for row in scenes)
+    existing["full_narration"] = frozen_narration or joined
+    existing["script_source"] = LOCAL_RECOVERY_SOURCE
+    existing["source"] = LOCAL_RECOVERY_SOURCE
+    existing["language"] = existing.get("language") or "tr"
+    existing["script_response"] = "LOST"
+    existing["provider_http_calls"] = 0
+    return existing
+
+
+def format_resume_story(spec: dict[str, Any]) -> str:
+    lines = [
+        "# Recovered canary story",
+        "",
+        "script_source: `local_recovery_after_lost_paid_script`",
+        "This is not the original Luna JSON. Paid stills were inspected locally.",
+        "",
+        f"Character: {spec.get('character') or 'Nolan'}",
+        f"Language: {spec.get('language') or 'tr'}",
+        f"Duration: {spec.get('duration_seconds')}s / "
+        f"{spec.get('authoritative_scene_count')} scenes",
+        "",
+    ]
+    for row in spec.get("scenes") or []:
+        if not isinstance(row, dict):
+            continue
+        index = row.get("order_index")
+        lines.extend(
+            [
+                f"## Scene {index}",
+                f"existing image: `{row.get('still_path')}`",
+                f"sha256: `{row.get('sha256')}`",
+                f"visual: {row.get('visual_prompt')}",
+                f"narration: {row.get('narration')}",
+            ]
+        )
+        if row.get("wants_video"):
+            lines.append(f"Veo motion intent: {row.get('motion_prompt')}")
+        lines.append("")
+    lines.extend(
+        [
+            "## Full narration",
+            "",
+            str(spec.get("full_narration") or ""),
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def write_resume_story(spec: dict[str, Any], root: Path | None = None) -> Path:
+    path = resume_story_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(format_resume_story(spec), encoding="utf-8")
+    return path
 
 
 def work_dir(root: Path | None = None) -> Path:
@@ -439,8 +532,10 @@ def format_status(
         f"Project: {CANARY_SLUG}",
         f"Authoritative scenes: {spec.get('authoritative_scene_count', 'n/a')}",
         f"Stage A scenes (pre-script): {spec.get('stage_a_scene_count', 3)}",
-        "",
     ]
+    if spec.get("script_source") == LOCAL_RECOVERY_SOURCE:
+        lines.append("Story source: local recovery (not original Luna JSON)")
+    lines.append("")
     uncertain = False
     blocked = False
     for key, title in labels:
@@ -549,8 +644,10 @@ def planned_resume_actions(operations: dict[str, dict[str, Any]]) -> dict[str, l
 
 
 def status_local_canary(root: Path | None = None) -> dict[str, Any]:
-    spec = build_resume_spec(root)
+    spec = merge_local_recovery(build_resume_spec(root), root)
     save_resume_spec(spec, root)
+    if spec.get("script_source") == LOCAL_RECOVERY_SOURCE:
+        write_resume_story(spec, root)
     operations = discover_operations(root)
     spend = spend_summary(operations)
     inventory = jpeg_inventory(root)

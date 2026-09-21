@@ -179,6 +179,7 @@ class FakeCanaryAdapters:
         self.video_submits = 0
         self.remote_id = "fake-veo-op-1"
         self.preflight_error: str | None = None
+        self.last_tts_text = ""
 
     def generate_script(self, prompt: str) -> AdapterResult:
         self.calls.append("script")
@@ -236,7 +237,7 @@ class FakeCanaryAdapters:
 
     def generate_tts(self, script: str) -> AdapterResult:
         self.calls.append("tts")
-        _ = script
+        self.last_tts_text = script
         return AdapterResult(
             data=b"RIFF....WAVEfmt",
             usage={"input_tokens": 120, "output_tokens": 2000},

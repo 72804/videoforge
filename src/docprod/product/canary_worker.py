@@ -321,6 +321,12 @@ class LocalCanaryWorker(RealGenerationWorker):
         self._generate_video(job_id, spec)
         self._ensure_status(job_id, JobStatus.GENERATING_AUDIO)
         narration = " ".join(scene.narration for scene in spec.scenes)
+        durable = durable_downstream_spec(self.canary_root)
+        payload = durable.get("payload") if durable else None
+        if isinstance(payload, dict):
+            frozen = str(payload.get("full_narration") or "").strip()
+            if frozen:
+                narration = frozen
         if "tts" not in self._files:
             self._ledger_call(
                 job_id,
@@ -410,13 +416,14 @@ class LocalCanaryWorker(RealGenerationWorker):
             )
         if len(scenes) < 2:
             return spec
+        project.language = str(payload.get("language") or spec.language or project.language)
         updated = EngineProjectSpec(
             content_kind=spec.content_kind,
             duration_seconds=sum(scene.duration_seconds for scene in scenes),
             scene_count=len(scenes),
             quality_profile=spec.quality_profile,
             aspect_ratio=spec.aspect_ratio,
-            language=spec.language,
+            language=project.language,
             characters=spec.characters,
             scenes=tuple(scenes),
             frozen_items=spec.frozen_items,

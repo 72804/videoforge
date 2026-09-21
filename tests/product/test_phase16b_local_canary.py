@@ -561,3 +561,102 @@ def test_check_stage_is_zero_network() -> None:
     assert "provider_http_calls=0" in result.stdout
     assert "sk-" not in result.stdout
 
+
+def test_status_preserves_local_recovery_narration(tmp_path: Path) -> None:
+    from docprod.product.canary_ledger import (
+        LOCAL_RECOVERY_SOURCE,
+        save_resume_spec,
+        status_local_canary,
+    )
+
+    work = tmp_path / "artifacts" / "work"
+    _write_jpeg(work / "character_ref.jpg")
+    for index in range(4):
+        _write_jpeg(work / f"still_{index}.jpg")
+    narration = "Bodrumda bavul. Merdiven. Para. Kapı."
+    save_resume_spec(
+        {
+            "version": 1,
+            "script_source": LOCAL_RECOVERY_SOURCE,
+            "source": LOCAL_RECOVERY_SOURCE,
+            "script_response": "LOST",
+            "language": "tr",
+            "authoritative_scene_count": 4,
+            "character": "Nolan",
+            "duration_seconds": 24.0,
+            "full_narration": narration,
+            "scenes": [
+                {
+                    "order_index": index,
+                    "scene_id": str(index),
+                    "narration": f"Sahne {index}.",
+                    "visual_prompt": "görüntü",
+                    "motion_prompt": "motion" if index == 1 else "subtle camera drift",
+                    "duration_seconds": 6.0,
+                    "wants_video": index == 1,
+                    "character": "Nolan",
+                    "prompt_source": LOCAL_RECOVERY_SOURCE,
+                }
+                for index in range(4)
+            ],
+        },
+        tmp_path,
+    )
+    report = status_local_canary(tmp_path)
+    assert report["resume_spec"]["script_source"] == LOCAL_RECOVERY_SOURCE
+    assert report["resume_spec"]["full_narration"] == narration
+    assert "Sahne 0." in report["resume_spec"]["scenes"][0]["narration"]
+    story = tmp_path / "artifacts" / "review" / "resume_story.md"
+    assert story.is_file()
+    assert "Sahne 0." in story.read_text()
+
+
+def test_resume_tts_uses_recovered_narration(tmp_path: Path) -> None:
+    from docprod.product.canary_ledger import (
+        LOCAL_RECOVERY_SOURCE,
+        save_resume_spec,
+        status_local_canary,
+    )
+
+    work = tmp_path / "artifacts" / "work"
+    _write_jpeg(work / "character_ref.jpg")
+    for index in range(4):
+        _write_jpeg(work / f"still_{index}.jpg")
+    frozen = "Bodrumda bavul buldu. Merdivenlerden çıktı. Para gördü. Kapı çalındı."
+    save_resume_spec(
+        {
+            "version": 1,
+            "script_source": LOCAL_RECOVERY_SOURCE,
+            "source": LOCAL_RECOVERY_SOURCE,
+            "language": "tr",
+            "authoritative_scene_count": 4,
+            "full_narration": frozen,
+            "scenes": [
+                {
+                    "order_index": index,
+                    "scene_id": str(index),
+                    "narration": f"parça {index}",
+                    "visual_prompt": "görüntü",
+                    "motion_prompt": "handheld follow" if index == 1 else "subtle camera drift",
+                    "duration_seconds": 6.0,
+                    "wants_video": index == 1,
+                    "character": "Nolan",
+                }
+                for index in range(4)
+            ],
+        },
+        tmp_path,
+    )
+    status_local_canary(tmp_path)
+    adapters = FakeCanaryAdapters()
+    execute_local_canary(
+        settings=_live_settings(),
+        adapters=adapters,
+        use_ffmpeg=False,
+        root=tmp_path,
+    )
+    assert "script" not in adapters.calls
+    assert adapters.calls.count("image") == 0
+    assert adapters.video_submits == 1
+    assert adapters.last_tts_text == frozen
+

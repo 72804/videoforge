@@ -110,7 +110,9 @@ The paid Luna JSON was not durable; resume uses the resume spec, never a second 
 
 `--stage check` validates flags, key presence (not values), FFmpeg, catalog models, plan, cap, directories. Zero HTTP.
 
-Partial paid runs must **resume**: reuse successful script/images, retry Veo only if FAILED_UNBILLED (no remote id), recover if a remote id exists, stop on UNCERTAIN.
+Partial paid runs must **resume**: reuse successful stills, retry Veo only if FAILED_UNBILLED, recover if a remote id exists, stop on UNCERTAIN.
+
+If the paid Luna JSON is missing, `resume_spec.json` with `script_source=local_recovery_after_lost_paid_script` is the TTS/subtitle source. Status must not replace that narration with Stage A placeholders.
 
 Veo 3.1 Lite preview supports `16:9` and `9:16`. Local preflight must not mark SUBMITTED.
 
