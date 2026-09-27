@@ -1291,6 +1291,7 @@ def run_friend_group_episode(
     text_client: StoryTextClient | None = None,
     execute_calls: bool | None = None,
     retry_failed: bool = False,
+    only_scenes: str | None = None,
 ) -> dict[str, object]:
     token = stage.strip().lower().replace("_", "-")
     brief = locked_episode_brief(series_slug=series_slug, episode_number=episode_number)
@@ -1418,6 +1419,7 @@ def run_friend_group_episode(
             episode_number=episode_number,
             execute_calls=True if execute_calls is None else execute_calls,
             retry_failed=retry_failed,
+            only_scenes=only_scenes,
         )
     raise ValueError(
         f"unknown stage {stage!r}; use story-plan, story-check, story-status, "

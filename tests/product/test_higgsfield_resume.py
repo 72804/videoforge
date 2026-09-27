@@ -11,11 +11,15 @@ from docprod.product.friend_group import DialogueLineSpec, FriendGroupStorySpec
 from docprod.product.higgsfield_scenes import (
     APPROVED_SCENE_IDS,
     HIGGSFIELD_LEDGER_RELATIVE,
+    ORIGINAL_HF3_VIDEO_PROMPT,
+    ORIGINAL_HF4_VIDEO_PROMPT,
     STORY_SPEC_RELATIVE,
     build_higgsfield_scenes,
     execute_higgsfield_scene_generate,
     execute_higgsfield_scene_resume,
+    parse_only_scenes,
     recover_higgsfield_jobs,
+    selected_scene_cost_report,
 )
 from docprod.render.ffmpeg import probe_media, run_ffmpeg
 
@@ -513,3 +517,182 @@ def test_result_http_405_does_not_resubmit(tmp_path: Path) -> None:
     assert recovered["generation_posts"] == 0
     assert saved["operations"]["HF1_hook_bill"]["state"] == "UNCERTAIN"
     assert saved["operations"]["HF1_hook_bill"]["request_id"] == "req-1"
+
+
+def _current_style_ledger() -> dict[str, object]:
+    succeeded = {"HF1_hook_bill", "HF2_order_setup", "HF5_erni", "HF6_musti"}
+    ops: dict[str, object] = {}
+    for index, scene_id in enumerate(APPROVED_SCENE_IDS, start=1):
+        if scene_id in succeeded:
+            ops[scene_id] = {"state": "SUCCEEDED", "request_id": f"ok-{index}"}
+        elif scene_id == "HF3_birko_slips":
+            ops[scene_id] = {
+                "state": "FAILED",
+                "request_id": "7debbdd7-7bc1-452e-9b64-3576d47f8c10",
+                "error": (
+                    "The generated result was blocked by content safety checks. "
+                    "Try a different prompt or reference media."
+                ),
+            }
+        elif scene_id == "HF4_muge_kemal":
+            ops[scene_id] = {
+                "state": "FAILED",
+                "request_id": "ac583921-462b-4617-a814-0a69acb5f376",
+                "provider_status": "nsfw",
+                "error": "nsfw",
+            }
+        else:
+            ops[scene_id] = {
+                "state": "FAILED",
+                "request_id": f"old-{scene_id}",
+                "error": (
+                    "Please provide a publicly accessible HTTP or HTTPS URL "
+                    "for the input file."
+                ),
+            }
+    return {"operations": ops}
+
+
+def _write_succeeded_clips(tmp_path: Path) -> None:
+    from docprod.product.higgsfield_scenes import _clip_path
+
+    for scene_id in ("HF1_hook_bill", "HF2_order_setup", "HF5_erni", "HF6_musti"):
+        _write_vertical_mp4(_clip_path(scene_id, root=tmp_path))
+
+
+def test_only_hf7_hf8_submit_two_posts(tmp_path: Path) -> None:
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    ledger_path = tmp_path / HIGGSFIELD_LEDGER_RELATIVE
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(_current_style_ledger()) + "\n", encoding="utf-8")
+    _write_succeeded_clips(tmp_path)
+    posts: list[str] = []
+
+    def submit(**kwargs):
+        body = kwargs["body"]
+        posts.append(str(kwargs["url"]))
+        assert "audio_urls" not in body
+        assert body.get("generate_audio") is True
+        return {"request_id": f"new-{len(posts)}"}
+
+    recovered = recover_higgsfield_jobs(
+        plan,
+        allow_submit=True,
+        retry_failed=True,
+        confirm_paid=True,
+        only_scenes=parse_only_scenes("HF7_kemal_pays,HF8_payoff"),
+        submit=submit,
+        status_fn=lambda request_id, settings=None: {"status": "queued"},
+        sleeper=lambda _delay: None,
+        now_fn=lambda: 0.0,
+        deadline_seconds=0.0,
+        root=tmp_path,
+    )
+    saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert recovered["generation_posts"] == 2
+    assert len(posts) == 2
+    assert recovered["selected_expected_total"] == 2.016
+    assert recovered["selected_generation_posts_max"] == 2
+    assert saved["operations"]["HF1_hook_bill"]["request_id"] == "ok-1"
+    assert saved["operations"]["HF3_birko_slips"]["request_id"] == (
+        "7debbdd7-7bc1-452e-9b64-3576d47f8c10"
+    )
+    assert saved["operations"]["HF4_muge_kemal"]["request_id"] == (
+        "ac583921-462b-4617-a814-0a69acb5f376"
+    )
+    assert saved["operations"]["HF7_kemal_pays"]["request_id"] == "new-1"
+    assert saved["operations"]["HF8_payoff"]["request_id"] == "new-2"
+    assert "old-HF7_kemal_pays" in saved["operations"]["HF7_kemal_pays"]["failed_request_ids"]
+    hf7 = next(scene for scene in plan.scenes if scene.scene_id == "HF7_kemal_pays")
+    hf8 = next(scene for scene in plan.scenes if scene.scene_id == "HF8_payoff")
+    assert hf7.model == "seedance-2.5-image-to-video"
+    assert hf8.model == "seedance-2.5-image-to-video"
+    assert hf7.native_audio is True
+    assert plan.hard_cap_usd == 12.0
+
+
+def test_safety_failures_not_retried_without_only_scenes(tmp_path: Path) -> None:
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    ledger_path = tmp_path / HIGGSFIELD_LEDGER_RELATIVE
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(_current_style_ledger()) + "\n", encoding="utf-8")
+    _write_succeeded_clips(tmp_path)
+    posts: list[str] = []
+    recover_higgsfield_jobs(
+        plan,
+        allow_submit=True,
+        retry_failed=True,
+        confirm_paid=True,
+        submit=lambda **kwargs: posts.append(kwargs["url"]) or {"request_id": f"n{len(posts)}"},
+        status_fn=lambda request_id, settings=None: {"status": "queued"},
+        sleeper=lambda _delay: None,
+        now_fn=lambda: 0.0,
+        deadline_seconds=0.0,
+        root=tmp_path,
+    )
+    saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert len(posts) == 2
+    assert saved["operations"]["HF3_birko_slips"]["request_id"] == (
+        "7debbdd7-7bc1-452e-9b64-3576d47f8c10"
+    )
+    assert saved["operations"]["HF4_muge_kemal"]["error"] == "nsfw"
+
+
+def test_one_scene_hf3_retry_leaves_hf4(tmp_path: Path) -> None:
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    ledger_path = tmp_path / HIGGSFIELD_LEDGER_RELATIVE
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(_current_style_ledger()) + "\n", encoding="utf-8")
+    _write_succeeded_clips(tmp_path)
+    posts: list[str] = []
+    recover_higgsfield_jobs(
+        plan,
+        allow_submit=True,
+        retry_failed=True,
+        confirm_paid=True,
+        only_scenes=parse_only_scenes("HF3_birko_slips"),
+        submit=lambda **kwargs: posts.append("p") or {"request_id": "hf3-new"},
+        status_fn=lambda request_id, settings=None: {"status": "queued"},
+        sleeper=lambda _delay: None,
+        now_fn=lambda: 0.0,
+        deadline_seconds=0.0,
+        root=tmp_path,
+    )
+    saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert posts == ["p"]
+    assert saved["operations"]["HF3_birko_slips"]["request_id"] == "hf3-new"
+    assert saved["operations"]["HF3_birko_slips"]["prompt_revision"] == 2
+    assert saved["operations"]["HF3_birko_slips"]["prompt_history"][0]["prompt"] == (
+        ORIGINAL_HF3_VIDEO_PROMPT
+    )
+    assert saved["operations"]["HF4_muge_kemal"]["request_id"] == (
+        "ac583921-462b-4617-a814-0a69acb5f376"
+    )
+
+
+def test_sanitized_prompts_preserve_history_and_drop_bible(tmp_path: Path) -> None:
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    hf3 = next(scene for scene in plan.scenes if scene.scene_id == "HF3_birko_slips")
+    hf4 = next(scene for scene in plan.scenes if scene.scene_id == "HF4_muge_kemal")
+    hf7 = next(scene for scene in plan.scenes if scene.scene_id == "HF7_kemal_pays")
+    assert hf3.prompt_revision == 2
+    assert hf4.prompt_revision == 2
+    assert hf3.prompt_history[0]["prompt"] == ORIGINAL_HF3_VIDEO_PROMPT
+    assert hf4.prompt_history[0]["prompt"] == ORIGINAL_HF4_VIDEO_PROMPT
+    assert "flörtöz" not in hf4.video_prompt
+    assert "flirtatious" not in hf4.video_prompt.casefold()
+    assert "Character bible" not in hf4.video_prompt
+    assert "grabs the receipt" not in hf4.video_prompt
+    assert "slips out" not in hf3.video_prompt
+    assert "leans in" not in hf3.video_prompt
+    assert "Bu özel kutuyu kim söyledi?" in hf4.video_prompt
+    assert "Kocan kaçmış, sen kutuyu soruyorsun!" in hf4.video_prompt
+    assert "Fiyatını gördün mü?" in hf4.video_prompt
+    assert hf3.native_audio is True
+    assert "audio_urls" not in hf7.request_body
+    assert hf7.prompt_revision == 1
+    costs = selected_scene_cost_report(
+        plan, parse_only_scenes("HF7_kemal_pays,HF8_payoff")
+    )
+    assert costs["selected_expected_total"] == 2.016
+    assert costs["selected_generation_posts_max"] == 2

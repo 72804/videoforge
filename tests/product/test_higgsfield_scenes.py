@@ -144,7 +144,11 @@ def test_seedance_native_audio_not_external_tts(tmp_path: Path) -> None:
         for item in scene.dialogue_lines:
             quoted = f'{names[item.speaker]} says EXACTLY these Turkish words: "{item.text}"'
             assert quoted in scene.video_prompt
-            assert "Character bible:" in item.voice
+            if scene.scene_id == "HF4_muge_kemal":
+                assert "Character bible:" not in item.voice
+                assert "flörtöz" not in item.voice
+            else:
+                assert "Character bible:" in item.voice
         if scene.dialogue_lines:
             assert "lip-synced Turkish" in scene.video_prompt
         else:

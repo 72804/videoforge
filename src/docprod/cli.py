@@ -3078,6 +3078,11 @@ def friend_group_episode(
     episode: int = typer.Option(2, "--episode"),
     confirm_paid: bool = typer.Option(False, "--confirm-paid"),
     retry_failed: bool = typer.Option(False, "--retry-failed"),
+    only_scenes: str | None = typer.Option(
+        None,
+        "--only-scenes",
+        help="Comma-separated Higgsfield scene ids allowed to submit generation POSTs.",
+    ),
 ) -> None:
     """Generic series/episode story pipeline. Birko is one record, not a special engine."""
     from docprod.exceptions import PaidApiNotConfirmedError
@@ -3092,6 +3097,7 @@ def friend_group_episode(
             episode_number=episode,
             confirm_paid=confirm_paid,
             retry_failed=retry_failed,
+            only_scenes=only_scenes,
         )
     except PaidApiNotConfirmedError as exc:
         console.print(str(exc))
@@ -3277,6 +3283,17 @@ def friend_group_episode(
                     console.print(f"{scene_id}={state}")
             if payload.get("final"):
                 console.print(f"final={payload.get('final')}")
+            if payload.get("selected_scene_ids"):
+                ids = payload.get("selected_scene_ids")
+                joined = ",".join(str(item) for item in ids) if isinstance(ids, list) else str(ids)
+                console.print(f"selected_scenes={joined}")
+                console.print(
+                    f"selected_expected_total={payload.get('selected_expected_total')}"
+                )
+                console.print(
+                    "selected_generation_posts_max="
+                    f"{payload.get('selected_generation_posts_max')}"
+                )
 
 
 @app.command("birko-episode2")
@@ -3284,6 +3301,7 @@ def birko_episode2(
     stage: str = typer.Option("story-plan", "--stage"),
     confirm_paid: bool = typer.Option(False, "--confirm-paid"),
     retry_failed: bool = typer.Option(False, "--retry-failed"),
+    only_scenes: str | None = typer.Option(None, "--only-scenes"),
 ) -> None:
     """Convenience alias for friend-group-episode --series-slug birko --episode 2."""
     friend_group_episode(
@@ -3292,6 +3310,7 @@ def birko_episode2(
         episode=2,
         confirm_paid=confirm_paid,
         retry_failed=retry_failed,
+        only_scenes=only_scenes,
     )
 
 

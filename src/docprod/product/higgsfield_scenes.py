@@ -95,8 +95,62 @@ APPROVED_DURATIONS = (6, 7, 6, 8, 9, 9, 8, 6)
 LOCKED_DURATION = dict(zip(APPROVED_SCENE_IDS, APPROVED_DURATIONS, strict=True))
 I2V_SCENE_IDS = {"HF1_hook_bill", "HF7_kemal_pays", "HF8_payoff"}
 SIMPLE_I2V_MODEL = "seedance-2.5-image-to-video"
+PROMPT_REVISION_REASON = "provider safety retry"
+ORIGINAL_HF3_VIDEO_PROMPT = (
+    "9:16 cinematic live-action, continuous motion, no slideshow. same Krispy Kreme café "
+    "interior, six-top table, window, door, counter, evening. Visible: Birko, HG. Boxes are "
+    "empty. The bill tray arrives. Everyone leans in. Birko slips out behind the chairs. HG "
+    "sees him, stays quiet, slides the receipt toward Kemal. Hands, eyelines, and body weight "
+    "keep moving for the full duration; no dead hold after the last line. Turkish café evening, "
+    "natural light, real acting, keep faces consistent with attached reference photos. Do not "
+    "freeze into a still. No spoken dialogue in this scene. Do not invent lines. Generate native "
+    "café ambience and foley only. Native scene sound: Krispy Kreme café ambience, cups, distant "
+    "POS, chairs, evening interior beds. Keep foley under the spoken Turkish. Chair scrape as "
+    "someone leaves, bill tray arrival, hushed table."
+)
+ORIGINAL_HF4_VIDEO_PROMPT = (
+    "9:16 cinematic live-action, continuous motion, no slideshow. same Krispy Kreme café "
+    "interior, six-top table, window, door, counter, evening. Visible: Müge, Kemal. Müge grabs "
+    "the receipt and taps the premium-box price. Kemal points at the exit. Hands, eyelines, and "
+    "body weight keep moving for the full duration; no dead hold after the last line. "
+    "Turkish café evening, natural light, real acting, keep faces consistent with attached "
+    "reference photos. Do not freeze into a still. Seedance native audio: generate_audio=true. "
+    "Characters speak natural, lip-synced Turkish in sync with the picture. Use only the "
+    "approved lines below; do not add, translate, or rewrite dialogue. Müge says EXACTLY these "
+    "Turkish words: \"Bu özel kutuyu kim söyledi?\" (speaker=muge; intended voice/delivery: "
+    "confident Turkish female, slightly incredulous/materialistic energy. Character bible: "
+    "Kendinden emin, flörtöz, gerektiğinde aşırı tatlı; sinirlenince hızla sertleşen yetişkin "
+    "kadın sesi.). Kemal says EXACTLY these Turkish words: "
+    "\"Kocan kaçmış, sen kutuyu soruyorsun!\" (speaker=kemal; intended voice/delivery: natural "
+    "young Turkish male, increasingly frustrated. Character bible: Normal genç yetişkin erkek "
+    "sesi. Yorgun/bezmiş. Sinirlenince enerji yükselir. Grubun en doğal konuşanı.). Müge says "
+    "EXACTLY these Turkish words: \"Fiyatını gördün mü?\" (speaker=muge; intended voice/delivery: "
+    "confident Turkish female, slightly incredulous/materialistic energy. Character bible: "
+    "Kendinden emin, flörtöz, gerektiğinde aşırı tatlı; sinirlenince hızla sertleşen yetişkin "
+    "kadın sesi.). Native scene sound: Krispy Kreme café ambience, cups, distant POS, chairs, "
+    "evening interior beds. Keep foley under the spoken Turkish. Paper receipt, overlapping "
+    "café room tone."
+)
+HF3_SAFE_ACTION = (
+    "Two fully clothed adult male friends in a bright casual café. A bill arrives at the table. "
+    "Birko quietly stands and casually walks away from the table. HG notices him leaving and "
+    "calmly slides the receipt toward Kemal's side of the table. Dry awkward comedy. No violence. "
+    "No threat. No physical confrontation. No sexual content. No nudity. No suggestive behavior. "
+    "Natural cinematic café scene."
+)
+HF4_SAFE_ACTION = (
+    "Two fully clothed adult friends seated in a bright casual café. Müge looks at an "
+    "expensive donut box and the receipt. Kemal reacts with frustrated disbelief. They have a "
+    "normal verbal disagreement about the price and who ordered it. No physical contact. "
+    "No romance. No flirting. No suggestive posing. No body emphasis. No sexual content. "
+    "No nudity. Natural conversational comedy."
+)
+SAFE_MOVING = (
+    "Natural conversational motion continues for the full duration; fully clothed adults; "
+    "no freeze-frame."
+)
 APPROVED_PLAN_FINGERPRINT = (
-    "6e6d65f1cb1e3689072035132c5c4d5c17a5daab15d9aeb91199eac721bbd3c9"
+    "beeb5e76e2a32cb6e7732af324fdcc7f489bd390cf26ab1c029a7ee13dc91a26"
 )
 INTERIOR_LOCATION_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/stills/"
@@ -169,6 +223,9 @@ class HiggsfieldScene(BaseModel):
     native_audio: bool = True
     external_tts: bool = False
     fallback_tts_paths: list[str] = Field(default_factory=list)
+    prompt_revision: int = 1
+    prompt_revision_reason: str = ""
+    prompt_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class HiggsfieldScenePlan(BaseModel):
@@ -186,6 +243,59 @@ class HiggsfieldScenePlan(BaseModel):
     provider_http_calls: int = 0
     native_audio: bool = True
     external_tts: bool = False
+
+
+def parse_only_scenes(raw: str | None) -> frozenset[str] | None:
+    if raw is None:
+        return None
+    token = str(raw).strip()
+    if not token:
+        return None
+    ids = [part.strip() for part in token.split(",") if part.strip()]
+    if not ids:
+        raise ProductError("--only-scenes listed no scene ids")
+    unknown = [scene_id for scene_id in ids if scene_id not in APPROVED_SCENE_IDS]
+    if unknown:
+        raise ProductError(f"unknown --only-scenes id(s): {unknown}")
+    return frozenset(ids)
+
+
+def is_higgsfield_safety_failure(row: dict[str, Any]) -> bool:
+    blob = f"{row.get('error') or ''} {row.get('provider_status') or ''}".lower()
+    return "nsfw" in blob or "content safety" in blob or "safety checks" in blob
+
+
+def selected_scene_cost_report(
+    plan: HiggsfieldScenePlan,
+    only_scenes: frozenset[str] | None,
+    *,
+    ledger: dict[str, Any] | None = None,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    if only_scenes is None:
+        return {
+            "selected_scene_ids": [],
+            "selected_expected_total": 0.0,
+            "selected_generation_posts_max": 0,
+        }
+    ops = ledger.get("operations") if isinstance((ledger or {}).get("operations"), dict) else {}
+    expected = 0.0
+    posts_max = 0
+    ordered = [scene.scene_id for scene in plan.scenes if scene.scene_id in only_scenes]
+    for scene in plan.scenes:
+        if scene.scene_id not in only_scenes:
+            continue
+        expected += float(scene.expected_usd)
+        row = ops.get(scene.scene_id) if isinstance(ops.get(scene.scene_id), dict) else {}
+        clip = _clip_path(scene.scene_id, root=root or _repo_root())
+        if str(row.get("state") or "") == "SUCCEEDED" and _playable_clip(clip):
+            continue
+        posts_max += 1
+    return {
+        "selected_scene_ids": ordered,
+        "selected_expected_total": usd_round(expected),
+        "selected_generation_posts_max": posts_max,
+    }
 
 
 def load_existing_story(*, root: Path | None = None) -> FriendGroupStorySpec:
@@ -249,6 +359,8 @@ def _attach_dialogue(
     spec: FriendGroupStorySpec,
     texts: list[str],
     wavs: dict[str, Path],
+    *,
+    include_bible: bool = True,
 ) -> list[HiggsfieldDialogue]:
     by_text = {_norm_text(line.text): line for line in spec.dialogue_lines}
     rows: list[HiggsfieldDialogue] = []
@@ -268,7 +380,7 @@ def _attach_dialogue(
                 audio_path=str(wav) if wav else "",
                 audio_seconds=round(seconds, 3),
                 missing_tts=wav is None,
-                voice=_voice_direction(slug),
+                voice=_voice_direction(slug, include_bible=include_bible),
             )
         )
     return rows
@@ -284,8 +396,10 @@ def _display_name(slug: str) -> str:
     return CHARACTER_DISPLAY.get(slug, slug)
 
 
-def _voice_direction(slug: str) -> str:
+def _voice_direction(slug: str, *, include_bible: bool = True) -> str:
     directed = SEEDANCE_VOICE_DIRECTION[slug]
+    if not include_bible:
+        return directed
     try:
         bible = member_by_slug(slug).voice_notes.strip()
     except KeyError:
@@ -371,6 +485,10 @@ def _fill_scene(
     ref_map: dict[str, str],
     public_lookup: dict[str, PublicAsset],
     exterior: bool = False,
+    moving: str | None = None,
+    prompt_revision: int = 1,
+    prompt_revision_reason: str = "",
+    prompt_history: list[dict[str, Any]] | None = None,
 ) -> HiggsfieldScene:
     duration = float(LOCKED_DURATION[scene_id])
     char_paths = []
@@ -400,7 +518,7 @@ def _fill_scene(
         if exterior
         else "same Krispy Kreme café interior, six-top table, window, door, counter, evening"
     )
-    moving = (
+    loc_moving = moving or (
         "Hands, eyelines, and body weight keep moving for the full duration; "
         "no dead hold after the last line."
     )
@@ -408,7 +526,7 @@ def _fill_scene(
         action=action,
         visible=visible,
         location=loc_label,
-        moving=moving,
+        moving=loc_moving,
         lines=lines,
         exterior=exterior,
         scene_id=scene_id,
@@ -475,6 +593,9 @@ def _fill_scene(
         request_body=body,
         expected_usd=float(expected or 0.0),
         reserved_usd=float(reserved or 0.0),
+        prompt_revision=prompt_revision,
+        prompt_revision_reason=prompt_revision_reason,
+        prompt_history=list(prompt_history or []),
     )
 
 
@@ -505,8 +626,8 @@ def build_higgsfield_scenes(
     )
     lookup = asset_lookup(public_payload)
 
-    def attach(texts: list[str]) -> list[HiggsfieldDialogue]:
-        return _attach_dialogue(spec, texts, wavs)
+    def attach(texts: list[str], *, include_bible: bool = True) -> list[HiggsfieldDialogue]:
+        return _attach_dialogue(spec, texts, wavs, include_bible=include_bible)
 
     scenes = [
         _fill_scene(
@@ -545,25 +666,30 @@ def build_higgsfield_scenes(
             scene_id="HF3_birko_slips",
             visible=["birko", "hg"],
             offscreen=["kemal"],
-            action=(
-                "Boxes are empty. The bill tray arrives. Everyone leans in. Birko slips out "
-                "behind the chairs. HG sees him, stays quiet, slides the receipt toward Kemal."
-            ),
-            camera="wider table then Birko's hands leaving, HG's look",
+            action=HF3_SAFE_ACTION,
+            camera="wider café table, Birko walking away, HG sliding the receipt",
             props=["receipt", "premium donut box", "POS"],
-            lines=[],
+            lines=attach([], include_bible=False),
             motion=6.0,
             location_path=interior,
             ref_map=ref_map,
             public_lookup=lookup,
+            moving=SAFE_MOVING,
+            prompt_revision=2,
+            prompt_revision_reason=PROMPT_REVISION_REASON,
+            prompt_history=[
+                {
+                    "revision": 1,
+                    "prompt": ORIGINAL_HF3_VIDEO_PROMPT,
+                    "reason": "original failed paid attempt",
+                }
+            ],
         ),
         _fill_scene(
             scene_id="HF4_muge_kemal",
             visible=["muge", "kemal"],
             offscreen=["hg"],
-            action=(
-                "Müge grabs the receipt and taps the premium-box price. Kemal points at the exit."
-            ),
+            action=HF4_SAFE_ACTION,
             camera="shot-reverse at the six-top",
             props=["receipt", "premium donut box"],
             lines=attach(
@@ -571,12 +697,23 @@ def build_higgsfield_scenes(
                     "Bu özel kutuyu kim söyledi?",
                     "Kocan kaçmış, sen kutuyu soruyorsun!",
                     "Fiyatını gördün mü?",
-                ]
+                ],
+                include_bible=False,
             ),
             motion=1.2,
             location_path=interior,
             ref_map=ref_map,
             public_lookup=lookup,
+            moving=SAFE_MOVING,
+            prompt_revision=2,
+            prompt_revision_reason=PROMPT_REVISION_REASON,
+            prompt_history=[
+                {
+                    "revision": 1,
+                    "prompt": ORIGINAL_HF4_VIDEO_PROMPT,
+                    "reason": "original failed paid attempt",
+                }
+            ],
         ),
         _fill_scene(
             scene_id="HF5_erni",
@@ -1240,6 +1377,7 @@ def recover_higgsfield_jobs(
     now_fn: Callable[[], float] | None = None,
     deadline_seconds: float = RESUME_DEADLINE_SECONDS,
     root: Path | None = None,
+    only_scenes: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     base = root or _repo_root()
     ledger_path = base / HIGGSFIELD_LEDGER_RELATIVE
@@ -1287,6 +1425,7 @@ def recover_higgsfield_jobs(
         )
 
     poster = submit or submit_higgsfield_json
+    selected = only_scenes
     for scene in plan.scenes:
         row = ledger["operations"].get(scene.scene_id)
         row = row if isinstance(row, dict) else {}
@@ -1295,11 +1434,15 @@ def recover_higgsfield_jobs(
         clip = _clip_path(scene.scene_id, root=base)
         if state == "SUCCEEDED" and _playable_clip(clip):
             continue
+        if selected is not None and scene.scene_id not in selected:
+            continue
         if state in {"UNCERTAIN", "CANCELLED"}:
             continue
         if state == "FAILED" and not retry_failed:
             continue
         if state == "FAILED" and retry_failed:
+            if selected is None and is_higgsfield_safety_failure(row):
+                continue
             _archive_failed_operation(ledger, scene.scene_id)
             _save_ledger(ledger_path, ledger)
             state = "NOT_STARTED"
@@ -1330,6 +1473,10 @@ def recover_higgsfield_jobs(
         preserved = ledger["operations"].get(scene.scene_id) if isinstance(
             ledger["operations"].get(scene.scene_id), dict
         ) else {}
+        prompt_history = list(preserved.get("prompt_history") or [])
+        for item in scene.prompt_history:
+            if item not in prompt_history:
+                prompt_history.append(item)
         _update_op(
             ledger,
             scene.scene_id,
@@ -1338,6 +1485,10 @@ def recover_higgsfield_jobs(
             model=scene.model,
             history=list(preserved.get("history") or []),
             failed_request_ids=list(preserved.get("failed_request_ids") or []),
+            prompt_revision=scene.prompt_revision,
+            prompt_revision_reason=scene.prompt_revision_reason,
+            prompt_history=prompt_history,
+            submitted_prompt=scene.video_prompt,
         )
         _save_ledger(ledger_path, ledger)
         if request_id:
@@ -1356,6 +1507,7 @@ def recover_higgsfield_jobs(
     final = None
     if len(succeeded) == len(plan.scenes):
         final = str(concat_higgsfield_episode(plan, root=base))
+    selected = selected_scene_cost_report(plan, only_scenes, ledger=ledger, root=base)
     return {
         "ledger": ledger,
         "ledger_path": str(ledger_path),
@@ -1365,6 +1517,7 @@ def recover_higgsfield_jobs(
         "provider_http_calls": status_calls + result_calls,
         "succeeded": succeeded,
         "final": final,
+        **selected,
     }
 
 
@@ -1485,6 +1638,7 @@ def execute_higgsfield_scene_generate(
     root: Path | None = None,
     retry_failed: bool = False,
     url_probe: Callable[[str], dict[str, Any]] | None = None,
+    only_scenes: frozenset[str] | str | None = None,
 ) -> dict[str, object]:
     if not confirm_paid:
         raise PaidApiNotConfirmedError(
@@ -1501,6 +1655,7 @@ def execute_higgsfield_scene_generate(
         settings=settings,
         approved_fingerprint=approved_fingerprint,
     )
+    selected_ids = parse_only_scenes(only_scenes) if isinstance(only_scenes, str) else only_scenes
     unique_urls = _episode_remote_input_urls(plan)
     if execute_calls:
         preflight_input_urls(unique_urls, probe=url_probe)
@@ -1510,6 +1665,7 @@ def execute_higgsfield_scene_generate(
             "stage": "higgsfield-scene-generate",
             "execute": False,
             "live_post_authorized": True,
+            **selected_scene_cost_report(plan, selected_ids),
         }
     recovered = recover_higgsfield_jobs(
         plan,
@@ -1525,6 +1681,7 @@ def execute_higgsfield_scene_generate(
         now_fn=now_fn,
         deadline_seconds=deadline_seconds,
         root=root,
+        only_scenes=selected_ids,
     )
     ops = recovered["ledger"].get("operations") if isinstance(recovered["ledger"], dict) else {}
     states = {
@@ -1543,6 +1700,9 @@ def execute_higgsfield_scene_generate(
         "media_calls": recovered["generation_posts"],
         "states": states,
         "final": recovered["final"],
+        "selected_scene_ids": recovered.get("selected_scene_ids") or [],
+        "selected_expected_total": recovered.get("selected_expected_total") or 0.0,
+        "selected_generation_posts_max": recovered.get("selected_generation_posts_max") or 0,
         "artifacts": {
             **(planned.get("artifacts") if isinstance(planned.get("artifacts"), dict) else {}),
             "ledger": recovered["ledger_path"],
