@@ -24,6 +24,7 @@ from docprod.product.enums import (
     QuoteStatus,
     ReferenceMode,
     StarTxnType,
+    Visibility,
 )
 from docprod.product.errors import (
     AuthorizationError,
@@ -165,6 +166,8 @@ class ProductService:
         default_text_model: str = "auto",
         default_voice_model: str = "auto",
         style: str = "",
+        content_type: ContentType | None = None,
+        visibility: Visibility | None = None,
     ) -> Project:
         if len(self.repo.projects_for(user_id)) >= self.limits.max_projects_per_user:
             raise LimitExceededError("max projects exceeded")
@@ -191,7 +194,8 @@ class ProductService:
             default_text_model=default_text_model,
             default_voice_model=default_voice_model,
             style=style,
-            content_type=ContentType.CUSTOM_STORY,
+            content_type=content_type or ContentType.CUSTOM_STORY,
+            visibility=visibility or Visibility.PRIVATE,
         )
         return self.repo.put_project(project)
 
@@ -255,11 +259,19 @@ class ProductService:
         *,
         name: str,
         description: str = "",
+        **extra: object,
     ) -> Character:
         self._require_project(user_id, project_id)
         if len(self.repo.characters_for(project_id)) >= self.limits.max_characters_per_project:
             raise LimitExceededError("max characters exceeded")
-        character = Character(project_id=project_id, name=name, description=description)
+        payload = {
+            "project_id": project_id,
+            "name": name,
+            "description": description,
+            "owner_user_id": user_id,
+        }
+        payload.update({k: v for k, v in extra.items() if v is not None})
+        character = Character.model_validate(payload)
         self.repo.characters[character.id] = character
         return character
 

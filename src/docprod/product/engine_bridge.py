@@ -23,6 +23,8 @@ from docprod.product.models import (
 from docprod.product.plans import PricingPolicy, assemble_plan
 from docprod.product.repository import MemoryRepository
 from docprod.quality.enums import QualityProfile, SceneProductionClass
+from docprod.quality.policy_select import image_model_for, script_model_for, tts_model_for
+from docprod.quality.profiles import policy_for
 from docprod.quality.router import (
     preferred_video_model,
     still_route,
@@ -128,7 +130,7 @@ def map_character_set(
                 name=character.name,
                 description=character.description,
                 canonical_refs=custom or generated,
-                appearance_notes=character.description,
+                appearance_notes=character.appearance_notes or character.description,
                 locked=locked,
                 custom_references=custom,
                 generated_references=generated,
@@ -195,9 +197,12 @@ def build_engine_spec(
     references: list[CharacterReference],
     hard_max_usd: float,
     pricing: PricingPolicy | None = None,
+    canary_compat: bool = False,
+    flagship: bool = False,
 ) -> EngineProjectSpec:
     policy = pricing or PricingPolicy()
     profile = parse_quality_profile(project.quality_profile)
+    quality_policy = policy_for(profile)
     duration, scene_count = canary_duration(project)
     per_scene = round(duration / scene_count, 3)
     refs = map_character_set(project, characters, references)
@@ -206,11 +211,46 @@ def build_engine_spec(
     needs_generated_ref = bool(char_ids) and not any(
         profile.custom_references or profile.generated_references for profile in refs.profiles
     )
+    script_id = (
+        FIRST_CANARY_PROVIDERS["script_model"]
+        if canary_compat
+        else script_model_for(
+            profile,
+            override=project.default_text_model,
+            flagship=flagship
+            or (
+                project.content_type.value == "friend_group"
+                and profile.value in {"premium", "max_quality"}
+            ),
+        )
+    )
+    identity_image = (
+        FIRST_CANARY_PROVIDERS["image_model"]
+        if canary_compat
+        else image_model_for(
+            profile,
+            identity_critical=True,
+            override=project.default_image_model,
+        )
+    )
+    tts_id = (
+        FIRST_CANARY_PROVIDERS["tts_model"]
+        if canary_compat
+        else tts_model_for(
+            profile,
+            dialogue=True,
+            override=project.default_voice_model,
+        )
+    )
+    if canary_compat:
+        music_id = FIRST_CANARY_PROVIDERS["music_model"]
+    else:
+        music_id = quality_policy.music_model
     scenes: list[EngineSceneSpec] = []
     items: list[GenerationPlanItem] = [
         GenerationPlanItem(
             type=PlanItemType.SCRIPT,
-            model=FIRST_CANARY_PROVIDERS["script_model"],
+            model=script_id,
             quantity=1,
             estimated_provider_usd=reserve_script_usd(),
             customer_stars=0,
@@ -220,7 +260,7 @@ def build_engine_spec(
         items.append(
             GenerationPlanItem(
                 type=PlanItemType.STILL,
-                model=FIRST_CANARY_PROVIDERS["image_model"],
+                model=identity_image,
                 quantity=1,
                 estimated_provider_usd=reserve_image_usd(with_reference=False),
                 customer_stars=0,
@@ -236,6 +276,15 @@ def build_engine_spec(
             scores=scores,
             remaining_video_slots=remaining_video,
         )
+        if not canary_compat:
+            image_model = image_model_for(
+                profile,
+                identity_critical=False,
+                key_still=klass is SceneProductionClass.HERO_CINEMATIC,
+                override=project.default_image_model,
+            )
+            if project.default_video_model and project.default_video_model.lower() != "auto":
+                video_model = project.default_video_model
         if animate:
             remaining_video -= 1
         visual = f"{project.prompt} — beat {index + 1}/{scene_count}"
@@ -279,7 +328,7 @@ def build_engine_spec(
     items.append(
         GenerationPlanItem(
             type=PlanItemType.TTS,
-            model=FIRST_CANARY_PROVIDERS["tts_model"],
+            model=tts_id,
             quantity=max(1, int(duration * 12)),
             estimated_provider_usd=reserve_tts_usd(),
             customer_stars=0,
@@ -288,7 +337,7 @@ def build_engine_spec(
     items.append(
         GenerationPlanItem(
             type=PlanItemType.MUSIC,
-            model=FIRST_CANARY_PROVIDERS["music_model"],
+            model=music_id,
             quantity=1,
             estimated_provider_usd=0.0,
             customer_stars=0,

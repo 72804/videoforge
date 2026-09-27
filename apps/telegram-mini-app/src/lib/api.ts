@@ -4,8 +4,10 @@ import { getToken } from "./session";
 import type {
   AuthResponse,
   Character,
+  Friendship,
   Job,
   Model,
+  Persona,
   Plan,
   Project,
   Quote,
@@ -71,6 +73,20 @@ export const client = {
     }),
   models: () => api<Model[]>("/api/v1/models"),
   usage: () => api<Usage>("/api/v1/usage"),
+  me: () => api<User>("/api/v1/me"),
+  patchMe: (body: Record<string, unknown>) =>
+    api<User>("/api/v1/me", { method: "PATCH", json: body }),
+  friends: () => api<User[]>("/api/v1/friends"),
+  requestFriend: (body: { username?: string; user_id?: string }) =>
+    api<Friendship>("/api/v1/friends/requests", { method: "POST", json: body }),
+  personas: () => api<Persona[]>("/api/v1/personas"),
+  createPersona: (body: Record<string, unknown>) =>
+    api<Persona>("/api/v1/personas", { method: "POST", json: body }),
+  cast: (projectId: string, body: { persona_id?: string; friend_user_id?: string }) =>
+    api<Character>(`/api/v1/projects/${projectId}/cast`, { method: "POST", json: body }),
+  profileVideos: (userId: string, withMe = false) =>
+    api<Project[]>(`/api/v1/users/${userId}/videos?with_me=${withMe}`),
+  profile: (userId: string) => api<User>(`/api/v1/users/${userId}`),
   projects: () => api<Project[]>("/api/v1/projects"),
   project: (id: string) => api<Project>(`/api/v1/projects/${id}`),
   createProject: (body: Record<string, unknown>) =>
@@ -79,7 +95,10 @@ export const client = {
     api<Project>(`/api/v1/projects/${id}`, { method: "PATCH", json: body }),
   characters: (projectId: string) =>
     api<Character[]>(`/api/v1/projects/${projectId}/characters`),
-  createCharacter: (projectId: string, body: { name: string; description?: string }) =>
+  createCharacter: (
+    projectId: string,
+    body: { name: string; description?: string; personality_traits?: string[]; role_archetype?: string },
+  ) =>
     api<Character>(`/api/v1/projects/${projectId}/characters`, { method: "POST", json: body }),
   patchCharacter: (id: string, body: Record<string, unknown>) =>
     api<Character>(`/api/v1/characters/${id}`, { method: "PATCH", json: body }),

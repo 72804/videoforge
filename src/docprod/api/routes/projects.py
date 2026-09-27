@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from docprod.api.dependencies import current_user, get_service
 from docprod.api.errors import map_product_error
 from docprod.api.schemas import ProjectCreate, ProjectPatch, ProjectSummaryView
-from docprod.product.enums import AspectRatio, DurationMode, ProjectStatus
+from docprod.product.enums import AspectRatio, ContentType, DurationMode, ProjectStatus, Visibility
 from docprod.product.errors import ProductError
 from docprod.product.models import Project, TelegramUser
 from docprod.product.progress import progress_counts
@@ -60,6 +60,10 @@ def _summary(
             default_text_model=project.default_text_model,
             default_voice_model=project.default_voice_model,
             style=project.style,
+            content_type=project.content_type.value,
+            visibility=project.visibility.value,
+            series_id=project.series_id,
+            episode_number=project.episode_number,
         )
     return ProjectSummaryView(**payload)
 
@@ -85,6 +89,12 @@ def create_project(
             default_text_model=body.default_text_model,
             default_voice_model=body.default_voice_model,
             style=body.style,
+            content_type=(
+                ContentType(body.content_type)
+                if body.content_type
+                else ContentType.CUSTOM_STORY
+            ),
+            visibility=Visibility(body.visibility) if body.visibility else Visibility.PRIVATE,
         )
     except ProductError as exc:
         raise map_product_error(exc) from exc
@@ -133,6 +143,8 @@ def patch_project(
         fields["duration_mode"] = DurationMode(fields["duration_mode"])
     if "aspect_ratio" in fields:
         fields["aspect_ratio"] = AspectRatio(fields["aspect_ratio"])
+    if "visibility" in fields:
+        fields["visibility"] = Visibility(fields["visibility"])
     try:
         project = service.update_project(user.id, project_id, **fields)
     except ProductError as exc:

@@ -28,6 +28,10 @@ export default defineConfig({
         PRODUCT_PERSISTENCE: "json",
         APP_ENV: "development",
         PRODUCT_STORE_PATH: store,
+        GENERATION_MODE: "mock",
+        ALLOW_PAID_GENERATION: "false",
+        ALLOW_PAID_APIS: "false",
+        PAYMENT_MODE: "simulated",
       },
     },
     {

@@ -12,7 +12,7 @@ test("create video wizard through project ready", async ({ page }) => {
   page.on("dialog", (dialog) => dialog.accept());
   await page.goto("/");
   await page.getByRole("button", { name: "Dev login" }).click();
-  await page.getByTestId("create-cta").click();
+  await page.getByTestId("custom-story-cta").click();
   await page.getByTestId("prompt").fill(prompt);
   await page.getByTestId("continue-prompt").click();
   await page.getByTestId("char-name").fill("Alex");

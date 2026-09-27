@@ -10,23 +10,31 @@ from docprod.product.errors import IdempotencyConflictError, JobConflictError
 from docprod.product.models import (
     Asset,
     AssetVersion,
+    AudioMixSpec,
     Character,
     CharacterReference,
+    DialogueTrack,
+    Friendship,
     GenerationAttempt,
     GenerationJob,
     GenerationPlan,
     IdempotencyRecord,
     NotificationOutbox,
     PaymentIntent,
+    Persona,
+    PersonaReference,
     Project,
     Render,
     Scene,
     SceneVersion,
     ScriptVersion,
+    Series,
+    SeriesContinuity,
     StarQuote,
     StarTransaction,
     TelegramPayment,
     TelegramUser,
+    VoiceProfile,
     WorkerHeartbeat,
     utcnow,
 )
@@ -83,6 +91,14 @@ class MemoryRepository:
         self.outbox: dict[str, NotificationOutbox] = {}
         self.idempotency: dict[str, IdempotencyRecord] = {}
         self.workers: dict[str, WorkerHeartbeat] = {}
+        self.voice_profiles: dict[str, VoiceProfile] = {}
+        self.friendships: dict[str, Friendship] = {}
+        self.personas: dict[str, Persona] = {}
+        self.persona_references: dict[str, PersonaReference] = {}
+        self.series: dict[str, Series] = {}
+        self.series_continuity: dict[str, SeriesContinuity] = {}
+        self.dialogue_tracks: dict[str, DialogueTrack] = {}
+        self.audio_mixes: dict[str, AudioMixSpec] = {}
         self._lock = threading.Lock()
 
     @contextmanager
@@ -114,6 +130,18 @@ class MemoryRepository:
     def user_by_telegram(self, telegram_user_id: int) -> TelegramUser | None:
         uid = self.users_by_telegram.get(telegram_user_id)
         return self.users.get(uid) if uid else None
+
+    def user_by_username(self, username: str) -> TelegramUser | None:
+        token = username.strip().lstrip("@").lower()
+        if not token:
+            return None
+        for user in self.users.values():
+            if (user.username or "").strip().lstrip("@").lower() == token:
+                return user
+        return None
+
+    def personas_for(self, user_id: str) -> list[Persona]:
+        return [p for p in self.personas.values() if p.owner_user_id == user_id]
 
     def put_project(self, project: Project) -> Project:
         self.projects[project.id] = project

@@ -4,6 +4,10 @@ export type User = {
   username: string | null;
   first_name: string | null;
   language_code: string | null;
+  display_name?: string;
+  bio?: string;
+  default_traits?: string[];
+  allow_friends_to_cast_me?: boolean;
 };
 
 export type AuthResponse = { token: string; user: User };
@@ -28,6 +32,10 @@ export type Project = {
   default_text_model?: string | null;
   default_voice_model?: string | null;
   style?: string | null;
+  content_type?: string | null;
+  visibility?: string | null;
+  series_id?: string | null;
+  episode_number?: number | null;
   active_job_id?: string | null;
   active_job_status?: string | null;
   final_asset_version_id?: string | null;
@@ -40,6 +48,33 @@ export type Character = {
   description: string;
   locked_identity: boolean;
   primary_reference_id: string | null;
+  display_name?: string;
+  personality_traits?: string[];
+  role_archetype?: string;
+  kind?: string;
+  linked_user_id?: string | null;
+  voice_profile_id?: string | null;
+};
+
+export type Persona = {
+  id: string;
+  owner_user_id: string;
+  name: string;
+  display_name: string;
+  description: string;
+  personality_traits: string[];
+  role_archetype: string;
+  kind: string;
+  linked_user_id: string | null;
+  locked_identity: boolean;
+  external_ref_path: string;
+};
+
+export type Friendship = {
+  id: string;
+  requester_id: string;
+  addressee_id: string;
+  status: string;
 };
 
 export type Model = {

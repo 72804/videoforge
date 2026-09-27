@@ -6,23 +6,31 @@ from typing import Any
 from docprod.product.models import (
     Asset,
     AssetVersion,
+    AudioMixSpec,
     Character,
     CharacterReference,
+    DialogueTrack,
+    Friendship,
     GenerationAttempt,
     GenerationJob,
     GenerationPlan,
     IdempotencyRecord,
     NotificationOutbox,
     PaymentIntent,
+    Persona,
+    PersonaReference,
     Project,
     Render,
     Scene,
     SceneVersion,
     ScriptVersion,
+    Series,
+    SeriesContinuity,
     StarQuote,
     StarTransaction,
     TelegramPayment,
     TelegramUser,
+    VoiceProfile,
     WorkerHeartbeat,
 )
 from docprod.product.repository import MemoryRepository
@@ -49,6 +57,14 @@ _TABLES: tuple[tuple[str, type], ...] = (
     ("outbox", NotificationOutbox),
     ("idempotency", IdempotencyRecord),
     ("workers", WorkerHeartbeat),
+    ("voice_profiles", VoiceProfile),
+    ("friendships", Friendship),
+    ("personas", Persona),
+    ("persona_references", PersonaReference),
+    ("series", Series),
+    ("series_continuity", SeriesContinuity),
+    ("dialogue_tracks", DialogueTrack),
+    ("audio_mixes", AudioMixSpec),
 )
 
 
@@ -75,6 +91,14 @@ def dump_repository(repo: MemoryRepository) -> dict[str, Any]:
         "outbox": repo.outbox,
         "idempotency": repo.idempotency,
         "workers": repo.workers,
+        "voice_profiles": repo.voice_profiles,
+        "friendships": repo.friendships,
+        "personas": repo.personas,
+        "persona_references": repo.persona_references,
+        "series": repo.series,
+        "series_continuity": repo.series_continuity,
+        "dialogue_tracks": repo.dialogue_tracks,
+        "audio_mixes": repo.audio_mixes,
     }
     for name, rows in mapping.items():
         payload[name] = {key: model.model_dump(mode="json") for key, model in rows.items()}

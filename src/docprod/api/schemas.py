@@ -48,6 +48,10 @@ class UserView(BaseModel):
     username: str | None = None
     first_name: str | None = None
     language_code: str | None = None
+    display_name: str = ""
+    bio: str = ""
+    default_traits: list[str] = Field(default_factory=list)
+    allow_friends_to_cast_me: bool = False
 
 
 class AuthResponse(BaseModel):
@@ -68,6 +72,8 @@ class ProjectCreate(BaseModel):
     default_text_model: str = "auto"
     default_voice_model: str = "auto"
     style: str = ""
+    content_type: str = "custom_story"
+    visibility: str = "PRIVATE"
 
 
 class ProjectPatch(BaseModel):
@@ -83,6 +89,7 @@ class ProjectPatch(BaseModel):
     default_text_model: str | None = None
     default_voice_model: str | None = None
     style: str | None = None
+    visibility: str | None = None
 
 
 class ProjectSummaryView(BaseModel):
@@ -105,6 +112,10 @@ class ProjectSummaryView(BaseModel):
     default_text_model: str | None = None
     default_voice_model: str | None = None
     style: str | None = None
+    content_type: str | None = None
+    visibility: str | None = None
+    series_id: str | None = None
+    episode_number: int | None = None
     active_job_id: str | None = None
     active_job_status: str | None = None
     final_asset_version_id: str | None = None
@@ -114,12 +125,20 @@ class CharacterCreate(BaseModel):
     name: str
     description: str = ""
     locked_identity: bool = False
+    personality_traits: list[str] = Field(default_factory=list)
+    role_archetype: str = ""
+    appearance_notes: str = ""
+    catchphrases: list[str] = Field(default_factory=list)
+    behavioral_quirks: list[str] = Field(default_factory=list)
 
 
 class CharacterPatch(BaseModel):
     name: str | None = None
     description: str | None = None
     locked_identity: bool | None = None
+    personality_traits: list[str] | None = None
+    role_archetype: str | None = None
+    appearance_notes: str | None = None
 
 
 class CharacterView(BaseModel):
@@ -129,6 +148,12 @@ class CharacterView(BaseModel):
     description: str
     locked_identity: bool
     primary_reference_id: str | None = None
+    display_name: str = ""
+    personality_traits: list[str] = Field(default_factory=list)
+    role_archetype: str = ""
+    kind: str = "standalone"
+    linked_user_id: str | None = None
+    voice_profile_id: str | None = None
 
 
 class CharacterReferenceView(BaseModel):
@@ -265,3 +290,67 @@ class UsageView(BaseModel):
     transactions: list[UsageTxnView]
     stars_debited: int
     stars_purchased: int
+
+
+class ProfilePatch(BaseModel):
+    display_name: str | None = None
+    bio: str | None = None
+    default_traits: list[str] | None = None
+    allow_friends_to_cast_me: bool | None = None
+
+
+class FriendRequestBody(BaseModel):
+    username: str | None = None
+    user_id: str | None = None
+
+
+class FriendshipView(BaseModel):
+    id: str
+    requester_id: str
+    addressee_id: str
+    status: str
+
+
+class PersonaCreate(BaseModel):
+    name: str
+    description: str = ""
+    personality_traits: list[str] = Field(default_factory=list)
+    role_archetype: str = ""
+    appearance_notes: str = ""
+    catchphrases: list[str] = Field(default_factory=list)
+    behavioral_quirks: list[str] = Field(default_factory=list)
+
+
+class PersonaView(BaseModel):
+    id: str
+    owner_user_id: str
+    name: str
+    display_name: str
+    description: str
+    personality_traits: list[str]
+    role_archetype: str
+    kind: str
+    linked_user_id: str | None = None
+    locked_identity: bool
+    external_ref_path: str = ""
+
+
+class CastBody(BaseModel):
+    persona_id: str | None = None
+    friend_user_id: str | None = None
+
+
+class SeriesView(BaseModel):
+    id: str
+    slug: str
+    title: str
+    description: str
+    episode_id: str | None = None
+
+
+class VoiceProfileView(BaseModel):
+    id: str
+    provider: str
+    voice_id: str
+    display_name: str
+    language: str

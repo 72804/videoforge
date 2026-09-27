@@ -34,6 +34,11 @@ class TelegramUserRow(Base):
     username: Mapped[str | None] = mapped_column(Text)
     first_name: Mapped[str | None] = mapped_column(Text)
     language_code: Mapped[str | None] = mapped_column(Text)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    bio: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    avatar_storage_key: Mapped[str | None] = mapped_column(Text)
+    default_traits: Mapped[Any] = mapped_column(JSONB, nullable=False, default=list)
+    allow_friends_to_cast_me: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -58,6 +63,9 @@ class ProjectRow(Base):
     default_text_model: Mapped[str] = mapped_column(Text, nullable=False)
     default_voice_model: Mapped[str] = mapped_column(Text, nullable=False)
     style: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    visibility: Mapped[str] = mapped_column(Text, nullable=False, default="PRIVATE")
+    series_id: Mapped[str | None] = mapped_column(PK)
+    episode_number: Mapped[int | None] = mapped_column(Integer)
     active_script_version_id: Mapped[str | None] = mapped_column(PK)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -74,6 +82,7 @@ class CharacterRow(Base):
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
     locked_identity: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     primary_reference_id: Mapped[str | None] = mapped_column(PK)
+    persona: Mapped[Any] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -102,6 +111,7 @@ class ScriptVersionRow(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     language: Mapped[str] = mapped_column(Text, nullable=False)
+    story_spec: Mapped[Any] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -132,6 +142,8 @@ class SceneVersionRow(Base):
     character_ids: Mapped[Any] = mapped_column(JSONB, nullable=False)
     dialogue: Mapped[str] = mapped_column(Text, nullable=False, default="")
     narration: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    dialogue_lines: Mapped[Any] = mapped_column(JSONB, nullable=False, default=list)
+    supplied_reference_keys: Mapped[Any] = mapped_column(JSONB, nullable=False, default=list)
     duration_seconds: Mapped[float] = mapped_column(Float, nullable=False)
     production_class: Mapped[str] = mapped_column(Text, nullable=False)
     image_model: Mapped[str] = mapped_column(Text, nullable=False)
@@ -287,6 +299,7 @@ class RenderRow(Base):
     project_id: Mapped[str] = mapped_column(ForeignKey("projects.id"), nullable=False)
     storage_key: Mapped[str] = mapped_column(Text, nullable=False)
     stale: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    burn_subtitles: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     asset_version_id: Mapped[str | None] = mapped_column(PK)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -386,3 +399,91 @@ class WorkerHeartbeatRow(Base):
     hostname: Mapped[str] = mapped_column(Text, nullable=False, default="")
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     current_job_id: Mapped[str | None] = mapped_column(PK)
+
+
+class VoiceProfileRow(Base):
+    __tablename__ = "voice_profiles"
+
+    id: Mapped[str] = mapped_column(PK, primary_key=True)
+    owner_user_id: Mapped[str | None] = mapped_column(PK)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    voice_id: Mapped[str] = mapped_column(Text, nullable=False)
+    display_name: Mapped[str] = mapped_column(Text, nullable=False)
+    language: Mapped[str] = mapped_column(Text, nullable=False, default="en")
+    style: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    emotion_defaults: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class FriendshipRow(Base):
+    __tablename__ = "friendships"
+    __table_args__ = (
+        UniqueConstraint("requester_id", "addressee_id", name="friendships_pair_key"),
+        Index("friendships_addressee_idx", "addressee_id"),
+    )
+
+    id: Mapped[str] = mapped_column(PK, primary_key=True)
+    requester_id: Mapped[str] = mapped_column(ForeignKey("telegram_users.id"), nullable=False)
+    addressee_id: Mapped[str] = mapped_column(ForeignKey("telegram_users.id"), nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PersonaRow(Base):
+    __tablename__ = "personas"
+    __table_args__ = (Index("personas_owner_idx", "owner_user_id"),)
+
+    id: Mapped[str] = mapped_column(PK, primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("telegram_users.id"), nullable=False)
+    payload: Mapped[Any] = mapped_column(JSONB, nullable=False)
+
+
+class PersonaReferenceRow(Base):
+    __tablename__ = "persona_references"
+
+    id: Mapped[str] = mapped_column(PK, primary_key=True)
+    persona_id: Mapped[str] = mapped_column(ForeignKey("personas.id"), nullable=False)
+    storage_key: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    external_path: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    primary_flag: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SeriesRow(Base):
+    __tablename__ = "series"
+
+    id: Mapped[str] = mapped_column(PK, primary_key=True)
+    owner_user_id: Mapped[str] = mapped_column(ForeignKey("telegram_users.id"), nullable=False)
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SeriesContinuityRow(Base):
+    __tablename__ = "series_continuity"
+
+    id: Mapped[str] = mapped_column(PK, primary_key=True)
+    series_id: Mapped[str] = mapped_column(ForeignKey("series.id"), nullable=False)
+    previous_event_summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    running_jokes: Mapped[Any] = mapped_column(JSONB, nullable=False, default=list)
+    unresolved_conflicts: Mapped[Any] = mapped_column(JSONB, nullable=False, default=list)
+    character_notes: Mapped[Any] = mapped_column(JSONB, nullable=False, default=dict)
+    last_episode_project_id: Mapped[str | None] = mapped_column(PK)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class DialogueTrackRow(Base):
+    __tablename__ = "dialogue_tracks"
+
+    id: Mapped[str] = mapped_column(PK, primary_key=True)
+    payload: Mapped[Any] = mapped_column(JSONB, nullable=False)
+
+
+class AudioMixRow(Base):
+    __tablename__ = "audio_mixes"
+
+    id: Mapped[str] = mapped_column(PK, primary_key=True)
+    payload: Mapped[Any] = mapped_column(JSONB, nullable=False)

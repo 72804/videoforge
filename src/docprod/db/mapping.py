@@ -8,8 +8,11 @@ from docprod.product.ids import new_id
 from docprod.product.models import (
     Asset,
     AssetVersion,
+    AudioMixSpec,
     Character,
     CharacterReference,
+    DialogueTrack,
+    Friendship,
     GenerationAttempt,
     GenerationJob,
     GenerationPlan,
@@ -17,15 +20,20 @@ from docprod.product.models import (
     IdempotencyRecord,
     NotificationOutbox,
     PaymentIntent,
+    Persona,
+    PersonaReference,
     Project,
     Render,
     Scene,
     SceneVersion,
     ScriptVersion,
+    Series,
+    SeriesContinuity,
     StarQuote,
     StarTransaction,
     TelegramPayment,
     TelegramUser,
+    VoiceProfile,
     WorkerHeartbeat,
 )
 
@@ -60,12 +68,34 @@ def project_from_row(row: orm.ProjectRow) -> Project:
     return Project.model_validate(row_dict(row))
 
 
+_CHARACTER_PERSONA = (
+    "display_name",
+    "personality_traits",
+    "role_archetype",
+    "appearance_notes",
+    "relationships",
+    "catchphrases",
+    "behavioral_quirks",
+    "voice_profile_id",
+    "linked_user_id",
+    "owner_user_id",
+    "persona_id",
+    "kind",
+    "consent_policy",
+)
+
+
 def character_to_row(character: Character) -> orm.CharacterRow:
-    return orm.CharacterRow(**character.model_dump())
+    data = character.model_dump()
+    persona = {key: data.pop(key) for key in _CHARACTER_PERSONA}
+    return orm.CharacterRow(**data, persona=persona)
 
 
 def character_from_row(row: orm.CharacterRow) -> Character:
-    return Character.model_validate(row_dict(row))
+    data = row_dict(row)
+    persona = data.pop("persona") or {}
+    data.update(persona)
+    return Character.model_validate(data)
 
 
 def reference_to_row(ref: CharacterReference) -> orm.CharacterReferenceRow:
@@ -257,6 +287,76 @@ def worker_from_row(row: orm.WorkerHeartbeatRow) -> WorkerHeartbeat:
     return WorkerHeartbeat.model_validate(row_dict(row))
 
 
+def voice_to_row(profile: VoiceProfile) -> orm.VoiceProfileRow:
+    return orm.VoiceProfileRow(**profile.model_dump())
+
+
+def voice_from_row(row: orm.VoiceProfileRow) -> VoiceProfile:
+    return VoiceProfile.model_validate(row_dict(row))
+
+
+def friendship_to_row(row: Friendship) -> orm.FriendshipRow:
+    return orm.FriendshipRow(**row.model_dump())
+
+
+def friendship_from_row(row: orm.FriendshipRow) -> Friendship:
+    return Friendship.model_validate(row_dict(row))
+
+
+def persona_to_row(persona: Persona) -> orm.PersonaRow:
+    return orm.PersonaRow(
+        id=persona.id,
+        owner_user_id=persona.owner_user_id,
+        payload=persona.model_dump(),
+    )
+
+
+def persona_from_row(row: orm.PersonaRow) -> Persona:
+    return Persona.model_validate(row.payload)
+
+
+def persona_ref_to_row(ref: PersonaReference) -> orm.PersonaReferenceRow:
+    return orm.PersonaReferenceRow(**_dump(ref, primary="primary_flag"))
+
+
+def persona_ref_from_row(row: orm.PersonaReferenceRow) -> PersonaReference:
+    data = row_dict(row)
+    data["primary"] = data.pop("primary_flag")
+    return PersonaReference.model_validate(data)
+
+
+def series_to_row(series: Series) -> orm.SeriesRow:
+    return orm.SeriesRow(**series.model_dump())
+
+
+def series_from_row(row: orm.SeriesRow) -> Series:
+    return Series.model_validate(row_dict(row))
+
+
+def continuity_to_row(item: SeriesContinuity) -> orm.SeriesContinuityRow:
+    return orm.SeriesContinuityRow(**item.model_dump())
+
+
+def continuity_from_row(row: orm.SeriesContinuityRow) -> SeriesContinuity:
+    return SeriesContinuity.model_validate(row_dict(row))
+
+
+def dialogue_to_row(item: DialogueTrack) -> orm.DialogueTrackRow:
+    return orm.DialogueTrackRow(id=item.id, payload=item.model_dump())
+
+
+def dialogue_from_row(row: orm.DialogueTrackRow) -> DialogueTrack:
+    return DialogueTrack.model_validate(row.payload)
+
+
+def mix_to_row(item: AudioMixSpec) -> orm.AudioMixRow:
+    return orm.AudioMixRow(id=item.id, payload=item.model_dump())
+
+
+def mix_from_row(row: orm.AudioMixRow) -> AudioMixSpec:
+    return AudioMixSpec.model_validate(row.payload)
+
+
 FLUSH_ORDER: list[tuple[str, type, Callable[[Any], Any], Callable[[Any], Any]]] = [
     ("users", orm.TelegramUserRow, user_to_row, user_from_row),
     ("projects", orm.ProjectRow, project_to_row, project_from_row),
@@ -278,4 +378,12 @@ FLUSH_ORDER: list[tuple[str, type, Callable[[Any], Any], Callable[[Any], Any]]] 
     ("outbox", orm.NotificationOutboxRow, outbox_to_row, outbox_from_row),
     ("idempotency", orm.IdempotencyRecordRow, idem_to_row, idem_from_row),
     ("workers", orm.WorkerHeartbeatRow, worker_to_row, worker_from_row),
+    ("voice_profiles", orm.VoiceProfileRow, voice_to_row, voice_from_row),
+    ("friendships", orm.FriendshipRow, friendship_to_row, friendship_from_row),
+    ("personas", orm.PersonaRow, persona_to_row, persona_from_row),
+    ("persona_references", orm.PersonaReferenceRow, persona_ref_to_row, persona_ref_from_row),
+    ("series", orm.SeriesRow, series_to_row, series_from_row),
+    ("series_continuity", orm.SeriesContinuityRow, continuity_to_row, continuity_from_row),
+    ("dialogue_tracks", orm.DialogueTrackRow, dialogue_to_row, dialogue_from_row),
+    ("audio_mixes", orm.AudioMixRow, mix_to_row, mix_from_row),
 ]

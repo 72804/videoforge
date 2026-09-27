@@ -59,5 +59,7 @@ def map_product_error(exc: Exception) -> HTTPException:
             "Idempotency key reused with a different request.",
         )
     if isinstance(exc, ProductError):
+        if "casting" in str(exc).lower():
+            return api_error(403, "CAST_FORBIDDEN", str(exc))
         return api_error(400, "INVALID_PROJECT", str(exc))
     return api_error(500, "INTERNAL", "Unexpected error.")

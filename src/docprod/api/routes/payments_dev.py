@@ -29,6 +29,10 @@ def dev_auth(body: DevAuthRequest, request: Request) -> AuthResponse:
             username=saved.username,
             first_name=saved.first_name,
             language_code=saved.language_code,
+            display_name=saved.display_name,
+            bio=saved.bio,
+            default_traits=saved.default_traits,
+            allow_friends_to_cast_me=saved.allow_friends_to_cast_me,
         ),
     )
 

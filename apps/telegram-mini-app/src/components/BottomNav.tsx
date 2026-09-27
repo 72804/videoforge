@@ -5,10 +5,10 @@ import { usePathname } from "next/navigation";
 
 const items = [
   { href: "/", label: "Home", key: "home" },
-  { href: "/projects", label: "Projects", key: "projects" },
-  { href: "/create", label: "Create", key: "create", prominent: true },
-  { href: "/credits", label: "Credits", key: "credits" },
-  { href: "/settings", label: "Settings", key: "settings" },
+  { href: "/friends", label: "Friends", key: "friends" },
+  { href: "/create/friend-group", label: "Create", key: "create", prominent: true },
+  { href: "/projects", label: "Videos", key: "projects" },
+  { href: "/profile", label: "Profile", key: "profile" },
 ];
 
 export function BottomNav() {

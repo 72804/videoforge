@@ -277,6 +277,7 @@ class LocalCanaryWorker(RealGenerationWorker):
             ],
             hard_max_usd=job.provider_cost_cap,
             pricing=self.service.pricing,
+            canary_compat=True,
         )
         if spec.estimated_provider_usd - 1e-9 > job.provider_cost_cap:
             self._fail(job_id, FailureCategory.INTERNAL_FAILURE, "PROVIDER_CAP_EXCEEDED")
@@ -480,6 +481,7 @@ class LocalCanaryWorker(RealGenerationWorker):
             ],
             hard_max_usd=job.provider_cost_cap,
             pricing=self.service.pricing,
+            canary_compat=True,
         )
         updated = EngineProjectSpec(
             content_kind=rebuilt.content_kind,

@@ -107,6 +107,14 @@ class AdapterStatus(StrEnum):
     DOCUMENTED_UNIMPLEMENTED = "documented_unimplemented"
 
 
+class CapabilityMaturity(StrEnum):
+    """How far a named capability is proven for a model."""
+
+    CATALOG_CAPABILITY = "catalog_capability"
+    IMPLEMENTED_CAPABILITY = "implemented_capability"
+    TESTED_CAPABILITY = "tested_capability"
+
+
 class UpgradeKind(StrEnum):
     STILL_LOCAL_MOTION = "still_local_motion"
     SIMPLE_I2V = "simple_i2v"

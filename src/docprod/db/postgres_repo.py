@@ -87,6 +87,14 @@ class PostgresRepository(MemoryRepository):
             "outbox": self.outbox,
             "idempotency": self.idempotency,
             "workers": self.workers,
+            "voice_profiles": self.voice_profiles,
+            "friendships": self.friendships,
+            "personas": self.personas,
+            "persona_references": self.persona_references,
+            "series": self.series,
+            "series_continuity": self.series_continuity,
+            "dialogue_tracks": self.dialogue_tracks,
+            "audio_mixes": self.audio_mixes,
         }
         for name, _cls, _to_row, from_row in FLUSH_ORDER:
             tables[name].clear()
@@ -137,6 +145,14 @@ class PostgresRepository(MemoryRepository):
             ("outbox", self.outbox),
             ("idempotency", self.idempotency),
             ("workers", self.workers),
+            ("voice_profiles", self.voice_profiles),
+            ("friendships", self.friendships),
+            ("personas", self.personas),
+            ("persona_references", self.persona_references),
+            ("series", self.series),
+            ("series_continuity", self.series_continuity),
+            ("dialogue_tracks", self.dialogue_tracks),
+            ("audio_mixes", self.audio_mixes),
         ]
 
     def flush_dirty(self) -> None:

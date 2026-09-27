@@ -28,6 +28,12 @@ def _view(character: Character) -> CharacterView:
         description=character.description,
         locked_identity=character.locked_identity,
         primary_reference_id=character.primary_reference_id,
+        display_name=character.display_name,
+        personality_traits=character.personality_traits,
+        role_archetype=character.role_archetype,
+        kind=character.kind,
+        linked_user_id=character.linked_user_id,
+        voice_profile_id=character.voice_profile_id,
     )
 
 
@@ -48,6 +54,11 @@ def create_character(
             project_id,
             name=body.name,
             description=body.description,
+            personality_traits=body.personality_traits,
+            role_archetype=body.role_archetype,
+            appearance_notes=body.appearance_notes,
+            catchphrases=body.catchphrases,
+            behavioral_quirks=body.behavioral_quirks,
         )
         if body.locked_identity:
             character = service.update_character(

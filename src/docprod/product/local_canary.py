@@ -133,6 +133,7 @@ def plan_local_canary(*, root: Path | None = None) -> dict[str, Any]:
         ],
         hard_max_usd=CANARY_HARD_CAP_USD,
         pricing=service.pricing,
+        canary_compat=True,
     )
     if spec.estimated_provider_usd - 1e-9 > CANARY_HARD_CAP_USD:
         raise ProductError("canary estimated cost exceeds $2 hard cap")
@@ -420,6 +421,7 @@ def execute_local_canary(
         references=[],
         hard_max_usd=CANARY_HARD_CAP_USD,
         pricing=service.pricing,
+        canary_compat=True,
     )
     persist_engine_outline(service.repo, project, spec)
     job = GenerationJob(

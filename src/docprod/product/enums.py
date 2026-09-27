@@ -13,6 +13,31 @@ class ContentType(StrEnum):
     DRAMATIC = "dramatic"
     HYBRID = "hybrid"
     CUSTOM_STORY = "custom_story"
+    FRIEND_GROUP = "friend_group"
+
+
+class Visibility(StrEnum):
+    PRIVATE = "PRIVATE"
+    FRIENDS = "FRIENDS"
+    PUBLIC = "PUBLIC"
+    # UNLISTED reserved; not implemented.
+
+
+class FriendshipStatus(StrEnum):
+    PENDING = "PENDING"
+    ACCEPTED = "ACCEPTED"
+    DECLINED = "DECLINED"
+    BLOCKED = "BLOCKED"
+
+
+class CharacterKind(StrEnum):
+    STANDALONE = "standalone"
+    LINKED_FRIEND = "linked_friend"
+
+
+class ConsentPolicy(StrEnum):
+    OWNER_ONLY = "owner_only"
+    FRIENDS_CAST_OK = "friends_cast_ok"
 
 
 class ProjectStatus(StrEnum):

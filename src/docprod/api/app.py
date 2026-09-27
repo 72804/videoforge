@@ -21,6 +21,7 @@ from docprod.api.routes import (
     projects,
     renders,
     scenes,
+    social,
     stars,
     usage,
 )
@@ -208,6 +209,7 @@ def create_app(
     app.include_router(auth.router, prefix=prefix)
     app.include_router(projects.router, prefix=prefix)
     app.include_router(characters.router, prefix=prefix)
+    app.include_router(social.router, prefix=prefix)
     app.include_router(plans.router, prefix=prefix)
     app.include_router(jobs.router, prefix=prefix)
     app.include_router(scenes.router, prefix=prefix)

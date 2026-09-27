@@ -26,5 +26,9 @@ def auth_telegram(body: AuthRequest, request: Request) -> AuthResponse:
             username=user.username,
             first_name=user.first_name,
             language_code=user.language_code,
+            display_name=user.display_name,
+            bio=user.bio,
+            default_traits=user.default_traits,
+            allow_friends_to_cast_me=user.allow_friends_to_cast_me,
         ),
     )

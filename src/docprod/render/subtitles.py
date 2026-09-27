@@ -195,5 +195,16 @@ def write_captions(
     return sum(1 for scene in plan.scenes if scene.subtitle.strip())
 
 
+def burn_in_required() -> bool:
+    """Product finals must mux captions. Files-only is not the intended state."""
+    return True
+
+
+def ffmpeg_subtitle_filter(ass_path: Path) -> str:
+    """ASS burn-in filter for the product renderer (not optional)."""
+    escaped = str(ass_path).replace("\\", "/").replace(":", "\\:")
+    return f"subtitles='{escaped}'"
+
+
 def scene_has_caption(scene: Scene) -> bool:
     return bool(scene.subtitle.strip())

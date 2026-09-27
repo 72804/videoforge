@@ -55,6 +55,24 @@ class ModelSpec(BaseModel):
     min_duration_seconds: float | None = None
     max_duration_seconds: float | None = None
     manual_input_required: bool = False
+    catalog_capabilities: tuple[str, ...] = ()
+    implemented_capabilities: tuple[str, ...] = ()
+    tested_capabilities: tuple[str, ...] = ()
+    input_modalities: tuple[str, ...] = ()
+    output_modalities: tuple[str, ...] = ()
+    max_reference_images: int | None = None
+    aspect_ratios: tuple[str, ...] = ()
+    resolution_options: tuple[str, ...] = ()
+    native_audio: bool = False
+    lipsync: bool = False
+    dialogue: bool = False
+    performance_transfer: bool = False
+    identity_consistency_suitability: str = ""
+    latency_tier: str = ""
+    availability: str = "catalog"
+    required_credentials: tuple[str, ...] = ()
+    fallbacks: tuple[str, ...] = ()
+    close_up_mouth_reliable: bool = False
 
 
 class ProviderSpec(BaseModel):

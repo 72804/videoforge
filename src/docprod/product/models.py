@@ -25,6 +25,7 @@ from docprod.product.enums import (
     ReferenceMode,
     StaleKind,
     StarTxnType,
+    Visibility,
 )
 from docprod.product.ids import new_id
 
@@ -41,6 +42,11 @@ class TelegramUser(BaseModel):
     username: str | None = None
     first_name: str | None = None
     language_code: str | None = None
+    display_name: str = ""
+    bio: str = ""
+    avatar_storage_key: str | None = None
+    default_traits: list[str] = Field(default_factory=list)
+    allow_friends_to_cast_me: bool = False
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -71,6 +77,9 @@ class Project(BaseModel):
     default_text_model: str = "auto"
     default_voice_model: str = "auto"
     style: str = ""
+    visibility: Visibility = Visibility.PRIVATE
+    series_id: str | None = None
+    episode_number: int | None = None
     active_script_version_id: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -97,6 +106,19 @@ class Character(BaseModel):
     description: str = ""
     locked_identity: bool = False
     primary_reference_id: str | None = None
+    display_name: str = ""
+    personality_traits: list[str] = Field(default_factory=list)
+    role_archetype: str = ""
+    appearance_notes: str = ""
+    relationships: dict[str, str] = Field(default_factory=dict)
+    catchphrases: list[str] = Field(default_factory=list)
+    behavioral_quirks: list[str] = Field(default_factory=list)
+    voice_profile_id: str | None = None
+    linked_user_id: str | None = None
+    owner_user_id: str | None = None
+    persona_id: str | None = None
+    kind: str = "standalone"
+    consent_policy: str = "owner_only"
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -124,6 +146,7 @@ class ScriptVersion(BaseModel):
     project_id: str
     body: str
     language: str
+    story_spec: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -149,6 +172,8 @@ class SceneVersion(BaseModel):
     character_ids: list[str] = Field(default_factory=list)
     dialogue: str = ""
     narration: str = ""
+    dialogue_lines: list[dict[str, Any]] = Field(default_factory=list)
+    supplied_reference_keys: list[str] = Field(default_factory=list)
     duration_seconds: float
     production_class: str = "simple_motion"
     image_model: str = "auto"
@@ -258,6 +283,120 @@ class GenerationJob(BaseModel):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class VoiceProfile(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=new_id)
+    owner_user_id: str | None = None
+    provider: str
+    voice_id: str
+    display_name: str
+    language: str = "en"
+    style: str = ""
+    emotion_defaults: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Friendship(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=new_id)
+    requester_id: str
+    addressee_id: str
+    status: str = "PENDING"
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class Persona(BaseModel):
+    """Library character owned by a user. Project characters snapshot this."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=new_id)
+    owner_user_id: str
+    name: str
+    display_name: str = ""
+    description: str = ""
+    personality_traits: list[str] = Field(default_factory=list)
+    role_archetype: str = ""
+    appearance_notes: str = ""
+    relationships: dict[str, str] = Field(default_factory=dict)
+    catchphrases: list[str] = Field(default_factory=list)
+    behavioral_quirks: list[str] = Field(default_factory=list)
+    locked_identity: bool = False
+    linked_user_id: str | None = None
+    voice_profile_id: str | None = None
+    kind: str = "standalone"
+    consent_policy: str = "owner_only"
+    primary_reference_id: str | None = None
+    external_ref_path: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class PersonaReference(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=new_id)
+    persona_id: str
+    storage_key: str
+    sha256: str = ""
+    external_path: str = ""
+    primary: bool = False
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Series(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=new_id)
+    owner_user_id: str
+    slug: str
+    title: str
+    description: str = ""
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class SeriesContinuity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=new_id)
+    series_id: str
+    previous_event_summary: str = ""
+    running_jokes: list[str] = Field(default_factory=list)
+    unresolved_conflicts: list[str] = Field(default_factory=list)
+    character_notes: dict[str, str] = Field(default_factory=dict)
+    last_episode_project_id: str | None = None
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class DialogueTrack(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    scene_id: str | None = None
+    speaker_character_id: str
+    voice_profile_id: str | None = None
+    text: str
+    emotion: str = ""
+    start_seconds: float | None = None
+    end_seconds: float | None = None
+    kind: str = "dialogue"
+
+
+class AudioMixSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(default_factory=new_id)
+    project_id: str
+    dialogue_track_ids: list[str] = Field(default_factory=list)
+    narration_asset_id: str | None = None
+    music_model: str = "lyria-3.5"
+    sfx_model: str = "procedural-sfx"
+    burn_subtitles: bool = True
+
+
 class GenerationAttempt(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -290,6 +429,7 @@ class Render(BaseModel):
     project_id: str
     storage_key: str
     stale: bool = False
+    burn_subtitles: bool = True
     asset_version_id: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
 

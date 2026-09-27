@@ -28,11 +28,23 @@ export function HomeScreen() {
 
   return (
     <>
-      <h1>Create your next video</h1>
-      <p className="lede">Write a prompt. We’ll handle story, pictures, motion, and sound.</p>
-      <Link href="/create" className="btn primary" data-testid="create-cta">
-        + Create Video
+      <h1>Friend group videos</h1>
+      <p className="lede">Make short movies of your people. Recurring faces, voices, and inside jokes.</p>
+      <Link href="/create/friend-group" className="btn primary" data-testid="create-cta">
+        + Create Friend Group Video
       </Link>
+      <div style={{ height: 10 }} />
+      <Link href="/create" className="btn ghost" data-testid="custom-story-cta">
+        Custom story
+      </Link>
+      <div className="row" style={{ marginTop: 12 }}>
+        <Link href="/projects" className="btn ghost">
+          My Videos
+        </Link>
+        <Link href="/friends" className="btn ghost">
+          Friends
+        </Link>
+      </div>
       {error ? <p className="error">{error}</p> : null}
       <div className="card" style={{ marginTop: 18 }}>
         <div className="lede" style={{ margin: 0 }}>Available</div>
