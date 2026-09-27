@@ -149,14 +149,48 @@ def test_birko_import_does_not_copy_files() -> None:
     owner, _ = _users(svc)
     seeded = social_ops.seed_birko_foundation(svc, owner)
     names = {p.name for p in seeded["personas"]}
-    assert names == {"Birko", "Kemal", "Müge"}
-    for persona in seeded["personas"]:
+    assert names == {"Birko", "Kemal", "Müge", "Erni", "HG", "Musti"}
+    locked = {p.name: p for p in seeded["personas"]}
+    for name in ("Birko", "Kemal", "Müge"):
+        persona = locked[name]
         assert persona.locked_identity
         assert persona.external_ref_path.startswith("projects/birko_kemal_drama_canary/")
+        assert "ref_" in persona.external_ref_path
+    assert locked["Birko"].catchphrases == ["dog", "zorsun"]
+    assert "Dayiiii" in locked["HG"].relationships["Birko"]
     episode = seeded["episode"]
     assert episode.title == "Birko Episode 2"
     assert episode.status.value == "draft"
     assert episode.quality_profile == "premium"
+    assert episode.language == "tr"
+    assert episode.active_script_version_id is None
+    assert "Krispy Kreme" in episode.prompt
+    assert "PREMISE LOCKED" in episode.prompt
+    assert "secretly tells each person" in episode.prompt
+    assert "last donut" in episode.prompt
+    again = social_ops.seed_birko_foundation(svc, owner)
+    assert {p.id for p in again["personas"]} == {p.id for p in seeded["personas"]}
+    from pathlib import Path
+
+    from docprod.product.series import birko_character_refs_dir, list_birko_ref_inventory
+
+    inventory = list_birko_ref_inventory()
+    refs = birko_character_refs_dir()
+    by_slug = inventory["by_slug"]
+    assert isinstance(by_slug, dict)
+    for name, slug in (("Erni", "erni"), ("HG", "hg"), ("Musti", "musti")):
+        found = list(by_slug[slug]["found"]) if isinstance(by_slug[slug], dict) else []
+        if found:
+            assert locked[name].locked_identity is True
+            assert Path(locked[name].external_ref_path).name in found
+            assert slug not in inventory["missing_slugs"]
+        else:
+            assert locked[name].locked_identity is False
+            assert slug in inventory["missing_slugs"]
+    if refs.is_dir():
+        present = set(inventory["present_files"])
+        assert {"ref_birko.jpg", "ref_kemal.jpg", "ref_muge.jpg"} <= present
+    assert Path(locked["Birko"].external_ref_path).name == "ref_birko.jpg"
 
 
 def test_story_spec_and_voices_and_subtitles() -> None:

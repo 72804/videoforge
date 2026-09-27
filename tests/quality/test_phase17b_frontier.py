@@ -37,6 +37,7 @@ def test_premium_script_is_astra_opus_astra() -> None:
     assert plan["primary_model"] == "gpt-6-astra"
     assert plan["critic_model"] == "claude-opus-5-5"
     assert plan["finalizer_model"] == "gpt-6-astra"
+    assert plan["treatment_count"] == 3
     max_plan = script_ensemble_plan(QualityProfile.MAX_QUALITY, flagship=True)
     assert max_plan["critic_model"] == "claude-opus-5-5"
 

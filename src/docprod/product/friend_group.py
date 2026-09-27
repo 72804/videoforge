@@ -42,17 +42,25 @@ class FriendGroupStorySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     title: str
+    logline: str = ""
     cold_open_hook: str
     premise: str
+    target_duration: float = 0.0
     cast: list[str] = Field(default_factory=list)
     character_relationships: dict[str, str] = Field(default_factory=dict)
+    character_relationship_context: dict[str, str] = Field(default_factory=dict)
     scene_beats: list[SceneBeatSpec] = Field(default_factory=list)
     dialogue_lines: list[DialogueLineSpec] = Field(default_factory=list)
     narration_lines: list[str] = Field(default_factory=list)
     comedy_drama_tension: str = ""
     callbacks: list[str] = Field(default_factory=list)
     payoff: str = ""
+    ending: str = ""
     cliffhanger: str = ""
+    continuity_updates: list[str] = Field(default_factory=list)
+    motion_graphics_requests: list[str] = Field(default_factory=list)
+    audio_intent: str = ""
     estimated_duration: float = 24.0
     content_style: str = "friend_group"
     writer_instructions: str = HOOK_FIRST_WRITER_INSTRUCTIONS
+    engine_generated: bool = False

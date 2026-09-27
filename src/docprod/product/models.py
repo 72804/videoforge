@@ -119,6 +119,9 @@ class Character(BaseModel):
     persona_id: str | None = None
     kind: str = "standalone"
     consent_policy: str = "owner_only"
+    voice_notes: str = ""
+    never_do: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -331,6 +334,9 @@ class Persona(BaseModel):
     consent_policy: str = "owner_only"
     primary_reference_id: str | None = None
     external_ref_path: str = ""
+    voice_notes: str = ""
+    never_do: list[str] = Field(default_factory=list)
+    aliases: list[str] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=utcnow)
 
 

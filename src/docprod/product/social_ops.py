@@ -138,6 +138,9 @@ def snapshot_persona_to_project(
         persona_id=persona.id,
         kind=persona.kind,
         consent_policy=persona.consent_policy,
+        voice_notes=persona.voice_notes,
+        never_do=list(persona.never_do),
+        aliases=list(persona.aliases),
     )
     svc.repo.characters[character.id] = character
     return character

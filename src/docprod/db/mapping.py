@@ -82,6 +82,9 @@ _CHARACTER_PERSONA = (
     "persona_id",
     "kind",
     "consent_policy",
+    "voice_notes",
+    "never_do",
+    "aliases",
 )
 
 

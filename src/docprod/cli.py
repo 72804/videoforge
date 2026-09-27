@@ -3063,6 +3063,68 @@ def telegram_product_import_json(
     console.print(f"Imported {store} into PostgreSQL")
 
 
+@app.command("friend-group-episode")
+def friend_group_episode(
+    stage: str = typer.Option(
+        "story-plan",
+        "--stage",
+        help="story-plan (zero network) or story-generate (gated)",
+    ),
+    series_slug: str = typer.Option("birko", "--series-slug"),
+    episode: int = typer.Option(2, "--episode"),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Generic series/episode story pipeline. Birko is one record, not a special engine."""
+    from docprod.exceptions import PaidApiNotConfirmedError
+    from docprod.product.errors import AuthorizationError, ProductError
+    from docprod.product.story_pipeline import run_friend_group_episode
+
+    token = stage.strip().lower()
+    try:
+        payload = run_friend_group_episode(
+            stage=token,
+            series_slug=series_slug.strip(),
+            episode_number=episode,
+            confirm_paid=confirm_paid,
+        )
+    except PaidApiNotConfirmedError as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=2) from exc
+    except (AuthorizationError, ProductError, ValueError) as exc:
+        console.print(str(exc))
+        raise typer.Exit(code=1) from exc
+    plan = payload["plan"] if isinstance(payload.get("plan"), dict) else {}
+    console.print(f"stage={payload.get('stage')} series={series_slug} episode={episode}")
+    calls = plan.get("calls") if isinstance(plan.get("calls"), list) else []
+    primary = calls[0].get("model_id") if calls and isinstance(calls[0], dict) else ""
+    console.print(
+        f"treatments={plan.get('treatment_count')} primary={primary} "
+        f"hard_cap_usd={plan.get('hard_cap_usd')} estimated_usd={plan.get('estimated_usd')}"
+    )
+    console.print(
+        f"text_model_calls={payload.get('text_model_calls', 0)} "
+        f"media_calls={payload.get('media_calls', 0)} stars={payload.get('stars', 0)}"
+    )
+    artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
+    if artifacts:
+        console.print(f"review={artifacts.get('review')}")
+        console.print(f"plan_json={artifacts.get('plan')}")
+
+
+@app.command("birko-episode2")
+def birko_episode2(
+    stage: str = typer.Option("story-plan", "--stage"),
+    confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+) -> None:
+    """Convenience alias for friend-group-episode --series-slug birko --episode 2."""
+    friend_group_episode(
+        stage=stage,
+        series_slug="birko",
+        episode=2,
+        confirm_paid=confirm_paid,
+    )
+
+
 def main() -> None:
     app()
 
