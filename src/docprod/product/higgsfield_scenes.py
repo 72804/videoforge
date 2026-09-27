@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +21,11 @@ from docprod.product.simple_video import (
     SIMPLE_VIDEO_HARD_CAP_USD,
 )
 from docprod.providers.higgsfield import (
+    SEEDANCE_CONTRACTS,
     higgsfield_credentials_present,
     seedance_reference_to_video_body,
     seedance_request_fingerprint,
+    submit_higgsfield_json,
 )
 from docprod.quality.router import estimate_model_cost
 from docprod.render.ffmpeg import probe_media
@@ -38,6 +42,27 @@ HIGGSFIELD_PLAN_RELATIVE = (
 )
 HIGGSFIELD_REVIEW_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/review/episode_2_higgsfield_scene_review.md"
+)
+HIGGSFIELD_LEDGER_RELATIVE = (
+    "projects/birko_kemal_drama_canary/artifacts/render/episode_2/"
+    "higgsfield_ledger.json"
+)
+APPROVED_EXPECTED_USD = 8.64
+APPROVED_RESERVED_USD = 10.656
+APPROVED_HARD_CAP_USD = 12.0
+APPROVED_SCENE_IDS = (
+    "HF1_hook_bill",
+    "HF2_order_setup",
+    "HF3_birko_slips",
+    "HF4_muge_kemal",
+    "HF5_erni",
+    "HF6_musti",
+    "HF7_kemal_pays",
+    "HF8_payoff",
+)
+APPROVED_DURATIONS = (6, 7, 6, 8, 9, 9, 8, 7)
+APPROVED_PLAN_FINGERPRINT = (
+    "fa84ed9a50cd9ed384444ec17069bb458c2fbf55d098fee5c4bcc86ad15bd0d6"
 )
 INTERIOR_LOCATION_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/stills/"
@@ -662,6 +687,119 @@ def format_higgsfield_cli_cost_lines(payload: dict[str, object]) -> tuple[str, s
     return totals, creds
 
 
+def higgsfield_plan_fingerprint(plan: HiggsfieldScenePlan) -> str:
+    payload = {
+        "scene_ids": [scene.scene_id for scene in plan.scenes],
+        "durations": [int(scene.duration) for scene in plan.scenes],
+        "expected_usd": plan.expected_usd,
+        "reserved_usd": plan.reserved_usd,
+        "hard_cap_usd": plan.hard_cap_usd,
+        "cap_ok": plan.cap_ok,
+        "native_audio": plan.native_audio,
+        "external_tts": plan.external_tts,
+        "bodies": [
+            {
+                "scene_id": scene.scene_id,
+                "model": scene.model,
+                "prompt": scene.request_body.get("prompt"),
+                "duration": scene.request_body.get("duration"),
+                "generate_audio": scene.request_body.get("generate_audio"),
+                "aspect_ratio": scene.request_body.get("aspect_ratio"),
+                "resolution": scene.request_body.get("resolution"),
+                "has_audio_urls": "audio_urls" in scene.request_body,
+                "image_names": [
+                    Path(str(url).replace("file://", "")).name
+                    for url in (scene.request_body.get("image_urls") or [])
+                ],
+            }
+            for scene in plan.scenes
+        ],
+    }
+    encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def higgsfield_live_stop_reasons(
+    *,
+    series_slug: str,
+    episode_number: int,
+    stage: str,
+    confirm_paid: bool,
+    plan: HiggsfieldScenePlan,
+    settings: Settings | None = None,
+    require_confirm_paid: bool = True,
+    approved_fingerprint: str | None = None,
+) -> list[str]:
+    reasons: list[str] = []
+    if series_slug.strip().casefold() != "birko" or int(episode_number) != 2:
+        reasons.append("series/episode is not birko episode 2")
+    if stage.strip().lower() != "higgsfield-scene-generate":
+        reasons.append("stage is not higgsfield-scene-generate")
+    if require_confirm_paid and not confirm_paid:
+        reasons.append("confirm_paid is false")
+    if not higgsfield_credentials_present(settings):
+        reasons.append("HF_API_KEY is not present")
+    if tuple(scene.scene_id for scene in plan.scenes) != APPROVED_SCENE_IDS:
+        reasons.append("scene ids do not match the approved 8-scene plan")
+    if tuple(int(scene.duration) for scene in plan.scenes) != APPROVED_DURATIONS:
+        reasons.append("durations do not match the approved 8-scene plan")
+    if abs(float(plan.expected_usd) - APPROVED_EXPECTED_USD) > 1e-9:
+        reasons.append("expected_total is not 8.64")
+    if abs(float(plan.reserved_usd) - APPROVED_RESERVED_USD) > 1e-9:
+        reasons.append("reserved_total is not 10.656")
+    if abs(float(plan.hard_cap_usd) - APPROVED_HARD_CAP_USD) > 1e-9:
+        reasons.append("hard_cap_usd is not 12.0")
+    if plan.cap_ok is not True:
+        reasons.append("cap_ok is not True")
+    if float(plan.reserved_usd) - 1e-9 > APPROVED_HARD_CAP_USD:
+        reasons.append("reserved cost exceeds $12")
+    expected = APPROVED_PLAN_FINGERPRINT if approved_fingerprint is None else approved_fingerprint
+    actual = higgsfield_plan_fingerprint(plan)
+    if not expected or actual != expected:
+        reasons.append("plan fingerprint mismatch")
+    return reasons
+
+
+def assert_higgsfield_live_authorized(
+    *,
+    series_slug: str,
+    episode_number: int,
+    stage: str,
+    confirm_paid: bool,
+    plan: HiggsfieldScenePlan,
+    settings: Settings | None = None,
+    approved_fingerprint: str | None = None,
+) -> None:
+    reasons = higgsfield_live_stop_reasons(
+        series_slug=series_slug,
+        episode_number=episode_number,
+        stage=stage,
+        confirm_paid=confirm_paid,
+        plan=plan,
+        settings=settings,
+        require_confirm_paid=True,
+        approved_fingerprint=approved_fingerprint,
+    )
+    if reasons:
+        raise ProductError("STOP BEFORE HTTP: " + "; ".join(reasons))
+
+
+def _load_ledger(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {"operations": {}}
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        return {"operations": {}}
+    if not isinstance(payload.get("operations"), dict):
+        payload["operations"] = {}
+    return payload
+
+
+def _save_ledger(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+
+
 def execute_higgsfield_scene_plan(
     *,
     refs: list[dict[str, object]],
@@ -680,6 +818,7 @@ def execute_higgsfield_scene_plan(
     payload["external_tts"] = False
     payload["native_audio_policy"] = "seedance_native_dialogue"
     payload["fallback_model"] = SIMPLE_SECONDARY_MODEL
+    payload["plan_fingerprint"] = higgsfield_plan_fingerprint(plan)
     payload["execute"] = False
     plan_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     review_path.write_text(format_higgsfield_review(plan, report), encoding="utf-8")
@@ -694,6 +833,7 @@ def execute_higgsfield_scene_plan(
         "reserved_usd": plan.reserved_usd,
         "hard_cap_usd": plan.hard_cap_usd,
         "cap_ok": plan.cap_ok,
+        "plan_fingerprint": payload["plan_fingerprint"],
         "higgsfield_credentials_present": credentials_present,
         "new_image_usd": 0.0,
         "new_tts_usd": 0.0,
@@ -706,24 +846,111 @@ def execute_higgsfield_scene_plan(
     }
 
 
+def execute_higgsfield_scene_preflight(
+    *,
+    refs: list[dict[str, object]],
+    settings: Settings | None = None,
+    series_slug: str = "birko",
+    episode_number: int = 2,
+) -> dict[str, object]:
+    planned = execute_higgsfield_scene_plan(refs=refs, settings=settings)
+    plan = build_higgsfield_scenes(load_existing_story(), refs)
+    reasons = higgsfield_live_stop_reasons(
+        series_slug=series_slug,
+        episode_number=episode_number,
+        stage="higgsfield-scene-generate",
+        confirm_paid=True,
+        plan=plan,
+        settings=settings,
+        require_confirm_paid=False,
+    )
+    authorized = not reasons
+    return {
+        **planned,
+        "stage": "higgsfield-scene-preflight",
+        "ready_for_live": authorized,
+        "live_post_authorized": authorized,
+        "confirm_paid_required": True,
+        "native_audio": True,
+        "external_tts": False,
+        "model": SIMPLE_PRIMARY_MODEL,
+        "series": series_slug,
+        "episode": episode_number,
+        "stop_reasons": reasons,
+        "provider_http_calls": 0,
+        "execute": False,
+    }
+
+
 def execute_higgsfield_scene_generate(
     *,
     confirm_paid: bool,
     refs: list[dict[str, object]],
     execute_calls: bool = False,
     settings: Settings | None = None,
+    series_slug: str = "birko",
+    episode_number: int = 2,
+    submit: Callable[..., dict[str, Any]] | None = None,
+    approved_fingerprint: str | None = None,
 ) -> dict[str, object]:
     if not confirm_paid:
         raise PaidApiNotConfirmedError(
             "higgsfield-scene-generate requires --confirm-paid after higgsfield-scene-plan"
         )
     planned = execute_higgsfield_scene_plan(refs=refs, settings=settings)
-    if not execute_calls:
-        return {**planned, "stage": "higgsfield-scene-generate", "execute": False}
-    raise ProductError(
-        "STOP BEFORE HTTP: Higgsfield scene payloads are planned; live POST waits "
-        "for explicit generation approval"
+    plan = build_higgsfield_scenes(load_existing_story(), refs)
+    assert_higgsfield_live_authorized(
+        series_slug=series_slug,
+        episode_number=episode_number,
+        stage="higgsfield-scene-generate",
+        confirm_paid=confirm_paid,
+        plan=plan,
+        settings=settings,
+        approved_fingerprint=approved_fingerprint,
     )
+    if not execute_calls:
+        return {
+            **planned,
+            "stage": "higgsfield-scene-generate",
+            "execute": False,
+            "live_post_authorized": True,
+        }
+    poster = submit or submit_higgsfield_json
+    url = str(SEEDANCE_CONTRACTS[SIMPLE_PRIMARY_MODEL]["url"])
+    ledger_path = _repo_root() / HIGGSFIELD_LEDGER_RELATIVE
+    ledger = _load_ledger(ledger_path)
+    ops = ledger["operations"]
+    posted = 0
+    for scene in plan.scenes:
+        row = ops.get(scene.scene_id) if isinstance(ops.get(scene.scene_id), dict) else None
+        if isinstance(row, dict) and row.get("state") in {"SUCCEEDED", "SUBMITTED"}:
+            continue
+        body = scene.request_body
+        result = poster(
+            url=url,
+            body=body,
+            confirm_paid=confirm_paid,
+            settings=settings,
+        )
+        posted += 1
+        ops[scene.scene_id] = {
+            "state": "SUBMITTED",
+            "request_id": result.get("request_id") if isinstance(result, dict) else "",
+            "model": scene.model,
+        }
+        _save_ledger(ledger_path, ledger)
+    return {
+        **planned,
+        "stage": "higgsfield-scene-generate",
+        "execute": True,
+        "live_post_authorized": True,
+        "provider_http_calls": posted,
+        "media_calls": posted,
+        "artifacts": {
+            **(planned.get("artifacts") if isinstance(planned.get("artifacts"), dict) else {}),
+            "ledger": str(ledger_path),
+        },
+    }
 
 
 def next_unfinished_higgsfield_scene(

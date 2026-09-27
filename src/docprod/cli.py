@@ -3071,7 +3071,8 @@ def friend_group_episode(
         help="story-plan, story-check, story-status, story-generate, "
         "production-plan, animatic-plan, animatic-generate, animatic-rerender, "
         "simple-script-plan, simple-script-generate, simple-video-plan, "
-        "simple-video-generate, higgsfield-scene-plan, or higgsfield-scene-generate",
+        "simple-video-generate, higgsfield-scene-plan, higgsfield-scene-preflight, "
+        "or higgsfield-scene-generate",
     ),
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
@@ -3116,6 +3117,7 @@ def friend_group_episode(
 
     higgsfield_stage = payload.get("stage") in {
         "higgsfield-scene-plan",
+        "higgsfield-scene-preflight",
         "higgsfield-scene-generate",
     }
     if higgsfield_stage:
@@ -3218,7 +3220,11 @@ def friend_group_episode(
                 f"scenes={payload.get('scene_count_target')} "
                 f"dialogue={payload.get('dialogue_target')}"
             )
-    if payload.get("stage") in {"higgsfield-scene-plan", "higgsfield-scene-generate"}:
+    if payload.get("stage") in {
+        "higgsfield-scene-plan",
+        "higgsfield-scene-preflight",
+        "higgsfield-scene-generate",
+    }:
         _totals, creds = format_higgsfield_cli_cost_lines(payload)
         console.print(creds)
         refs_report = payload.get("canonical_refs")
@@ -3227,6 +3233,29 @@ def friend_group_episode(
                 if isinstance(row, dict):
                     console.print(f"ref_{slug}={row.get('use')}")
         console.print(f"scene_count={payload.get('scene_count')}")
+        if payload.get("stage") == "higgsfield-scene-preflight":
+            if payload.get("live_post_authorized"):
+                console.print("READY FOR LIVE HIGGSFIELD GENERATION")
+            console.print(f"series={payload.get('series')}")
+            console.print(f"episode={payload.get('episode')}")
+            console.print(f"scenes={payload.get('scene_count')}")
+            console.print(f"model={payload.get('model')}")
+            console.print(
+                f"native_audio={str(bool(payload.get('native_audio'))).lower()}"
+            )
+            console.print(
+                f"external_tts={str(bool(payload.get('external_tts'))).lower()}"
+            )
+            console.print(f"expected_total={payload.get('expected_usd')}")
+            console.print(f"reserved_total={payload.get('reserved_usd')}")
+            console.print(f"hard_cap_usd={payload.get('hard_cap_usd')}")
+            console.print(f"cap_ok={str(bool(payload.get('cap_ok'))).lower()}")
+            console.print(creds)
+            console.print("confirm_paid_required=true")
+            console.print(
+                "live_post_authorized="
+                f"{str(bool(payload.get('live_post_authorized'))).lower()}"
+            )
 
 
 @app.command("birko-episode2")

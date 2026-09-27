@@ -1393,6 +1393,15 @@ def run_friend_group_episode(
         from docprod.product.higgsfield_scenes import execute_higgsfield_scene_plan
 
         return execute_higgsfield_scene_plan(refs=refs, settings=settings)
+    if token in {"higgsfield-scene-preflight"}:
+        from docprod.product.higgsfield_scenes import execute_higgsfield_scene_preflight
+
+        return execute_higgsfield_scene_preflight(
+            refs=refs,
+            settings=settings,
+            series_slug=series_slug,
+            episode_number=episode_number,
+        )
     if token in {"higgsfield-scene-generate"}:
         from docprod.product.higgsfield_scenes import execute_higgsfield_scene_generate
 
@@ -1400,6 +1409,8 @@ def run_friend_group_episode(
             confirm_paid=confirm_paid,
             refs=refs,
             settings=settings,
+            series_slug=series_slug,
+            episode_number=episode_number,
             execute_calls=True if execute_calls is None else execute_calls,
         )
     raise ValueError(
@@ -1407,7 +1418,7 @@ def run_friend_group_episode(
         "story-generate, production-plan, animatic-plan, animatic-generate, "
         "animatic-rerender, simple-script-plan, simple-script-generate, "
         "simple-video-plan, simple-video-generate, higgsfield-scene-plan, "
-        "or higgsfield-scene-generate"
+        "higgsfield-scene-preflight, or higgsfield-scene-generate"
     )
 
 

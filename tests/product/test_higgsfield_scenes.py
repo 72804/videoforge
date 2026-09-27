@@ -1,20 +1,26 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 from PIL import Image
 
+from docprod.config import Settings
 from docprod.exceptions import PaidApiNotConfirmedError
 from docprod.product.errors import ProductError
 from docprod.product.friend_group import DialogueLineSpec, FriendGroupStorySpec
 from docprod.product.higgsfield_scenes import (
+    APPROVED_PLAN_FINGERPRINT,
     SIMPLE_VIDEO_HARD_CAP_USD,
     STORY_SPEC_RELATIVE,
+    assert_higgsfield_live_authorized,
     build_higgsfield_scenes,
     execute_higgsfield_scene_generate,
     execute_higgsfield_scene_plan,
+    execute_higgsfield_scene_preflight,
     format_higgsfield_cli_cost_lines,
+    higgsfield_plan_fingerprint,
     load_existing_story,
     next_unfinished_higgsfield_scene,
 )
@@ -216,10 +222,198 @@ def test_concat_and_zero_http_plan(tmp_path: Path) -> None:
     with pytest.raises(PaidApiNotConfirmedError):
         execute_higgsfield_scene_generate(confirm_paid=False, refs=refs)
     dry = execute_higgsfield_scene_generate(
-        confirm_paid=True, refs=refs, execute_calls=False
+        confirm_paid=True,
+        refs=refs,
+        execute_calls=False,
+        settings=_key_settings(),
     )
     assert dry["provider_http_calls"] == 0
     assert dry["plan"]["native_audio"] is True
     assert dry["plan"]["external_tts"] is False
-    with pytest.raises(ProductError, match="STOP BEFORE HTTP"):
-        execute_higgsfield_scene_generate(confirm_paid=True, refs=refs, execute_calls=True)
+    execute_higgsfield_scene_plan(refs=refs)
+
+
+def _key_settings() -> Settings:
+    from pydantic import SecretStr
+
+    return Settings(
+        allow_paid_apis=True,
+        higgsfield_api_key_id=SecretStr("test-id"),
+        higgsfield_api_key_secret=SecretStr("test-secret"),
+        _env_file=None,
+    )
+
+
+def test_approved_plan_fingerprint_matches_locked_refs() -> None:
+    spec_path = Path(STORY_SPEC_RELATIVE)
+    if not spec_path.is_file():
+        pytest.skip("checked-in story spec not available")
+    from docprod.product.story_pipeline import inspect_locked_character_refs
+
+    plan = build_higgsfield_scenes(load_existing_story(), inspect_locked_character_refs())
+    assert higgsfield_plan_fingerprint(plan) == APPROVED_PLAN_FINGERPRINT
+
+
+def test_live_auth_negative_cases(tmp_path: Path) -> None:
+    spec_path = Path(STORY_SPEC_RELATIVE)
+    if not spec_path.is_file():
+        pytest.skip("checked-in story spec not available")
+    from docprod.product.story_pipeline import inspect_locked_character_refs
+
+    refs = inspect_locked_character_refs()
+    plan = build_higgsfield_scenes(load_existing_story(), refs)
+    keys = _key_settings()
+    with pytest.raises(ProductError, match="series/episode is not birko episode 2"):
+        assert_higgsfield_live_authorized(
+            series_slug="birko",
+            episode_number=3,
+            stage="higgsfield-scene-generate",
+            confirm_paid=True,
+            plan=plan,
+            settings=keys,
+        )
+    with pytest.raises(ProductError, match="HF_API_KEY is not present"):
+        assert_higgsfield_live_authorized(
+            series_slug="birko",
+            episode_number=2,
+            stage="higgsfield-scene-generate",
+            confirm_paid=True,
+            plan=plan,
+            settings=Settings(allow_paid_apis=True, _env_file=None),
+        )
+    over = plan.model_copy(update={"reserved_usd": 12.01, "cap_ok": False})
+    with pytest.raises(ProductError, match="reserved cost exceeds"):
+        assert_higgsfield_live_authorized(
+            series_slug="birko",
+            episode_number=2,
+            stage="higgsfield-scene-generate",
+            confirm_paid=True,
+            plan=over,
+            settings=keys,
+            approved_fingerprint=higgsfield_plan_fingerprint(over),
+        )
+    tmp_plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    with pytest.raises(ProductError, match="plan fingerprint mismatch"):
+        assert_higgsfield_live_authorized(
+            series_slug="birko",
+            episode_number=2,
+            stage="higgsfield-scene-generate",
+            confirm_paid=True,
+            plan=tmp_plan,
+            settings=keys,
+        )
+
+
+def test_generate_reaches_mocked_post(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    spec_path = Path(STORY_SPEC_RELATIVE)
+    if not spec_path.is_file():
+        pytest.skip("checked-in story spec not available")
+    from docprod.product.story_pipeline import (
+        inspect_locked_character_refs,
+        run_friend_group_episode,
+    )
+
+    posted: list[dict[str, object]] = []
+
+    def fake_submit(*, url: str, body: dict[str, object], confirm_paid: bool, settings=None):
+        posted.append(body)
+        assert "api.higgsfield.ai" in url
+        return {"request_id": f"mock-{len(posted)}"}
+
+    ledger = tmp_path / "ledger.json"
+
+    def load_l(path):
+        if ledger.is_file():
+            return json.loads(ledger.read_text(encoding="utf-8"))
+        return {"operations": {}}
+
+    def save_l(path, payload):
+        ledger.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr("docprod.product.higgsfield_scenes.submit_higgsfield_json", fake_submit)
+    monkeypatch.setattr("docprod.product.higgsfield_scenes._load_ledger", load_l)
+    monkeypatch.setattr("docprod.product.higgsfield_scenes._save_ledger", save_l)
+
+    refs = inspect_locked_character_refs()
+    keys = _key_settings()
+    result = execute_higgsfield_scene_generate(
+        confirm_paid=True,
+        refs=refs,
+        execute_calls=True,
+        settings=keys,
+        series_slug="birko",
+        episode_number=2,
+        submit=fake_submit,
+    )
+    assert result["live_post_authorized"] is True
+    assert len(posted) == 8
+    body = posted[0]
+    assert body["generate_audio"] is True
+    assert "audio_urls" not in body
+    assert body["aspect_ratio"] == "9:16"
+    assert body["resolution"] == "720p"
+
+    with pytest.raises(PaidApiNotConfirmedError):
+        run_friend_group_episode(
+            stage="higgsfield-scene-generate",
+            series_slug="birko",
+            episode_number=2,
+            confirm_paid=False,
+            settings=keys,
+            execute_calls=True,
+        )
+    posted.clear()
+    if ledger.is_file():
+        ledger.unlink()
+    dispatched = run_friend_group_episode(
+        stage="higgsfield-scene-generate",
+        series_slug="birko",
+        episode_number=2,
+        confirm_paid=True,
+        settings=keys,
+        execute_calls=True,
+    )
+    assert dispatched["stage"] == "higgsfield-scene-generate"
+    assert len(posted) == 8
+
+    from typer.testing import CliRunner
+
+    from docprod.cli import app
+
+    posted.clear()
+    if ledger.is_file():
+        ledger.unlink()
+    monkeypatch.setattr(
+        "docprod.product.higgsfield_scenes.higgsfield_credentials_present",
+        lambda settings=None: True,
+    )
+    cli = CliRunner().invoke(
+        app,
+        ["birko-episode2", "--stage", "higgsfield-scene-generate", "--confirm-paid"],
+    )
+    assert cli.exit_code == 0, cli.output
+    assert "STOP BEFORE HTTP: Higgsfield scene payloads are planned" not in cli.output
+    assert len(posted) == 8
+    assert posted[0]["generate_audio"] is True
+    assert "audio_urls" not in posted[0]
+
+
+def test_preflight_zero_http() -> None:
+    spec_path = Path(STORY_SPEC_RELATIVE)
+    if not spec_path.is_file():
+        pytest.skip("checked-in story spec not available")
+    from docprod.product.story_pipeline import inspect_locked_character_refs
+
+    keys = _key_settings()
+    payload = execute_higgsfield_scene_preflight(
+        refs=inspect_locked_character_refs(),
+        settings=keys,
+    )
+    assert payload["provider_http_calls"] == 0
+    assert payload["live_post_authorized"] is True
+    assert payload["expected_usd"] == 8.64
+    assert payload["reserved_usd"] == 10.656
+    assert payload["hard_cap_usd"] == 12.0
+    assert payload["ready_for_live"] is True
