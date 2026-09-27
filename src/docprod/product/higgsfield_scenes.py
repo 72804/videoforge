@@ -8,7 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from docprod.config import Settings
 from docprod.exceptions import PaidApiNotConfirmedError
-from docprod.product.canary_cost import typical_image_usd, typical_tts_usd, usd_round
+from docprod.product.birko_bible import member_by_slug
+from docprod.product.canary_cost import usd_round
 from docprod.product.errors import ProductError
 from docprod.product.friend_group import FriendGroupStorySpec
 from docprod.product.simple_video import (
@@ -16,14 +17,12 @@ from docprod.product.simple_video import (
     SIMPLE_PRIMARY_MODEL,
     SIMPLE_SECONDARY_MODEL,
     SIMPLE_VIDEO_HARD_CAP_USD,
-    STOCK_VOICES,
 )
 from docprod.providers.higgsfield import (
     higgsfield_credentials_present,
     seedance_reference_to_video_body,
     seedance_request_fingerprint,
 )
-from docprod.quality.native_audio import native_audio_use
 from docprod.quality.router import estimate_model_cost
 from docprod.render.ffmpeg import probe_media
 from docprod.storage.hashing import file_sha256
@@ -51,6 +50,22 @@ EXTERIOR_LOCATION_RELATIVE = (
 VOICES_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/voices"
 )
+SEEDANCE_VOICE_DIRECTION = {
+    "birko": "low-energy, heavy, relaxed, dry/deadpan Turkish male voice",
+    "kemal": "natural young Turkish male, increasingly frustrated",
+    "muge": "confident Turkish female, slightly incredulous/materialistic energy",
+    "erni": "bright sweet feminine Turkish voice with subtly teasing/manipulative delivery",
+    "hg": "cool low Turkish male voice, dark/amused, calm",
+    "musti": "young energetic Turkish male, chaotic/defensive",
+}
+CHARACTER_DISPLAY = {
+    "birko": "Birko",
+    "kemal": "Kemal",
+    "muge": "Müge",
+    "erni": "Erni",
+    "hg": "HG",
+    "musti": "Musti",
+}
 
 
 def _repo_root() -> Path:
@@ -90,6 +105,10 @@ class HiggsfieldScene(BaseModel):
     request_body: dict[str, Any] = Field(default_factory=dict)
     expected_usd: float = 0.0
     reserved_usd: float = 0.0
+    generate_audio: bool = True
+    native_audio: bool = True
+    external_tts: bool = False
+    fallback_tts_paths: list[str] = Field(default_factory=list)
 
 
 class HiggsfieldScenePlan(BaseModel):
@@ -105,6 +124,8 @@ class HiggsfieldScenePlan(BaseModel):
     cap_ok: bool = True
     missing_tts_count: int = 0
     provider_http_calls: int = 0
+    native_audio: bool = True
+    external_tts: bool = False
 
 
 def load_existing_story(*, root: Path | None = None) -> FriendGroupStorySpec:
@@ -178,15 +199,16 @@ def _attach_dialogue(
             raise ProductError(f"dialogue not in existing story: {text}")
         wav = wavs.get(key)
         seconds = _audio_seconds(wav) if wav else 0.0
+        slug = src.speaker_character_id
         rows.append(
             HiggsfieldDialogue(
-                speaker=src.speaker_character_id,
+                speaker=slug,
                 text=src.text,
                 delivery=src.delivery,
                 audio_path=str(wav) if wav else "",
                 audio_seconds=round(seconds, 3),
                 missing_tts=wav is None,
-                voice=STOCK_VOICES.get(src.speaker_character_id, ""),
+                voice=_voice_direction(slug),
             )
         )
     return rows
@@ -198,13 +220,80 @@ def _scene_duration(lines: list[HiggsfieldDialogue], *, motion: float) -> float:
     return round(min(10.0, max(5.0, needed)), 3)
 
 
-def _prompt(*, action: str, visible: list[str], location: str, moving: str) -> str:
-    people = ", ".join(visible)
+def _display_name(slug: str) -> str:
+    return CHARACTER_DISPLAY.get(slug, slug)
+
+
+def _voice_direction(slug: str) -> str:
+    directed = SEEDANCE_VOICE_DIRECTION[slug]
+    try:
+        bible = member_by_slug(slug).voice_notes.strip()
+    except KeyError:
+        return directed
+    return f"{directed}. Character bible: {bible}"
+
+
+def _dialogue_audio_prompt(lines: list[HiggsfieldDialogue]) -> str:
+    if not lines:
+        return (
+            "No spoken dialogue in this scene. Do not invent lines. "
+            "Generate native café ambience and foley only."
+        )
+    spoken = []
+    for item in lines:
+        name = _display_name(item.speaker)
+        spoken.append(
+            f'{name} says EXACTLY these Turkish words: "{item.text}" '
+            f"(speaker={item.speaker}; intended voice/delivery: {item.voice})."
+        )
+    return (
+        "Seedance native audio: generate_audio=true. Characters speak natural, "
+        "lip-synced Turkish in sync with the picture. Use only the approved lines "
+        "below; do not add, translate, or rewrite dialogue. "
+        + " ".join(spoken)
+    )
+
+
+def _ambience_prompt(*, exterior: bool, scene_id: str) -> str:
+    if exterior:
+        return (
+            "Native scene sound: evening street outside the café, distant interior "
+            "murmur through the window, phone speaker, hang-up click, quiet donut bite foley."
+        )
+    extra = {
+        "HF1_hook_bill": "Receipt tray clink, low café murmur, water bottle on the table.",
+        "HF2_order_setup": "Phone taps, menu rustle, café chatter.",
+        "HF3_birko_slips": "Chair scrape as someone leaves, bill tray arrival, hushed table.",
+        "HF4_muge_kemal": "Paper receipt, overlapping café room tone.",
+        "HF5_erni": "Close table foley, cups, soft café beds.",
+        "HF6_musti": "Tense table, light clatter, café beds under raised voices.",
+        "HF7_kemal_pays": "POS beep, card tap, box lid, phone call room tone.",
+    }
+    base = (
+        "Native scene sound: Krispy Kreme café ambience, cups, distant POS, chairs, "
+        "evening interior beds. Keep foley under the spoken Turkish."
+    )
+    detail = extra.get(scene_id, "")
+    return f"{base} {detail}".strip()
+
+
+def _seedance_prompt(
+    *,
+    action: str,
+    visible: list[str],
+    location: str,
+    moving: str,
+    lines: list[HiggsfieldDialogue],
+    exterior: bool,
+    scene_id: str,
+) -> str:
+    people = ", ".join(_display_name(slug) for slug in visible)
     return (
         f"9:16 cinematic live-action, continuous motion, no slideshow. "
         f"{location}. Visible: {people}. {action} {moving} "
         f"Turkish café evening, natural light, real acting, keep faces consistent "
-        f"with attached reference photos. Do not freeze into a still."
+        f"with attached reference photos. Do not freeze into a still. "
+        f"{_dialogue_audio_prompt(lines)} {_ambience_prompt(exterior=exterior, scene_id=scene_id)}"
     )
 
 
@@ -235,7 +324,7 @@ def _fill_scene(
     loc = str(location_path) if location_path.is_file() else ""
     if loc and len(char_paths) <= 2:
         image_urls.append(f"file://{loc}")
-    audio_urls = [item.audio_path for item in lines if item.audio_path]
+    fallback_tts = [item.audio_path for item in lines if item.audio_path]
     loc_label = (
         "Krispy Kreme exterior bench, same café window wall"
         if exterior
@@ -245,16 +334,25 @@ def _fill_scene(
         "Hands, eyelines, and body weight keep moving for the full duration; "
         "no dead hold after the last line."
     )
+    prompt = _seedance_prompt(
+        action=action,
+        visible=visible,
+        location=loc_label,
+        moving=moving,
+        lines=lines,
+        exterior=exterior,
+        scene_id=scene_id,
+    )
     body = seedance_reference_to_video_body(
-        prompt=_prompt(action=action, visible=visible, location=loc_label, moving=moving),
+        prompt=prompt,
         duration=duration,
         image_urls=image_urls,
-        audio_urls=[f"file://{path}" for path in audio_urls] or None,
+        audio_urls=None,
+        generate_audio=True,
     )
     shas = [file_sha256(Path(path)) for path in char_paths if Path(path).is_file()]
     if loc and Path(loc).is_file():
         shas.append(file_sha256(Path(loc)))
-    audio_shas = [file_sha256(Path(path)) for path in audio_urls if Path(path).is_file()]
     billed = float(body["duration"])
     expected, _conf = estimate_model_cost(SIMPLE_PRIMARY_MODEL, seconds=billed)
     reserved, _rconf = estimate_model_cost(SIMPLE_PRIMARY_MODEL, seconds=min(10.0, billed * 1.2))
@@ -270,12 +368,16 @@ def _fill_scene(
         dialogue_lines=lines,
         camera_intent=camera,
         video_prompt=str(body["prompt"]),
-        audio_track=audio_urls,
+        audio_track=[],
+        generate_audio=True,
+        native_audio=True,
+        external_tts=False,
+        fallback_tts_paths=fallback_tts,
         request_fingerprint=seedance_request_fingerprint(
             prompt=str(body["prompt"]),
             duration=float(body["duration"]),
             image_shas=shas,
-            audio_shas=audio_shas,
+            audio_shas=[],
         ),
         request_body=body,
         expected_usd=float(expected or 0.0),
@@ -445,17 +547,8 @@ def build_higgsfield_scenes(
     if used_lines != expected_lines:
         raise ProductError("higgsfield plan must reuse every existing dialogue line in order")
     missing = sum(1 for scene in scenes for item in scene.dialogue_lines if item.missing_tts)
-    video_e = usd_round(sum(scene.expected_usd for scene in scenes))
-    video_r = usd_round(sum(scene.reserved_usd for scene in scenes))
-    tts_e = usd_round(typical_tts_usd() * max(missing, 0))
-    tts_r = usd_round(typical_tts_usd() * max(missing, 0) * 1.5)
-    loc_e = 0.0
-    loc_r = 0.0
-    if not interior.is_file():
-        loc_e = typical_image_usd(with_reference=False)
-        loc_r = usd_round(loc_e * 1.5)
-    expected = usd_round(video_e + tts_e + loc_e)
-    reserved = usd_round(video_r + tts_r + loc_r)
+    expected = usd_round(sum(scene.expected_usd for scene in scenes))
+    reserved = usd_round(sum(scene.reserved_usd for scene in scenes))
     if reserved - 1e-9 > SIMPLE_VIDEO_HARD_CAP_USD:
         raise ProductError(
             f"STOP BEFORE HTTP: reserved ${reserved:.4f} exceeds "
@@ -469,6 +562,8 @@ def build_higgsfield_scenes(
         reserved_usd=reserved,
         cap_ok=reserved <= SIMPLE_VIDEO_HARD_CAP_USD,
         missing_tts_count=missing,
+        native_audio=True,
+        external_tts=False,
     )
 
 
@@ -481,6 +576,10 @@ def format_higgsfield_review(
         "",
         "Source: existing ensemble story `episode_2_story_spec.json` (Sadece Su).",
         "Not the 28-shot animatic. Not a new Astra script.",
+        "Seedance 2.5 native audio experiment. Existing TTS WAVs are fallback only.",
+        "",
+        f"native_audio={str(plan.native_audio).lower()}",
+        f"external_tts={str(plan.external_tts).lower()}",
         "",
         "## Canonical references (do not silently swap)",
         "",
@@ -493,14 +592,19 @@ def format_higgsfield_review(
             lines.append(f"  - old generated archive: `{row['v1_archive']}`")
     lines.extend(["", "## Scenes", ""])
     for scene in plan.scenes:
-        spoken = "; ".join(f"{item.speaker}: {item.text}" for item in scene.dialogue_lines)
+        spoken = "; ".join(
+            f"{_display_name(item.speaker)}: {item.text}" for item in scene.dialogue_lines
+        )
         dialogue = spoken or "(action only)"
-        audio = ", ".join(scene.audio_track) or "none"
         refs = ", ".join(scene.character_refs)
+        fallback = ", ".join(scene.fallback_tts_paths) or "none (untouched archive)"
         lines.extend(
             [
                 f"### {scene.scene_id}",
                 f"- duration: {scene.duration}s",
+                f"- native_audio={str(scene.native_audio).lower()}",
+                f"- external_tts={str(scene.external_tts).lower()}",
+                f"- generate_audio={str(scene.generate_audio).lower()}",
                 f"- dialogue: {dialogue}",
                 f"- visible: {', '.join(scene.visible_characters)}",
                 f"- offscreen: {', '.join(scene.offscreen_speakers) or '—'}",
@@ -510,7 +614,8 @@ def format_higgsfield_review(
                 f"- camera: {scene.camera_intent}",
                 f"- model: {scene.provider}/{scene.model}",
                 f"- video_prompt: {scene.video_prompt}",
-                f"- audio: {audio}",
+                "- seedance_audio: native generate_audio (no mixed OpenAI TTS)",
+                f"- fallback_tts: {fallback}",
                 f"- expected_usd: {scene.expected_usd}",
                 f"- fingerprint: `{scene.request_fingerprint[:16]}`",
                 "",
@@ -524,8 +629,15 @@ def format_higgsfield_review(
             f"reserved_usd={plan.reserved_usd}",
             f"hard_cap_usd={plan.hard_cap_usd}",
             f"cap_ok={plan.cap_ok}",
+            f"native_audio={str(plan.native_audio).lower()}",
+            f"external_tts={str(plan.external_tts).lower()}",
             f"missing_tts={plan.missing_tts_count}",
             f"scenes={len(plan.scenes)}",
+            "new_image_usd=0",
+            "new_tts_usd=0",
+            "new_external_audio_usd=0",
+            "new_llm_usd=0",
+            "sunk_astra_simple_script=excluded_from_new_spend",
             "",
             "`uv run docprod birko-episode2 --stage higgsfield-scene-plan`",
             "`uv run docprod birko-episode2 --stage higgsfield-scene-generate --confirm-paid`",
@@ -533,6 +645,21 @@ def format_higgsfield_review(
         ]
     )
     return "\n".join(lines) + "\n"
+
+
+def format_higgsfield_cli_cost_lines(payload: dict[str, object]) -> tuple[str, str]:
+    present = payload.get("higgsfield_credentials_present")
+    if present is None:
+        nested = payload.get("plan")
+        if isinstance(nested, dict):
+            present = nested.get("higgsfield_credentials_present")
+    totals = (
+        f"expected_total={payload.get('expected_usd')} "
+        f"reserved_total={payload.get('reserved_usd')} "
+        f"hard_cap_usd={payload.get('hard_cap_usd')} cap_ok={payload.get('cap_ok')}"
+    )
+    creds = f"higgsfield_credentials_present={str(bool(present)).lower()}"
+    return totals, creds
 
 
 def execute_higgsfield_scene_plan(
@@ -549,13 +676,14 @@ def execute_higgsfield_scene_plan(
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     payload = plan.model_dump()
     payload["higgsfield_credentials_present"] = higgsfield_credentials_present(settings)
-    payload["native_audio_policy"] = native_audio_use(
-        SIMPLE_PRIMARY_MODEL, needs_character_dialogue=True
-    )
+    payload["native_audio"] = True
+    payload["external_tts"] = False
+    payload["native_audio_policy"] = "seedance_native_dialogue"
     payload["fallback_model"] = SIMPLE_SECONDARY_MODEL
     payload["execute"] = False
     plan_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     review_path.write_text(format_higgsfield_review(plan, report), encoding="utf-8")
+    credentials_present = bool(payload["higgsfield_credentials_present"])
     return {
         "stage": "higgsfield-scene-plan",
         "plan": payload,
@@ -566,6 +694,11 @@ def execute_higgsfield_scene_plan(
         "reserved_usd": plan.reserved_usd,
         "hard_cap_usd": plan.hard_cap_usd,
         "cap_ok": plan.cap_ok,
+        "higgsfield_credentials_present": credentials_present,
+        "new_image_usd": 0.0,
+        "new_tts_usd": 0.0,
+        "new_external_audio_usd": 0.0,
+        "new_llm_usd": 0.0,
         "provider_http_calls": 0,
         "media_calls": 0,
         "stars": 0,

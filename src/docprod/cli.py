@@ -3112,11 +3112,21 @@ def friend_group_episode(
             f"expected_usd={call.get('expected_usd')} "
             f"reserved_usd={call.get('reserved_usd')}"
         )
-    console.print(
-        f"expected_total={plan.get('estimated_usd')} "
-        f"reserved_total={plan.get('reserved_usd')} "
-        f"hard_cap_usd={plan.get('hard_cap_usd')} cap_ok={plan.get('cap_ok')}"
-    )
+    from docprod.product.higgsfield_scenes import format_higgsfield_cli_cost_lines
+
+    higgsfield_stage = payload.get("stage") in {
+        "higgsfield-scene-plan",
+        "higgsfield-scene-generate",
+    }
+    if higgsfield_stage:
+        totals, _creds = format_higgsfield_cli_cost_lines(payload)
+        console.print(totals)
+    else:
+        console.print(
+            f"expected_total={plan.get('estimated_usd')} "
+            f"reserved_total={plan.get('reserved_usd')} "
+            f"hard_cap_usd={plan.get('hard_cap_usd')} cap_ok={plan.get('cap_ok')}"
+        )
     console.print(
         f"planned_text_model_calls={payload.get('planned_text_model_calls', len(calls))} "
         f"submitted_text_model_calls={payload.get('submitted_text_model_calls', 0)} "
@@ -3197,8 +3207,6 @@ def friend_group_episode(
         "simple-script-generate",
         "simple-video-plan",
         "simple-video-generate",
-        "higgsfield-scene-plan",
-        "higgsfield-scene-generate",
     }:
         console.print(
             f"simple_expected={payload.get('expected_usd')} "
@@ -3211,6 +3219,8 @@ def friend_group_episode(
                 f"dialogue={payload.get('dialogue_target')}"
             )
     if payload.get("stage") in {"higgsfield-scene-plan", "higgsfield-scene-generate"}:
+        _totals, creds = format_higgsfield_cli_cost_lines(payload)
+        console.print(creds)
         refs_report = payload.get("canonical_refs")
         if isinstance(refs_report, dict):
             for slug, row in refs_report.items():

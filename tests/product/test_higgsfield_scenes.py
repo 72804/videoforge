@@ -14,6 +14,7 @@ from docprod.product.higgsfield_scenes import (
     build_higgsfield_scenes,
     execute_higgsfield_scene_generate,
     execute_higgsfield_scene_plan,
+    format_higgsfield_cli_cost_lines,
     load_existing_story,
     next_unfinished_higgsfield_scene,
 )
@@ -69,6 +70,22 @@ def test_existing_story_lines_are_reused(tmp_path: Path) -> None:
     assert len(plan.scenes) != 28
 
 
+def test_higgsfield_cli_cost_lines_use_plan_totals() -> None:
+    totals, creds = format_higgsfield_cli_cost_lines(
+        {
+            "expected_usd": 8.64,
+            "reserved_usd": 10.656,
+            "hard_cap_usd": 12.0,
+            "cap_ok": True,
+            "higgsfield_credentials_present": False,
+        }
+    )
+    assert totals == "expected_total=8.64 reserved_total=10.656 hard_cap_usd=12.0 cap_ok=True"
+    assert creds == "higgsfield_credentials_present=false"
+    assert "simple_expected" not in totals
+    assert "api_key" not in creds.lower()
+
+
 def test_no_astra_in_higgsfield_plan_path() -> None:
     import inspect
 
@@ -78,6 +95,8 @@ def test_no_astra_in_higgsfield_plan_path() -> None:
     assert "simple-script-generate" not in source
     assert "OpenAIStoryClient" not in source
     assert "gpt-6-astra" not in source
+    assert "openai_tts" not in source
+    assert "gpt-4o-mini-tts" not in source
 
 
 def test_visible_cast_and_unique_refs(tmp_path: Path) -> None:
@@ -91,6 +110,43 @@ def test_visible_cast_and_unique_refs(tmp_path: Path) -> None:
         assert scene.model == "seedance-2.5-reference-to-video"
 
 
+def test_seedance_native_audio_not_external_tts(tmp_path: Path) -> None:
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    assert plan.native_audio is True
+    assert plan.external_tts is False
+    names = {
+        "birko": "Birko",
+        "kemal": "Kemal",
+        "muge": "Müge",
+        "erni": "Erni",
+        "hg": "HG",
+        "musti": "Musti",
+    }
+    used = [item.text for scene in plan.scenes for item in scene.dialogue_lines]
+    assert used == [text for _speaker, text in _LINES]
+    for scene in plan.scenes:
+        body = scene.request_body
+        assert body["generate_audio"] is True
+        assert "audio_urls" not in body
+        assert scene.generate_audio is True
+        assert scene.native_audio is True
+        assert scene.external_tts is False
+        assert scene.audio_track == []
+        for item in scene.dialogue_lines:
+            quoted = f'{names[item.speaker]} says EXACTLY these Turkish words: "{item.text}"'
+            assert quoted in scene.video_prompt
+            assert "Character bible:" in item.voice
+        if scene.dialogue_lines:
+            assert "lip-synced Turkish" in scene.video_prompt
+        else:
+            assert "Do not invent lines." in scene.video_prompt
+    from docprod.product.higgsfield_scenes import format_higgsfield_review
+
+    review = format_higgsfield_review(plan, {slug: {"use": ""} for slug in names})
+    assert "native_audio=true" in review
+    assert "external_tts=false" in review
+
+
 def test_seedance_construction_and_resume(tmp_path: Path) -> None:
     plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
     body = seedance_reference_to_video_body(
@@ -100,6 +156,8 @@ def test_seedance_construction_and_resume(tmp_path: Path) -> None:
     )
     assert body["aspect_ratio"] == "9:16"
     assert body["resolution"] == "720p"
+    assert body["generate_audio"] is True
+    assert "audio_urls" not in plan.scenes[0].request_body
     ledger = {"operations": {}}
     ledger["operations"][plan.scenes[0].scene_id] = {"state": "SUCCEEDED"}
     assert next_unfinished_higgsfield_scene(ledger, plan) == plan.scenes[1].scene_id
@@ -141,6 +199,18 @@ def test_concat_and_zero_http_plan(tmp_path: Path) -> None:
     assert result["provider_http_calls"] == 0
     assert result["execute"] is False
     assert result["scene_count"] == 8
+    assert result["expected_usd"] == 8.64
+    assert result["reserved_usd"] == 10.656
+    assert result["new_image_usd"] == 0.0
+    assert result["new_tts_usd"] == 0.0
+    assert result["new_llm_usd"] == 0.0
+    plan_body = result["plan"]
+    assert isinstance(plan_body, dict)
+    for scene in plan_body["scenes"]:
+        assert scene["request_body"].get("generate_audio") is True
+        assert "audio_urls" not in scene["request_body"]
+        assert scene["external_tts"] is False
+    assert result["higgsfield_credentials_present"] in {True, False}
     story = load_existing_story()
     assert story.title == "Sadece Su"
     with pytest.raises(PaidApiNotConfirmedError):
@@ -149,5 +219,7 @@ def test_concat_and_zero_http_plan(tmp_path: Path) -> None:
         confirm_paid=True, refs=refs, execute_calls=False
     )
     assert dry["provider_http_calls"] == 0
+    assert dry["plan"]["native_audio"] is True
+    assert dry["plan"]["external_tts"] is False
     with pytest.raises(ProductError, match="STOP BEFORE HTTP"):
         execute_higgsfield_scene_generate(confirm_paid=True, refs=refs, execute_calls=True)
