@@ -10,6 +10,8 @@ from docprod.config import Settings
 from docprod.product.friend_group import DialogueLineSpec, FriendGroupStorySpec
 from docprod.product.higgsfield_scenes import (
     APPROVED_SCENE_IDS,
+    HF3_REVISION_2_VIDEO_PROMPT,
+    HF3_REVISION_3_PROMPT,
     HIGGSFIELD_LEDGER_RELATIVE,
     ORIGINAL_HF3_VIDEO_PROMPT,
     ORIGINAL_HF4_VIDEO_PROMPT,
@@ -651,7 +653,7 @@ def test_one_scene_hf3_retry_leaves_hf4(tmp_path: Path) -> None:
         retry_failed=True,
         confirm_paid=True,
         only_scenes=parse_only_scenes("HF3_birko_slips"),
-        submit=lambda **kwargs: posts.append("p") or {"request_id": "hf3-new"},
+        submit=lambda **kwargs: posts.append(kwargs.get("url", "p")) or {"request_id": "hf3-new"},
         status_fn=lambda request_id, settings=None: {"status": "queued"},
         sleeper=lambda _delay: None,
         now_fn=lambda: 0.0,
@@ -659,11 +661,15 @@ def test_one_scene_hf3_retry_leaves_hf4(tmp_path: Path) -> None:
         root=tmp_path,
     )
     saved = json.loads(ledger_path.read_text(encoding="utf-8"))
-    assert posts == ["p"]
+    assert len(posts) == 1
+    assert str(posts[0]).endswith("image-to-video")
     assert saved["operations"]["HF3_birko_slips"]["request_id"] == "hf3-new"
-    assert saved["operations"]["HF3_birko_slips"]["prompt_revision"] == 2
+    assert saved["operations"]["HF3_birko_slips"]["prompt_revision"] == 3
     assert saved["operations"]["HF3_birko_slips"]["prompt_history"][0]["prompt"] == (
         ORIGINAL_HF3_VIDEO_PROMPT
+    )
+    assert saved["operations"]["HF3_birko_slips"]["prompt_history"][1]["prompt"] == (
+        HF3_REVISION_2_VIDEO_PROMPT
     )
     assert saved["operations"]["HF4_muge_kemal"]["request_id"] == (
         "ac583921-462b-4617-a814-0a69acb5f376"
@@ -675,10 +681,28 @@ def test_sanitized_prompts_preserve_history_and_drop_bible(tmp_path: Path) -> No
     hf3 = next(scene for scene in plan.scenes if scene.scene_id == "HF3_birko_slips")
     hf4 = next(scene for scene in plan.scenes if scene.scene_id == "HF4_muge_kemal")
     hf7 = next(scene for scene in plan.scenes if scene.scene_id == "HF7_kemal_pays")
-    assert hf3.prompt_revision == 2
+    assert hf3.prompt_revision == 3
+    assert hf3.prompt_revision_reason == "Birko-only I2V safety fallback"
+    assert hf3.model == "seedance-2.5-image-to-video"
+    assert hf3.visible_characters == ["birko"]
+    assert len(hf3.input_assets) == 1
+    assert hf3.input_assets[0]["key"] == "birko"
+    assert hf3.video_prompt == HF3_REVISION_3_PROMPT
+    assert hf3.expected_usd == 0.864
+    assert "image_url" in hf3.request_body
+    assert "image_urls" not in hf3.request_body
+    assert hf3.request_body["generate_audio"] is True
+    assert "audio_urls" not in hf3.request_body
     assert hf4.prompt_revision == 2
     assert hf3.prompt_history[0]["prompt"] == ORIGINAL_HF3_VIDEO_PROMPT
+    assert hf3.prompt_history[1]["prompt"] == HF3_REVISION_2_VIDEO_PROMPT
     assert hf4.prompt_history[0]["prompt"] == ORIGINAL_HF4_VIDEO_PROMPT
+    assert "No sexual content" not in hf3.video_prompt
+    assert "No nudity" not in hf3.video_prompt
+    assert "No violence" not in hf3.video_prompt
+    assert "Character bible" not in hf3.video_prompt
+    assert "slips out" not in hf3.video_prompt
+    assert " HG" not in hf3.video_prompt
     assert "flörtöz" not in hf4.video_prompt
     assert "flirtatious" not in hf4.video_prompt.casefold()
     assert "Character bible" not in hf4.video_prompt
@@ -696,3 +720,6 @@ def test_sanitized_prompts_preserve_history_and_drop_bible(tmp_path: Path) -> No
     )
     assert costs["selected_expected_total"] == 2.016
     assert costs["selected_generation_posts_max"] == 2
+    hf3_cost = selected_scene_cost_report(plan, parse_only_scenes("HF3_birko_slips"))
+    assert hf3_cost["selected_expected_total"] == 0.864
+    assert hf3_cost["selected_generation_posts_max"] == 1

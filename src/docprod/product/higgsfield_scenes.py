@@ -78,8 +78,8 @@ HIGGSFIELD_FINAL_RELATIVE = (
 RESUME_DEADLINE_SECONDS = 720.0
 POLL_INTERVAL_SECONDS = 5.0
 POLL_MAX_INTERVAL_SECONDS = 15.0
-APPROVED_EXPECTED_USD = 9.6192
-APPROVED_RESERVED_USD = 11.8656
+APPROVED_EXPECTED_USD = 9.4464
+APPROVED_RESERVED_USD = 11.6352
 APPROVED_HARD_CAP_USD = 12.0
 APPROVED_SCENE_IDS = (
     "HF1_hook_bill",
@@ -93,9 +93,34 @@ APPROVED_SCENE_IDS = (
 )
 APPROVED_DURATIONS = (6, 7, 6, 8, 9, 9, 8, 6)
 LOCKED_DURATION = dict(zip(APPROVED_SCENE_IDS, APPROVED_DURATIONS, strict=True))
-I2V_SCENE_IDS = {"HF1_hook_bill", "HF7_kemal_pays", "HF8_payoff"}
+I2V_SCENE_IDS = {"HF1_hook_bill", "HF3_birko_slips", "HF7_kemal_pays", "HF8_payoff"}
 SIMPLE_I2V_MODEL = "seedance-2.5-image-to-video"
 PROMPT_REVISION_REASON = "provider safety retry"
+HF3_REVISION_3_REASON = "Birko-only I2V safety fallback"
+HF3_REVISION_3_PROMPT = (
+    "9:16 cinematic live-action. A fully clothed adult man is seated in a bright casual café. "
+    "A receipt arrives at the table. He notices it, quietly stands up, pushes his chair back "
+    "naturally, and casually walks away from the table and out of frame. Dry awkward comedy, "
+    "understated realistic acting, natural café motion, consistent face and appearance with the "
+    "attached reference photo. Continuous cinematic movement for the full shot. No spoken "
+    "dialogue. Generate natural café ambience, chair movement, paper receipt sound, cups and "
+    "distant room tone."
+)
+HF3_REVISION_2_VIDEO_PROMPT = (
+    "9:16 cinematic live-action, continuous motion, no slideshow. same Krispy Kreme café "
+    "interior, six-top table, window, door, counter, evening. Visible: Birko, HG. Two fully "
+    "clothed adult male friends in a bright casual café. A bill arrives at the table. Birko "
+    "quietly stands and casually walks away from the table. HG notices him leaving and calmly "
+    "slides the receipt toward Kemal's side of the table. Dry awkward comedy. No violence. "
+    "No threat. No physical confrontation. No sexual content. No nudity. No suggestive behavior. "
+    "Natural cinematic café scene. Natural conversational motion continues for the full duration; "
+    "fully clothed adults; no freeze-frame. Turkish café evening, natural light, real acting, "
+    "keep faces consistent with attached reference photos. Do not freeze into a still. No spoken "
+    "dialogue in this scene. Do not invent lines. Generate native café ambience and foley only. "
+    "Native scene sound: Krispy Kreme café ambience, cups, distant POS, chairs, evening interior "
+    "beds. Keep foley under the spoken Turkish. Chair scrape as someone leaves, bill tray arrival, "
+    "hushed table."
+)
 ORIGINAL_HF3_VIDEO_PROMPT = (
     "9:16 cinematic live-action, continuous motion, no slideshow. same Krispy Kreme café "
     "interior, six-top table, window, door, counter, evening. Visible: Birko, HG. Boxes are "
@@ -131,13 +156,6 @@ ORIGINAL_HF4_VIDEO_PROMPT = (
     "evening interior beds. Keep foley under the spoken Turkish. Paper receipt, overlapping "
     "café room tone."
 )
-HF3_SAFE_ACTION = (
-    "Two fully clothed adult male friends in a bright casual café. A bill arrives at the table. "
-    "Birko quietly stands and casually walks away from the table. HG notices him leaving and "
-    "calmly slides the receipt toward Kemal's side of the table. Dry awkward comedy. No violence. "
-    "No threat. No physical confrontation. No sexual content. No nudity. No suggestive behavior. "
-    "Natural cinematic café scene."
-)
 HF4_SAFE_ACTION = (
     "Two fully clothed adult friends seated in a bright casual café. Müge looks at an "
     "expensive donut box and the receipt. Kemal reacts with frustrated disbelief. They have a "
@@ -150,7 +168,7 @@ SAFE_MOVING = (
     "no freeze-frame."
 )
 APPROVED_PLAN_FINGERPRINT = (
-    "beeb5e76e2a32cb6e7732af324fdcc7f489bd390cf26ab1c029a7ee13dc91a26"
+    "688b969c1dce3fbbc804d1f7873aaabd5f796b2dad93ca3c91deabe8c1aca919"
 )
 INTERIOR_LOCATION_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/stills/"
@@ -489,6 +507,8 @@ def _fill_scene(
     prompt_revision: int = 1,
     prompt_revision_reason: str = "",
     prompt_history: list[dict[str, Any]] | None = None,
+    include_location: bool = True,
+    prompt_override: str | None = None,
 ) -> HiggsfieldScene:
     duration = float(LOCKED_DURATION[scene_id])
     char_paths = []
@@ -511,7 +531,7 @@ def _fill_scene(
     loc = str(location_path) if location_path.is_file() else ""
     loc_key = "exterior" if exterior else "interior"
     loc_pub = public_lookup.get(loc_key)
-    if loc_pub is not None:
+    if include_location and loc_pub is not None:
         assets.append(loc_pub.model_dump())
     loc_label = (
         "matching Krispy Kreme exterior bench and café window wall, same evening storefront"
@@ -522,7 +542,7 @@ def _fill_scene(
         "Hands, eyelines, and body weight keep moving for the full duration; "
         "no dead hold after the last line."
     )
-    prompt = _seedance_prompt(
+    prompt = prompt_override or _seedance_prompt(
         action=action,
         visible=visible,
         location=loc_label,
@@ -558,7 +578,7 @@ def _fill_scene(
     if "audio_urls" in body:
         raise ProductError("STOP BEFORE HTTP: audio_urls must not enter Seedance requests")
     shas = [file_sha256(Path(path)) for path in char_paths if Path(path).is_file()]
-    if loc and Path(loc).is_file():
+    if include_location and loc and Path(loc).is_file():
         shas.append(file_sha256(Path(loc)))
     billed = float(body["duration"])
     expected, _conf = estimate_model_cost(model, seconds=billed)
@@ -571,7 +591,7 @@ def _fill_scene(
         offscreen_speakers=offscreen,
         character_refs=char_paths,
         input_assets=assets,
-        location_ref=loc,
+        location_ref=loc if include_location else "",
         props=props,
         action=action,
         dialogue_lines=lines,
@@ -664,25 +684,34 @@ def build_higgsfield_scenes(
         ),
         _fill_scene(
             scene_id="HF3_birko_slips",
-            visible=["birko", "hg"],
-            offscreen=["kemal"],
-            action=HF3_SAFE_ACTION,
-            camera="wider café table, Birko walking away, HG sliding the receipt",
-            props=["receipt", "premium donut box", "POS"],
+            visible=["birko"],
+            offscreen=[],
+            action=(
+                "A fully clothed adult man notices a receipt, stands, and casually "
+                "walks out of frame."
+            ),
+            camera="medium shot, Birko stands and walks out of frame",
+            props=["receipt"],
             lines=attach([], include_bible=False),
             motion=6.0,
             location_path=interior,
             ref_map=ref_map,
             public_lookup=lookup,
-            moving=SAFE_MOVING,
-            prompt_revision=2,
-            prompt_revision_reason=PROMPT_REVISION_REASON,
+            include_location=False,
+            prompt_override=HF3_REVISION_3_PROMPT,
+            prompt_revision=3,
+            prompt_revision_reason=HF3_REVISION_3_REASON,
             prompt_history=[
                 {
                     "revision": 1,
                     "prompt": ORIGINAL_HF3_VIDEO_PROMPT,
                     "reason": "original failed paid attempt",
-                }
+                },
+                {
+                    "revision": 2,
+                    "prompt": HF3_REVISION_2_VIDEO_PROMPT,
+                    "reason": PROMPT_REVISION_REASON,
+                },
             ],
         ),
         _fill_scene(

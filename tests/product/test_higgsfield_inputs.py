@@ -89,6 +89,9 @@ def test_i2v_and_r2v_routing_and_pricing(tmp_path: Path) -> None:
     assert by_id["HF1_hook_bill"].model == SIMPLE_I2V_MODEL
     assert "image_url" in by_id["HF1_hook_bill"].request_body
     assert "image_urls" not in by_id["HF1_hook_bill"].request_body
+    assert by_id["HF3_birko_slips"].model == SIMPLE_I2V_MODEL
+    assert "image_url" in by_id["HF3_birko_slips"].request_body
+    assert "image_urls" not in by_id["HF3_birko_slips"].request_body
     assert by_id["HF7_kemal_pays"].model == SIMPLE_I2V_MODEL
     assert by_id["HF8_payoff"].model == SIMPLE_I2V_MODEL
     assert by_id["HF2_order_setup"].model == SIMPLE_PRIMARY_MODEL
@@ -100,8 +103,8 @@ def test_i2v_and_r2v_routing_and_pricing(tmp_path: Path) -> None:
     assert r2v is not None and r2v.pricing.value == 0.1728
     assert plan.hard_cap_usd == 12.0
     assert plan.reserved_usd <= 12.0
-    assert plan.expected_usd == 9.6192
-    assert plan.reserved_usd == 11.8656
+    assert plan.expected_usd == 9.4464
+    assert plan.reserved_usd == 11.6352
     assert SEEDANCE_CONTRACTS[SIMPLE_I2V_MODEL]["url"].endswith("image-to-video")
 
 

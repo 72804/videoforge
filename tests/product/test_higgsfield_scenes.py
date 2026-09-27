@@ -114,7 +114,12 @@ def test_visible_cast_and_unique_refs(tmp_path: Path) -> None:
         assert 5 <= scene.duration <= 10
         assert scene.model == (
             "seedance-2.5-image-to-video"
-            if len(scene.visible_characters) == 1
+            if scene.scene_id in {
+                "HF1_hook_bill",
+                "HF3_birko_slips",
+                "HF7_kemal_pays",
+                "HF8_payoff",
+            }
             else "seedance-2.5-reference-to-video"
         )
 
@@ -152,7 +157,7 @@ def test_seedance_native_audio_not_external_tts(tmp_path: Path) -> None:
         if scene.dialogue_lines:
             assert "lip-synced Turkish" in scene.video_prompt
         else:
-            assert "Do not invent lines." in scene.video_prompt
+            assert "No spoken dialogue" in scene.video_prompt
     from docprod.product.higgsfield_scenes import format_higgsfield_review
 
     review = format_higgsfield_review(plan, {slug: {"use": ""} for slug in names})
@@ -212,8 +217,8 @@ def test_concat_and_zero_http_plan(tmp_path: Path) -> None:
     assert result["provider_http_calls"] == 0
     assert result["execute"] is False
     assert result["scene_count"] == 8
-    assert result["expected_usd"] == 9.6192
-    assert result["reserved_usd"] == 11.8656
+    assert result["expected_usd"] == 9.4464
+    assert result["reserved_usd"] == 11.6352
     assert result["new_image_usd"] == 0.0
     assert result["new_tts_usd"] == 0.0
     assert result["new_llm_usd"] == 0.0
@@ -490,7 +495,7 @@ def test_preflight_zero_http() -> None:
     assert payload["provider_http_calls"] == 0
     assert payload["generation_posts"] == 0
     assert payload["live_post_authorized"] is True
-    assert payload["expected_usd"] == 9.6192
-    assert payload["reserved_usd"] == 11.8656
+    assert payload["expected_usd"] == 9.4464
+    assert payload["reserved_usd"] == 11.6352
     assert payload["hard_cap_usd"] == 12.0
     assert payload["ready_for_live"] is True
