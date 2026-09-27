@@ -24,6 +24,11 @@ from docprod.product.episode import (
 )
 from docprod.product.errors import AuthorizationError, ProductError
 from docprod.product.friend_group import HOOK_FIRST_WRITER_INSTRUCTIONS
+from docprod.product.production_director import (
+    direct_friend_group_episode,
+    format_production_review,
+    production_plans_for_profiles,
+)
 from docprod.product.series import (
     BIRKO_E2_TARGET_STACK,
     birko_character_refs_dir,
@@ -36,7 +41,6 @@ from docprod.product.story_artifacts import (
     location_bible_from_story,
     output_sha256,
     parse_friend_group_story,
-    shot_plan_from_finalizer,
     stage_output_text,
 )
 from docprod.providers.pricing import (
@@ -83,6 +87,14 @@ PLAN_JSON_RELATIVE = (
 CHECKPOINT_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/review/"
     "episode_2_ensemble_checkpoint.json"
+)
+PRODUCTION_REVIEW_RELATIVE = (
+    "projects/birko_kemal_drama_canary/artifacts/review/"
+    "episode_2_production_review.md"
+)
+PRODUCTION_PLAN_JSON_RELATIVE = (
+    "projects/birko_kemal_drama_canary/artifacts/review/"
+    "episode_2_production_plan.json"
 )
 
 _ELEVEN_PROPOSED = {
@@ -478,8 +490,19 @@ def rebuild_story_artifacts(
         return {"review": str(review_path), "spec": ""}
     spec = parse_friend_group_story(run, brief)
     payload = _parse_json_blob(run.final_script)
-    shots = shot_plan_from_finalizer(payload)
     location = location_bible_from_story(brief)
+    role_hints = {member.name: member.role_archetype for member in BIRKO_CAST}
+    directed = direct_friend_group_episode(
+        payload,
+        spec,
+        brief,
+        location,
+        locked_refs=refs,
+        profile=QualityProfile.PREMIUM,
+        role_hints=role_hints,
+    )
+    spec = directed.spec
+    shots = directed.shot_plan
     known = sum(float(item.usd or 0) for item in run.model_usage)
     review_path.write_text(
         format_generated_review(
@@ -497,6 +520,110 @@ def rebuild_story_artifacts(
     )
     spec_path.write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")
     return {"review": str(review_path), "spec": str(spec_path)}
+
+
+def execute_production_director(
+    *,
+    plan: StoryGenerationPlan,
+    refs: list[dict[str, object]],
+    settings: Settings | None = None,
+) -> dict[str, object]:
+    del settings
+    brief = locked_episode_brief(series_slug=plan.series_slug, episode_number=plan.episode_number)
+    run = load_ensemble_checkpoint()
+    if run is None or not run.final_script.strip():
+        raise ProductError("production-plan requires a completed story checkpoint")
+    hydrate_succeeded_stages(run)
+    spec = parse_friend_group_story(run, brief)
+    payload = _parse_json_blob(run.final_script)
+    location = location_bible_from_story(brief)
+    role_hints = {member.name: member.role_archetype for member in BIRKO_CAST}
+    directed = direct_friend_group_episode(
+        payload,
+        spec,
+        brief,
+        location,
+        locked_refs=refs,
+        profile=QualityProfile.PREMIUM,
+        role_hints=role_hints,
+    )
+    spec = directed.spec
+    plans = production_plans_for_profiles(directed)
+    voices = proposed_voice_assignments(language=brief.language)
+    voice_lines = [
+        f"- {item.character_name}: {item.provider}/{item.voice_id} "
+        f"(fallback {item.fallback_provider}/{item.fallback_voice_id}; no cloning; TTS not called)"
+        for item in voices
+    ]
+    ref_lines = [
+        f"- {row['name']}: present={row['present']} path={row['resolved_path']} "
+        f"sha256={row['sha256']} {row['width']}x{row['height']}"
+        for row in refs
+    ]
+    known = sum(float(item.usd or 0) for item in run.model_usage)
+    root = _repo_root()
+    production_path = root / PRODUCTION_REVIEW_RELATIVE
+    plan_json_path = root / PRODUCTION_PLAN_JSON_RELATIVE
+    spec_path = (
+        root / "projects/birko_kemal_drama_canary/artifacts/review/episode_2_story_spec.json"
+    )
+    production_path.parent.mkdir(parents=True, exist_ok=True)
+    production_path.write_text(
+        format_production_review(
+            brief=brief,
+            spec=spec,
+            directed=directed,
+            location=location,
+            voices=voice_lines,
+            refs=ref_lines,
+            plans=plans,
+            known_story_usd=known,
+        ),
+        encoding="utf-8",
+    )
+    plan_json_path.write_text(
+        json.dumps(
+            {
+                "old_shot_count": directed.old_shot_count,
+                "new_shot_count": len(directed.shot_plan.shots),
+                "total_duration_seconds": directed.shot_plan.total_duration_seconds,
+                "role_coverage": directed.shot_plan.role_coverage,
+                "plans": {key: value.model_dump() for key, value in plans.items()},
+                "shot_plan": directed.shot_plan.model_dump(),
+                "provider_http_calls": 0,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    spec_path.write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    rebuild_story_artifacts(brief, plan, refs, run)
+    return {
+        "stage": "production-plan",
+        "plan": plan.model_dump(),
+        "artifacts": {
+            "review": str(root / REVIEW_RELATIVE),
+            "production_review": str(production_path),
+            "production_plan": str(plan_json_path),
+            "spec": str(spec_path),
+        },
+        "old_shot_count": directed.old_shot_count,
+        "new_shot_count": len(directed.shot_plan.shots),
+        "total_duration_seconds": directed.shot_plan.total_duration_seconds,
+        "balanced": plans["balanced"].model_dump(),
+        "premium": plans["premium"].model_dump(),
+        "max": plans["max"].model_dump(),
+        "media_calls": 0,
+        "stars": 0,
+        "provider_http_calls": 0,
+        "planned_text_model_calls": len(plan.calls),
+        "submitted_text_model_calls": 0,
+        "completed_text_model_calls": len(run.model_usage),
+        "text_model_calls": 0,
+        "ready_for_media_generation": False,
+    }
 
 
 def story_status_report(
@@ -709,14 +836,15 @@ def build_story_generation_plan(
 
 def story_generation_outputs() -> list[str]:
     return [
-        "FriendGroupStorySpec (title, logline, hook, premise, beats, dialogue, narration, "
-        "callbacks, payoff, ending, continuity, motion graphics, audio intent)",
+        "FriendGroupStorySpec (title, logline, hook, premise, final_story, beats, dialogue)",
         "CreativeEnsembleRun (3 Astra treatments, fresh Astra critic, Astra final)",
-        "EpisodeShotPlan with per-shot production class and cast_refs",
+        "PRODUCTION_DIRECTOR EpisodeShotPlan with visible/offscreen cast and routing",
+        "EpisodeProductionPlan Balanced/Premium/Max (no media)",
         "LocationBible details filled by engine",
         "prop continuity ledger from generated story",
         "VoiceAssignment proposals (no TTS)",
         REVIEW_RELATIVE,
+        PRODUCTION_REVIEW_RELATIVE,
         PLAN_JSON_RELATIVE,
         CHECKPOINT_RELATIVE,
     ]
@@ -981,8 +1109,15 @@ def run_friend_group_episode(
             text_client=text_client,
             execute_calls=True if execute_calls is None else execute_calls,
         )
+    if token in {"production-plan", "production-director", "director"}:
+        return execute_production_director(
+            plan=plan,
+            refs=refs,
+            settings=settings,
+        )
     raise ValueError(
-        f"unknown stage {stage!r}; use story-plan, story-check, story-status, or story-generate"
+        f"unknown stage {stage!r}; use story-plan, story-check, story-status, "
+        "story-generate, or production-plan"
     )
 
 

@@ -45,6 +45,7 @@ class FriendGroupStorySpec(BaseModel):
     logline: str = ""
     cold_open_hook: str
     premise: str
+    final_story: str = ""
     target_duration: float = 0.0
     cast: list[str] = Field(default_factory=list)
     character_relationships: dict[str, str] = Field(default_factory=dict)

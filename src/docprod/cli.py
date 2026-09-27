@@ -3068,7 +3068,8 @@ def friend_group_episode(
     stage: str = typer.Option(
         "story-plan",
         "--stage",
-        help="story-plan, story-check, story-status (zero network), or story-generate",
+        help="story-plan, story-check, story-status (zero network), story-generate, "
+        "or production-plan",
     ),
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
@@ -3153,6 +3154,18 @@ def friend_group_episode(
     if artifacts:
         console.print(f"review={artifacts.get('review')}")
         console.print(f"plan_json={artifacts.get('plan')}")
+        if artifacts.get("production_review"):
+            console.print(f"production_review={artifacts.get('production_review')}")
+        if artifacts.get("production_plan"):
+            console.print(f"production_plan={artifacts.get('production_plan')}")
+    if payload.get("provider_http_calls") is not None:
+        console.print(f"provider_http_calls={payload.get('provider_http_calls')}")
+    if payload.get("old_shot_count") is not None:
+        console.print(
+            f"old_shot_count={payload.get('old_shot_count')} "
+            f"new_shot_count={payload.get('new_shot_count')} "
+            f"total_duration={payload.get('total_duration_seconds')}"
+        )
 
 
 @app.command("birko-episode2")

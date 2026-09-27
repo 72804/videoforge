@@ -12,6 +12,11 @@ from docprod.product.episode import (
     ShotRequirement,
 )
 from docprod.product.friend_group import DialogueLineSpec, FriendGroupStorySpec, SceneBeatSpec
+from docprod.product.production_director import (
+    incomplete_generated_text,
+    synthesize_final_story,
+    unique_ids,
+)
 from docprod.quality.ensemble import ENSEMBLE_STAGES, CreativeEnsembleRun, EnsembleStageRecord
 from docprod.quality.enums import SceneProductionClass
 
@@ -84,7 +89,9 @@ def parse_friend_group_story(
         shots = list(scene.get("shots") or [])
         visual = " ".join(
             str(shot.get("action") or "") for shot in shots if isinstance(shot, dict)
-        )
+        ).strip()
+        if incomplete_generated_text(visual):
+            raise ValueError(f"scene {scene_id} description is incomplete: {visual[-48:]}")
         present: list[str] = []
         for shot in shots:
             if not isinstance(shot, dict):
@@ -94,6 +101,7 @@ def parse_friend_group_story(
                     continue
                 speaker = str(item.get("character") or "")
                 text = str(item.get("line") or "")
+                folded_speaker = unique_ids([speaker])
                 if speaker and speaker not in present:
                     present.append(speaker)
                 if text and not first_line:
@@ -101,7 +109,9 @@ def parse_friend_group_story(
                 if text:
                     lines.append(
                         DialogueLineSpec(
-                            speaker_character_id=speaker.casefold() or "unknown",
+                            speaker_character_id=folded_speaker[0]
+                            if folded_speaker
+                            else "unknown",
                             text=text,
                             emotion="",
                             delivery=str(item.get("delivery") or ""),
@@ -113,27 +123,31 @@ def parse_friend_group_story(
                 scene_id=scene_id,
                 order_index=index,
                 hook=first_line if index == 0 else "",
-                visual=visual[:500],
+                visual=visual,
                 intent=str(scene.get("time") or ""),
-                character_ids=present,
-                duration_seconds=float(payload.get("duration_seconds") or 59) / max(len(scenes), 1),
+                character_ids=unique_ids(present),
+                duration_seconds=0.0,
             )
         )
     duration = float(payload.get("duration_seconds") or 59)
     notes = [str(item) for item in list(payload.get("production_notes") or [])]
+    final_story = synthesize_final_story(payload, brief)
+    if final_story.strip() == brief.premise.strip() and any(beat.visual for beat in beats):
+        final_story = " ".join(beat.visual for beat in beats if beat.visual)
     return FriendGroupStorySpec(
         title=title,
         logline=str(payload.get("tone") or ""),
         cold_open_hook=first_line,
         premise=brief.premise,
+        final_story=final_story,
         target_duration=duration,
         cast=list(payload.get("cast") or brief.cast_names),
         scene_beats=beats,
         dialogue_lines=lines,
         narration_lines=[],
         comedy_drama_tension=str(payload.get("tone") or ""),
-        callbacks=["Ben sadece su içtim.", "Afiyet olsun."],
-        payoff="Birko outside eating the last donut while Kemal paid inside.",
+        callbacks=[line.text for line in lines[:1] + lines[-1:]] if lines else [],
+        payoff=brief.ending,
         ending=brief.ending,
         continuity_updates=notes,
         motion_graphics_requests=["phone invitation graphic"],
@@ -195,6 +209,15 @@ def location_bible_from_story(brief: EpisodeBrief) -> LocationBible:
         lighting="Warm café interior; cooler evening street light outside.",
         time_of_day="evening",
         props=["receipt", "premium donut box", "water bottle", "POS", "phone", "last donut"],
+        spatial_layout={
+            "table": "One occupied six-top; same seats through interior scenes.",
+            "counter": "Behind the table, opposite the window wall.",
+            "window": "Street-facing glass on the table's window side.",
+            "door": "Entrance behind HG's sightline so an exit can pass unseen by most.",
+            "exterior_bench": "Bench immediately outside the same window.",
+            "lighting": "Warm café interior; cooler evening street light outside.",
+            "time_of_day": "evening",
+        },
         engine_owned_details=False,
     )
 
@@ -232,8 +255,12 @@ def format_generated_review(
         for beat in spec.scene_beats
     ]
     shot_lines = [
-        f"- {shot.shot_id} class={shot.production_class} cast={','.join(shot.cast_refs) or 'n/a'} "
-        f"preferred={shot.preferred_model} status={shot.implementation_status} | {shot.action}"
+        f"- {shot.shot_id} class={shot.production_class} "
+        f"visible={','.join(shot.visible_cast or shot.cast_refs) or 'none'} "
+        f"offscreen={','.join(shot.offscreen_speakers) or 'none'} "
+        f"executable={shot.executable_model or shot.preferred_model} "
+        f"ideal={shot.ideal_model or shot.preferred_model} "
+        f"status={shot.implementation_status} | {shot.action}"
         for shot in shots.shots
     ]
     return "\n".join(
@@ -264,7 +291,7 @@ def format_generated_review(
             "",
             "## FINAL STORY",
             "",
-            spec.premise,
+            spec.final_story or spec.premise,
             "",
             spec.payoff,
             "",
