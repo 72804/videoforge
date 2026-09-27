@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from docprod.config import (
     Settings,
@@ -390,6 +392,63 @@ def seedance_request_fingerprint(
 
 
 HIGGSFIELD_API_BASE = "https://api.higgsfield.ai"
+_BARE_REQUEST_PATH = re.compile(r"^/requests/[^/]+/?$")
+_MEDIA_SUFFIXES = (".mp4", ".webm", ".mov", ".m4v")
+
+
+def higgsfield_status_url(request_id: str) -> str:
+    return f"{HIGGSFIELD_API_BASE}/requests/{request_id.strip()}/status"
+
+
+def is_bare_higgsfield_request_url(url: str) -> bool:
+    parsed = urlparse(url.strip())
+    return bool(_BARE_REQUEST_PATH.match(parsed.path or ""))
+
+
+def official_higgsfield_response_url(request_id: str) -> str:
+    """Official client defaults response_url to GET /requests/{id}/status, not /requests/{id}."""
+    try:
+        from higgsfield_client.http.client import RequestController
+
+        urls = RequestController.build_urls(HIGGSFIELD_API_BASE, request_id.strip())
+        return str(urls["response_url"])
+    except Exception:
+        return higgsfield_status_url(request_id)
+
+
+def extract_higgsfield_follow_url(payload: dict[str, Any]) -> str:
+    for key in ("response_url", "result_url"):
+        url = str(payload.get(key) or "").strip()
+        if url.startswith("http"):
+            return url
+    return ""
+
+
+def looks_like_media_url(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return path.endswith(_MEDIA_SUFFIXES)
+
+
+def _higgsfield_get_json(
+    url: str,
+    *,
+    settings: Settings | None = None,
+    allow_404: bool = False,
+) -> dict[str, Any]:
+    import httpx
+
+    if is_bare_higgsfield_request_url(url):
+        raise ValueError(
+            "bare GET /requests/{id} is not a Higgsfield result endpoint; use /status"
+        )
+    headers = {"Authorization": higgsfield_auth_header(settings)}
+    with httpx.Client(timeout=60.0) as client:
+        response = client.get(url, headers=headers)
+        if allow_404 and response.status_code == 404:
+            return {}
+        response.raise_for_status()
+        payload = response.json() if response.content else {}
+    return payload if isinstance(payload, dict) else {"raw": payload}
 
 
 def higgsfield_request_status(
@@ -398,40 +457,51 @@ def higgsfield_request_status(
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """GET existing request status. Never creates a generation."""
-    import httpx
+    return _higgsfield_get_json(higgsfield_status_url(request_id), settings=settings)
 
-    rid = request_id.strip()
-    url = f"{HIGGSFIELD_API_BASE}/requests/{rid}/status"
-    headers = {"Authorization": higgsfield_auth_header(settings)}
-    with httpx.Client(timeout=60.0) as client:
-        response = client.get(url, headers=headers)
-        response.raise_for_status()
-        payload = response.json() if response.content else {}
-    return payload if isinstance(payload, dict) else {"raw": payload}
+
+def higgsfield_sdk_result(
+    request_id: str,
+    *,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Official result GET uses SDK response_url (/status), never bare /requests/{id}."""
+    key = resolve_higgsfield_api_key(settings)
+    try:
+        from higgsfield_client.http.client import SyncClient
+
+        client = SyncClient(api_key=key, base_url=HIGGSFIELD_API_BASE)
+        controller = client.get_request_controller(request_id.strip())
+        url = str(controller.response_url)
+    except Exception:
+        url = official_higgsfield_response_url(request_id)
+    return _higgsfield_get_json(url, settings=settings, allow_404=True)
 
 
 def higgsfield_request_result(
     request_id: str,
     *,
     settings: Settings | None = None,
+    payload: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """GET existing request result. Never creates a generation."""
-    import httpx
-
-    rid = request_id.strip()
-    url = f"{HIGGSFIELD_API_BASE}/requests/{rid}"
-    headers = {"Authorization": higgsfield_auth_header(settings)}
-    with httpx.Client(timeout=60.0) as client:
-        response = client.get(url, headers=headers)
-        if response.status_code == 404:
-            return {}
-        response.raise_for_status()
-        payload = response.json() if response.content else {}
-    return payload if isinstance(payload, dict) else {"raw": payload}
+    """Retrieve result without synthesizing GET /requests/{id}. Never creates a generation."""
+    body = payload if isinstance(payload, dict) else {}
+    if extract_higgsfield_video_url(body):
+        return {}
+    follow = extract_higgsfield_follow_url(body)
+    if follow:
+        if looks_like_media_url(follow):
+            return {"url": follow}
+        if is_bare_higgsfield_request_url(follow):
+            follow = official_higgsfield_response_url(request_id)
+        return _higgsfield_get_json(follow, settings=settings, allow_404=True)
+    return higgsfield_sdk_result(request_id, settings=settings)
 
 
 def extract_higgsfield_video_url(payload: dict[str, Any]) -> str:
     video = payload.get("video")
+    if isinstance(video, str) and video.startswith("http"):
+        return video.strip()
     if isinstance(video, dict):
         url = str(video.get("url") or "").strip()
         if url:
@@ -440,14 +510,28 @@ def extract_higgsfield_video_url(payload: dict[str, Any]) -> str:
         rows = payload.get(key)
         if isinstance(rows, list):
             for row in rows:
+                if isinstance(row, str) and row.startswith("http"):
+                    return row
                 if not isinstance(row, dict):
                     continue
                 url = str(row.get("url") or "").strip()
                 if url:
                     return url
+    output = payload.get("output")
+    if isinstance(output, dict):
+        media = output.get("media_url")
+        if isinstance(media, str) and media.startswith("http"):
+            return media
+        if isinstance(media, list):
+            for item in media:
+                if isinstance(item, str) and item.startswith("http"):
+                    return item
     direct = str(payload.get("url") or "").strip()
-    if direct.startswith("http"):
+    if direct.startswith("http") and looks_like_media_url(direct):
         return direct
+    if direct.startswith("http") and not is_bare_higgsfield_request_url(direct):
+        if "/requests/" not in direct:
+            return direct
     for nested_key in ("data", "result", "output", "request"):
         nested = payload.get(nested_key)
         if isinstance(nested, dict):
@@ -455,6 +539,40 @@ def extract_higgsfield_video_url(payload: dict[str, Any]) -> str:
             if found:
                 return found
     return ""
+
+
+def sanitize_higgsfield_lifecycle(
+    payload: dict[str, Any],
+    *,
+    request_id: str,
+) -> dict[str, Any]:
+    video = payload.get("video")
+    if isinstance(video, dict):
+        video_keys = list(video.keys())
+    elif video is None:
+        video_keys: list[str] = []
+    else:
+        video_keys = ["<scalar>"]
+    result = payload.get("result")
+    result_keys = list(result.keys()) if isinstance(result, dict) else []
+    output = payload.get("output")
+    output_keys = list(output.keys()) if isinstance(output, dict) else []
+    raw = payload.get("status")
+    if isinstance(raw, dict):
+        raw_status = str(raw.get("status") or raw.get("state") or "")
+    else:
+        raw_status = str(raw or payload.get("state") or "")
+    return {
+        "request_id": str(payload.get("request_id") or request_id),
+        "status": raw_status,
+        "status_url": str(payload.get("status_url") or "").strip() or None,
+        "response_url": str(payload.get("response_url") or "").strip() or None,
+        "result_url": str(payload.get("result_url") or "").strip() or None,
+        "video_keys": video_keys,
+        "result_keys": result_keys,
+        "output_keys": output_keys,
+        "has_video_url": bool(extract_higgsfield_video_url(payload)),
+    }
 
 
 def classify_higgsfield_status(raw: str) -> str:

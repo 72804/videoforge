@@ -41,6 +41,7 @@ from docprod.providers.higgsfield import (
     higgsfield_credentials_present,
     higgsfield_request_result,
     higgsfield_request_status,
+    sanitize_higgsfield_lifecycle,
     seedance_image_to_video_body,
     seedance_reference_to_video_body,
     seedance_request_fingerprint,
@@ -808,6 +809,28 @@ def higgsfield_plan_fingerprint(plan: HiggsfieldScenePlan) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _episode_remote_input_urls(plan: HiggsfieldScenePlan) -> list[str]:
+    urls: list[str] = []
+    for scene in plan.scenes:
+        for asset in scene.input_assets:
+            remote = str(asset.get("remote_https_url") or "").strip()
+            if remote:
+                urls.append(remote)
+        urls.extend(collect_request_input_urls(scene.request_body))
+    unique = list(dict.fromkeys(urls))
+    for url in unique:
+        assert_https_input_url(url)
+        if "/api/v1/public-inputs/" in url:
+            raise ProductError(
+                "STOP BEFORE PAID HTTP: FastAPI public-inputs URLs must not be used"
+            )
+        if "/hf-in/" not in url:
+            raise ProductError(
+                "STOP BEFORE PAID HTTP: Episode 2 inputs must use static /hf-in/ URLs"
+            )
+    return unique
+
+
 def higgsfield_live_stop_reasons(
     *,
     series_slug: str,
@@ -997,6 +1020,29 @@ def _raw_provider_status(payload: dict[str, Any]) -> str:
     return str(raw or "")
 
 
+def _http_status_code(exc: BaseException) -> int | None:
+    response = getattr(exc, "response", None)
+    code = getattr(response, "status_code", None)
+    try:
+        return int(code) if code is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _invoke_result(
+    result_fn: Callable[..., dict[str, Any]],
+    request_id: str,
+    *,
+    settings: Settings | None,
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    try:
+        extra = result_fn(request_id, settings=settings, payload=payload)
+    except TypeError:
+        extra = result_fn(request_id, settings=settings)
+    return extra if isinstance(extra, dict) else {}
+
+
 def _download_completed_clip(
     *,
     scene_id: str,
@@ -1008,10 +1054,12 @@ def _download_completed_clip(
     root: Path,
 ) -> tuple[Path | None, str, dict[str, Any]]:
     merged = dict(payload)
-    extra = result_fn(request_id, settings=settings)
-    if extra:
-        merged = {**merged, **extra}
     url = extract_higgsfield_video_url(merged)
+    if not url:
+        extra = _invoke_result(result_fn, request_id, settings=settings, payload=payload)
+        if extra:
+            merged = {**merged, **extra}
+        url = extract_higgsfield_video_url(merged)
     if not url:
         return None, "", merged
     dest = _clip_path(scene_id, root=root)
@@ -1071,16 +1119,18 @@ def poll_higgsfield_request_once(
     payload = status_fn(request_id, settings=settings)
     raw_status = _raw_provider_status(payload)
     if not raw_status:
-        extra = result_fn(request_id, settings=settings)
+        extra = _invoke_result(result_fn, request_id, settings=settings, payload=payload)
         if extra:
             payload = {**payload, **extra}
             raw_status = _raw_provider_status(payload)
     kind = classify_higgsfield_status(raw_status)
+    lifecycle = sanitize_higgsfield_lifecycle(payload, request_id=request_id)
     _update_op(
         ledger,
         scene_id,
         request_id=request_id,
         provider_status=raw_status or kind,
+        provider_lifecycle=lifecycle,
     )
     if kind in {"queued"}:
         _update_op(ledger, scene_id, state="SUBMITTED")
@@ -1091,15 +1141,29 @@ def poll_higgsfield_request_once(
         _save_ledger(ledger_path, ledger)
         return "PROCESSING"
     if kind == "completed":
-        dest, url, merged = _download_completed_clip(
-            scene_id=scene_id,
-            request_id=request_id,
-            payload=payload,
-            result_fn=result_fn,
-            download_fn=download_fn,
-            settings=settings,
-            root=root,
-        )
+        try:
+            dest, url, merged = _download_completed_clip(
+                scene_id=scene_id,
+                request_id=request_id,
+                payload=payload,
+                result_fn=result_fn,
+                download_fn=download_fn,
+                settings=settings,
+                root=root,
+            )
+        except Exception as exc:
+            if _http_status_code(exc) == 405:
+                _update_op(
+                    ledger,
+                    scene_id,
+                    state="UNCERTAIN",
+                    error="result retrieval HTTP 405; not resubmitting",
+                    provider_lifecycle=lifecycle,
+                )
+                _save_ledger(ledger_path, ledger)
+                return "UNCERTAIN"
+            raise
+        lifecycle = sanitize_higgsfield_lifecycle(merged, request_id=request_id)
         if dest is None or not _playable_clip(dest):
             _update_op(
                 ledger,
@@ -1107,6 +1171,7 @@ def poll_higgsfield_request_once(
                 state="UNCERTAIN",
                 error="completed without playable video",
                 video_url=url,
+                provider_lifecycle=lifecycle,
             )
             _save_ledger(ledger_path, ledger)
             return "UNCERTAIN"
@@ -1117,6 +1182,7 @@ def poll_higgsfield_request_once(
             "artifact_path": str(dest),
             "video_url": url,
             "downloaded": True,
+            "provider_lifecycle": lifecycle,
         }
         row.update(_persist_probe(row, dest))
         _update_op(ledger, scene_id, **row)
@@ -1193,10 +1259,15 @@ def recover_higgsfield_jobs(
         status_calls += 1
         return status(request_id, settings=settings)
 
-    def counted_result(request_id: str, *, settings: Settings | None = None) -> dict[str, Any]:
+    def counted_result(
+        request_id: str,
+        *,
+        settings: Settings | None = None,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         nonlocal result_calls
         result_calls += 1
-        return result(request_id, settings=settings)
+        return _invoke_result(result, request_id, settings=settings, payload=payload or {})
 
     def poll_one(scene_id: str, request_id: str) -> str:
         return poll_existing_higgsfield_request(
@@ -1362,15 +1433,7 @@ def execute_higgsfield_scene_preflight(
         settings=settings,
         require_confirm_paid=False,
     )
-    unique_urls = list(
-        dict.fromkeys(
-            url
-            for scene in plan.scenes
-            for url in collect_request_input_urls(scene.request_body)
-        )
-    )
-    for url in unique_urls:
-        assert_https_input_url(url)
+    unique_urls = _episode_remote_input_urls(plan)
     remote_ok = False
     try:
         preflight_input_urls(unique_urls, probe=url_probe)
@@ -1394,6 +1457,8 @@ def execute_higgsfield_scene_preflight(
         "episode": episode_number,
         "stop_reasons": reasons,
         "input_url_count": len(unique_urls),
+        "remote_inputs": len(unique_urls),
+        "remote_inputs_reachable": len(unique_urls) if remote_ok else 0,
         "remote_urls_reachable": remote_ok,
         "provider_http_calls": 0,
         "generation_posts": 0,
@@ -1436,15 +1501,7 @@ def execute_higgsfield_scene_generate(
         settings=settings,
         approved_fingerprint=approved_fingerprint,
     )
-    unique_urls = list(
-        dict.fromkeys(
-            url
-            for scene in plan.scenes
-            for url in collect_request_input_urls(scene.request_body)
-        )
-    )
-    for url in unique_urls:
-        assert_https_input_url(url)
+    unique_urls = _episode_remote_input_urls(plan)
     if execute_calls:
         preflight_input_urls(unique_urls, probe=url_probe)
     if not execute_calls:

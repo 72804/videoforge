@@ -15,7 +15,7 @@ from docprod.storage.hashing import file_sha256
 
 PUBLIC_INPUT_TOKEN = "n8vQ2wKmR7pL4xYcH1jF6tB9d"
 DEFAULT_PUBLIC_ORIGIN = "https://videoforge-dusky.vercel.app"
-PUBLIC_INPUT_PREFIX = "/api/v1/public-inputs"
+PUBLIC_INPUT_PREFIX = "/hf-in"
 PACKAGED_INPUTS_RELATIVE = "product/data/higgsfield_inputs"
 MAPPING_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/"
@@ -197,7 +197,7 @@ def build_public_asset_map(
     payload = {
         "origin": origin,
         "token_name": "VIDEOFORGE_PUBLIC_INPUT_TOKEN",
-        "hosting": "videoforge vercel fastapi /api/v1/public-inputs/{token}/{asset_id}.jpg",
+        "hosting": "videoforge vercel static /hf-in/{token}/{asset_id}.jpg",
         "cleanup": (
             "After Higgsfield has fetched every scene input, rotate "
             "VIDEOFORGE_PUBLIC_INPUT_TOKEN, delete "

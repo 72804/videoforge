@@ -37,7 +37,8 @@ def test_local_paths_never_enter_request_body(tmp_path: Path) -> None:
         assert scene.generate_audio is True
         for url in collect_request_input_urls(scene.request_body):
             assert url.startswith("https://")
-            assert PUBLIC_INPUT_TOKEN in url
+            assert "/hf-in/" in url
+            assert "/api/v1/public-inputs/" not in url
         for asset in scene.input_assets:
             assert Path(asset["local_path"]).is_file()
             assert asset["remote_https_url"].startswith("https://")
@@ -55,7 +56,7 @@ def test_https_url_required() -> None:
 def test_inaccessible_url_stops_before_paid() -> None:
     with pytest.raises(ProductError, match="STOP BEFORE PAID HTTP"):
         preflight_input_urls(
-            ["https://videoforge-dusky.vercel.app/api/v1/public-inputs/x/y.jpg"],
+            ["https://videoforge-dusky.vercel.app/hf-in/x/y.jpg"],
             probe=lambda url: {
                 "status_code": 404,
                 "ok": False,
@@ -78,6 +79,7 @@ def test_public_asset_mapping(tmp_path: Path) -> None:
     assert row["character_id"] == "birko"
     assert row["local_path"].endswith("ref_birko.jpg")
     assert row["remote_https_url"].startswith("https://")
+    assert "/hf-in/" in row["remote_https_url"]
     assert "birko.jpg" not in row["remote_https_url"]
 
 

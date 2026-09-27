@@ -3255,6 +3255,13 @@ def friend_group_episode(
             console.print(f"hard_cap_usd={payload.get('hard_cap_usd')}")
             console.print(f"cap_ok={str(bool(payload.get('cap_ok'))).lower()}")
             console.print(creds)
+            console.print(
+                f"remote_inputs={payload.get('remote_inputs', payload.get('input_url_count'))}"
+            )
+            console.print(
+                "remote_inputs_reachable="
+                f"{payload.get('remote_inputs_reachable', 0)}"
+            )
             console.print("confirm_paid_required=true")
             console.print(
                 "live_post_authorized="

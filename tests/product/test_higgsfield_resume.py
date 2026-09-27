@@ -393,3 +393,123 @@ def test_failed_requires_explicit_retry_and_preserves_old_ids(tmp_path: Path) ->
     assert recovered["generation_posts"] >= 1
     assert saved["operations"]["HF1_hook_bill"]["request_id"] == "brand-new"
     assert "old-failed-1" in saved["operations"]["HF1_hook_bill"]["failed_request_ids"]
+
+
+def test_completed_status_video_url_skips_result_fn(tmp_path: Path) -> None:
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    ledger_path = tmp_path / HIGGSFIELD_LEDGER_RELATIVE
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _submitted_ledger()
+    ops = payload["operations"]
+    assert isinstance(ops, dict)
+    for scene_id in list(ops)[1:]:
+        ops[scene_id] = {
+            "state": "FAILED",
+            "request_id": f"old-{scene_id}",
+            "error": "Please provide a publicly accessible HTTP or HTTPS URL for the input file.",
+        }
+    ops["HF1_hook_bill"] = {
+        "state": "PROCESSING",
+        "request_id": "3668993e-89df-4678-9dba-56a13c53987b",
+        "history": [{"state": "FAILED", "request_id": "d0599681-5173-4954-93e6-080fc6da67c3"}],
+        "failed_request_ids": ["d0599681-5173-4954-93e6-080fc6da67c3"],
+    }
+    ledger_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    result_calls: list[str] = []
+    recovered = recover_higgsfield_jobs(
+        plan,
+        allow_submit=True,
+        confirm_paid=True,
+        submit=lambda **kwargs: (_ for _ in ()).throw(AssertionError("posted")),
+        status_fn=lambda request_id, settings=None: {
+            "status": "completed",
+            "request_id": request_id,
+            "status_url": f"https://api.higgsfield.ai/requests/{request_id}/status",
+            "video": {"url": "https://cdn.example/clip.mp4"},
+        },
+        result_fn=lambda request_id, settings=None: result_calls.append(request_id) or {},
+        download_fn=lambda url, dest: _write_vertical_mp4(Path(dest)),
+        sleeper=lambda _delay: None,
+        now_fn=lambda: 0.0,
+        deadline_seconds=1_000.0,
+        root=tmp_path,
+    )
+    saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert recovered["generation_posts"] == 0
+    assert result_calls == []
+    assert saved["operations"]["HF1_hook_bill"]["state"] == "SUCCEEDED"
+    assert saved["operations"]["HF1_hook_bill"]["request_id"] == (
+        "3668993e-89df-4678-9dba-56a13c53987b"
+    )
+    assert saved["operations"]["HF1_hook_bill"]["audio_present"] is True
+    assert "d0599681-5173-4954-93e6-080fc6da67c3" in saved["operations"]["HF1_hook_bill"][
+        "failed_request_ids"
+    ]
+    assert saved["operations"]["HF2_order_setup"]["request_id"] == "old-HF2_order_setup"
+    assert saved["operations"]["HF2_order_setup"]["state"] == "FAILED"
+
+
+def test_completed_status_response_url_uses_exact_url(tmp_path: Path) -> None:
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    ledger_path = tmp_path / HIGGSFIELD_LEDGER_RELATIVE
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(_submitted_ledger()) + "\n", encoding="utf-8")
+    seen: list[dict[str, object]] = []
+
+    def result_fn(request_id: str, *, settings=None, payload=None):
+        seen.append({"request_id": request_id, "payload": payload})
+        assert payload is not None
+        assert payload["response_url"] == "https://api.higgsfield.ai/exact-result"
+        return {"video": {"url": "https://cdn.example/from-response.mp4"}}
+
+    recover_higgsfield_jobs(
+        plan,
+        allow_submit=False,
+        status_fn=lambda request_id, settings=None: {
+            "status": "completed",
+            "response_url": "https://api.higgsfield.ai/exact-result",
+        },
+        result_fn=result_fn,
+        download_fn=lambda url, dest: _write_vertical_mp4(Path(dest)),
+        sleeper=lambda _delay: None,
+        now_fn=lambda: 0.0,
+        deadline_seconds=1_000.0,
+        root=tmp_path,
+    )
+    assert seen
+    assert seen[0]["payload"]["response_url"] == "https://api.higgsfield.ai/exact-result"
+
+
+def test_result_http_405_does_not_resubmit(tmp_path: Path) -> None:
+    import httpx
+
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    ledger_path = tmp_path / HIGGSFIELD_LEDGER_RELATIVE
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(_submitted_ledger()) + "\n", encoding="utf-8")
+    posts: list[str] = []
+
+    def result_fn(request_id: str, *, settings=None, payload=None):
+        request = httpx.Request("GET", f"https://api.higgsfield.ai/requests/{request_id}")
+        response = httpx.Response(405, request=request)
+        raise httpx.HTTPStatusError("Method Not Allowed", request=request, response=response)
+
+    recovered = recover_higgsfield_jobs(
+        plan,
+        allow_submit=True,
+        retry_failed=True,
+        confirm_paid=True,
+        submit=lambda **kwargs: posts.append("post") or {"request_id": "replacement"},
+        status_fn=lambda request_id, settings=None: {"status": "completed"},
+        result_fn=result_fn,
+        download_fn=lambda url, dest: dest,
+        sleeper=lambda _delay: None,
+        now_fn=lambda: 0.0,
+        deadline_seconds=1_000.0,
+        root=tmp_path,
+    )
+    saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert posts == []
+    assert recovered["generation_posts"] == 0
+    assert saved["operations"]["HF1_hook_bill"]["state"] == "UNCERTAIN"
+    assert saved["operations"]["HF1_hook_bill"]["request_id"] == "req-1"
