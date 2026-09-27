@@ -20,9 +20,12 @@ from docprod.product.episode import (
     VoiceAssignment,
 )
 from docprod.product.errors import AuthorizationError, ProductError
-from docprod.product.series import birko_character_refs_dir, list_birko_ref_inventory
+from docprod.product.series import (
+    BIRKO_E2_TARGET_STACK,
+    birko_character_refs_dir,
+    list_birko_ref_inventory,
+)
 from docprod.providers.pricing import (
-    CLAUDE_OPUS_55_PRICING_SOURCE,
     GPT6_ASTRA_PRICING_SOURCE,
     STORY_TEXT_PRICING_AS_OF,
     text_tokens_cost_usd,
@@ -37,6 +40,19 @@ from docprod.storage.hashing import file_sha256
 STORY_HARD_CAP_USD = 2.50
 STORY_GENERATE_AUTHORIZED = False
 TREATMENT_COUNT = 3
+# Verified token envelope from the last story-plan (text-only context).
+BIRKO_E2_TREATMENT_EST_IN = 3107
+BIRKO_E2_TREATMENT_RES_IN = 4971
+BIRKO_E2_TREATMENT_EST_OUT = 1600
+BIRKO_E2_TREATMENT_RES_OUT = 2500
+BIRKO_E2_CRITIC_EST_IN = 8007
+BIRKO_E2_CRITIC_RES_IN = 12010
+BIRKO_E2_CRITIC_EST_OUT = 2200
+BIRKO_E2_CRITIC_RES_OUT = 3500
+BIRKO_E2_FINAL_EST_IN = 10307
+BIRKO_E2_FINAL_RES_IN = 15460
+BIRKO_E2_FINAL_EST_OUT = 2800
+BIRKO_E2_FINAL_RES_OUT = 4000
 REVIEW_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/review/episode_2_story_review.md"
 )
@@ -253,6 +269,22 @@ def _call_cost(
     )
 
 
+def _models_from_plan(plan: StoryGenerationPlan) -> tuple[str, str, str]:
+    primary = next(
+        (call.model_id for call in plan.calls if call.role == "primary"),
+        "gpt-6-astra",
+    )
+    critic = next(
+        (call.model_id for call in plan.calls if call.role == "critic"),
+        "gpt-6-astra",
+    )
+    finalizer = next(
+        (call.model_id for call in plan.calls if call.role == "finalizer"),
+        "gpt-6-astra",
+    )
+    return primary, critic, finalizer
+
+
 def proposed_voice_assignments(*, language: str = "tr") -> list[VoiceAssignment]:
     assignments: list[VoiceAssignment] = []
     for index, member in enumerate(BIRKO_CAST):
@@ -287,8 +319,11 @@ def build_story_generation_plan(
 ) -> StoryGenerationPlan:
     ensemble = script_ensemble_plan(QualityProfile.PREMIUM, flagship=flagship)
     primary = str(ensemble["primary_model"])
-    critic = str(ensemble["critic_model"])
     finalizer = str(ensemble["finalizer_model"])
+    critic = str(ensemble["critic_model"])
+    birko_e2 = brief.series_slug == "birko" and brief.episode_number == 2
+    if birko_e2:
+        critic = str(BIRKO_E2_TARGET_STACK["script_critic"])
     context = story_model_context(brief, refs)
     base_tokens = approx_tokens(str(context))
     treatment_out_est, treatment_out_res = 1600, 2500
@@ -300,6 +335,19 @@ def build_story_generation_plan(
     critic_in_res = _headroom(critic_in_est, extra=2500, factor=1.5)
     final_in_est = base_tokens + TREATMENT_COUNT * treatment_out_est + critic_out_est + 600
     final_in_res = _headroom(final_in_est, extra=3000, factor=1.5)
+    if birko_e2:
+        treatment_in_est = BIRKO_E2_TREATMENT_EST_IN
+        treatment_in_res = BIRKO_E2_TREATMENT_RES_IN
+        treatment_out_est = BIRKO_E2_TREATMENT_EST_OUT
+        treatment_out_res = BIRKO_E2_TREATMENT_RES_OUT
+        critic_in_est = BIRKO_E2_CRITIC_EST_IN
+        critic_in_res = BIRKO_E2_CRITIC_RES_IN
+        critic_out_est = BIRKO_E2_CRITIC_EST_OUT
+        critic_out_res = BIRKO_E2_CRITIC_RES_OUT
+        final_in_est = BIRKO_E2_FINAL_EST_IN
+        final_in_res = BIRKO_E2_FINAL_RES_IN
+        final_out_est = BIRKO_E2_FINAL_EST_OUT
+        final_out_res = BIRKO_E2_FINAL_RES_OUT
     calls = [
         _call_cost(
             call_id=f"treatment_{index}",
@@ -318,7 +366,10 @@ def build_story_generation_plan(
             call_id="critic",
             role="critic",
             model_id=critic,
-            purpose="independent story/dialogue critique of the three treatments",
+            purpose=(
+                "fresh independent critic call: explicit treatments + bible + "
+                "locked premise + duration/tone; no treatment-chat state"
+            ),
             estimated_input=critic_in_est,
             reserved_input=critic_in_res,
             estimated_output=critic_out_est,
@@ -366,8 +417,9 @@ def build_story_generation_plan(
         send_image_binaries=False,
         notes=[
             f"Astra pricing as of {STORY_TEXT_PRICING_AS_OF}: {GPT6_ASTRA_PRICING_SOURCE}",
-            f"Opus 5.5 pricing as of {STORY_TEXT_PRICING_AS_OF}: "
-            f"{CLAUDE_OPUS_55_PRICING_SOURCE}",
+            "Birko Episode 2 critic is gpt-6-astra. ANTHROPIC_API_KEY is not required.",
+            "Claude Opus 5.5 remains in the global catalog for future optional ensembles.",
+            "Critic is a separate fresh request with critic-specific instructions.",
             "Story models receive episode brief, character bible, relationships, "
             "continuity, constraints, and prior treatments/critique when needed.",
             "Reference images are metadata only (path/hash/dims). No image binaries.",
@@ -383,7 +435,7 @@ def story_generation_outputs() -> list[str]:
     return [
         "FriendGroupStorySpec (title, logline, hook, premise, beats, dialogue, narration, "
         "callbacks, payoff, ending, continuity, motion graphics, audio intent)",
-        "CreativeEnsembleRun (3 treatments, Opus critique, Astra final)",
+        "CreativeEnsembleRun (3 Astra treatments, fresh Astra critic, Astra final)",
         "EpisodeShotPlan with per-shot production class and cast_refs",
         "LocationBible details filled by engine",
         "prop continuity ledger from generated story",
@@ -558,11 +610,12 @@ def write_story_plan_artifacts(
         encoding="utf-8",
     )
     plan_path.write_text(plan.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    primary, critic, finalizer = _models_from_plan(plan)
     checkpoint = CreativeEnsembleRun(
         project_id=f"{brief.series_slug}-ep{brief.episode_number}",
-        primary_model="gpt-6-astra",
-        critic_model="claude-opus-5-5",
-        finalizer_model="gpt-6-astra",
+        primary_model=primary,
+        critic_model=critic,
+        finalizer_model=finalizer,
         treatments=["", "", ""],
         executed=False,
     )
@@ -620,11 +673,12 @@ def execute_story_generation(
             f"STOP: reserved story total ${plan.reserved_usd:.4f} exceeds hard cap "
             f"${plan.hard_cap_usd:.2f}. Cap was not increased."
         )
+    primary, critic, finalizer = _models_from_plan(plan)
     run = checkpoint or CreativeEnsembleRun(
         project_id=f"{plan.series_slug}-ep{plan.episode_number}",
-        primary_model="gpt-6-astra",
-        critic_model="claude-opus-5-5",
-        finalizer_model="gpt-6-astra",
+        primary_model=primary,
+        critic_model=critic,
+        finalizer_model=finalizer,
         treatments=["", "", ""],
         executed=False,
     )

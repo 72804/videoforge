@@ -25,8 +25,10 @@ from docprod.quality.policy_select import OPENAI_STOCK_VOICES
 
 BIRKO_E2_TARGET_STACK = {
     "story_treatments": "gpt-6-astra",
-    "script_critic": "claude-opus-5-5",
+    "script_critic": "gpt-6-astra",
     "final_script": "gpt-6-astra",
+    "requires_anthropic": False,
+    "critic_fresh_call": True,
     "identity": "locked_refs_plus_sunburst",
     "scene_images": "sunburst_flare_routed",
     "video": "per_shot_eligible",

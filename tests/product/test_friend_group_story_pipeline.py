@@ -19,7 +19,6 @@ from docprod.product.story_pipeline import (
 )
 from docprod.providers.pricing import (
     CLAUDE_OPUS_55_INPUT_USD_PER_MILLION,
-    CLAUDE_OPUS_55_OUTPUT_USD_PER_MILLION,
     GPT6_ASTRA_INPUT_USD_PER_MILLION,
     GPT6_ASTRA_OUTPUT_USD_PER_MILLION,
 )
@@ -90,16 +89,27 @@ def test_story_generation_plan_is_zero_media() -> None:
         "gpt-6-astra",
         "gpt-6-astra",
         "gpt-6-astra",
-        "claude-opus-5-5",
+        "gpt-6-astra",
         "gpt-6-astra",
     ]
+    critic = plan.calls[3]
+    assert critic.role == "critic"
+    assert "fresh independent critic" in critic.purpose
+    assert critic.estimated_input_tokens == 8007
+    assert critic.reserved_input_tokens == 12010
+    assert critic.estimated_output_tokens == 2200
+    assert critic.reserved_output_tokens == 3500
+    assert critic.expected_usd == pytest.approx(0.19007, abs=1e-6)
+    assert critic.reserved_usd == pytest.approx(0.29510, abs=1e-6)
+    assert plan.estimated_usd == pytest.approx(0.76635, abs=1e-5)
+    assert plan.reserved_usd == pytest.approx(1.17383, abs=1e-5)
     astra = get_model("gpt-6-astra")
     opus = get_model("claude-opus-5-5")
     assert astra is not None and opus is not None
     assert astra.pricing.input_usd_per_million == GPT6_ASTRA_INPUT_USD_PER_MILLION == 10.0
     assert astra.pricing.output_usd_per_million == GPT6_ASTRA_OUTPUT_USD_PER_MILLION == 50.0
     assert opus.pricing.input_usd_per_million == CLAUDE_OPUS_55_INPUT_USD_PER_MILLION == 4.0
-    assert opus.pricing.output_usd_per_million == CLAUDE_OPUS_55_OUTPUT_USD_PER_MILLION == 20.0
+    assert "ANTHROPIC_API_KEY is not required" in " ".join(plan.notes)
     assert plan.cost_confidence == "known"
     assert plan.reserved_usd <= STORY_HARD_CAP_USD
     assert plan.cap_ok is True
@@ -129,6 +139,10 @@ def test_story_plan_cli_path_writes_review_without_models() -> None:
     assert "STORY NOT GENERATED" in text
     assert "ENGINE-OWNED" in text
     assert "You won't believe" not in text
+    assert "claude-opus" not in text.lower()
+    assert all(
+        call["model_id"] == "gpt-6-astra" for call in payload["plan"]["calls"]
+    )
 
 
 def test_story_generate_refuses_without_authorization() -> None:
@@ -144,7 +158,7 @@ def test_ensemble_resume_skips_completed_treatments() -> None:
     run = CreativeEnsembleRun(
         project_id="p",
         primary_model="gpt-6-astra",
-        critic_model="claude-opus-5-5",
+        critic_model="gpt-6-astra",
         finalizer_model="gpt-6-astra",
         treatments=["treatment-a", "treatment-b", ""],
         critic_output="",

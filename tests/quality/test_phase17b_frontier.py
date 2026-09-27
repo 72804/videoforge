@@ -159,4 +159,5 @@ def test_offline_ab_framework_does_not_execute() -> None:
     assert batch.executed is False
     assert "runway-gen-4.5" in batch.candidate_models
     assert BIRKO_E2_TARGET_STACK["execute"] is False
-    assert BIRKO_E2_TARGET_STACK["script_critic"] == "claude-opus-5-5"
+    assert BIRKO_E2_TARGET_STACK["script_critic"] == "gpt-6-astra"
+    assert BIRKO_E2_TARGET_STACK["requires_anthropic"] is False
