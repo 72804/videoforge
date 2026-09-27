@@ -3071,7 +3071,7 @@ def friend_group_episode(
         help="story-plan, story-check, story-status, story-generate, "
         "production-plan, animatic-plan, animatic-generate, animatic-rerender, "
         "simple-script-plan, simple-script-generate, simple-video-plan, "
-        "or simple-video-generate",
+        "simple-video-generate, higgsfield-scene-plan, or higgsfield-scene-generate",
     ),
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
@@ -3197,6 +3197,8 @@ def friend_group_episode(
         "simple-script-generate",
         "simple-video-plan",
         "simple-video-generate",
+        "higgsfield-scene-plan",
+        "higgsfield-scene-generate",
     }:
         console.print(
             f"simple_expected={payload.get('expected_usd')} "
@@ -3208,6 +3210,13 @@ def friend_group_episode(
                 f"scenes={payload.get('scene_count_target')} "
                 f"dialogue={payload.get('dialogue_target')}"
             )
+    if payload.get("stage") in {"higgsfield-scene-plan", "higgsfield-scene-generate"}:
+        refs_report = payload.get("canonical_refs")
+        if isinstance(refs_report, dict):
+            for slug, row in refs_report.items():
+                if isinstance(row, dict):
+                    console.print(f"ref_{slug}={row.get('use')}")
+        console.print(f"scene_count={payload.get('scene_count')}")
 
 
 @app.command("birko-episode2")

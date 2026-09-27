@@ -1389,11 +1389,25 @@ def run_friend_group_episode(
             settings=settings,
             execute_calls=True if execute_calls is None else execute_calls,
         )
+    if token in {"higgsfield-scene-plan"}:
+        from docprod.product.higgsfield_scenes import execute_higgsfield_scene_plan
+
+        return execute_higgsfield_scene_plan(refs=refs, settings=settings)
+    if token in {"higgsfield-scene-generate"}:
+        from docprod.product.higgsfield_scenes import execute_higgsfield_scene_generate
+
+        return execute_higgsfield_scene_generate(
+            confirm_paid=confirm_paid,
+            refs=refs,
+            settings=settings,
+            execute_calls=True if execute_calls is None else execute_calls,
+        )
     raise ValueError(
         f"unknown stage {stage!r}; use story-plan, story-check, story-status, "
         "story-generate, production-plan, animatic-plan, animatic-generate, "
         "animatic-rerender, simple-script-plan, simple-script-generate, "
-        "simple-video-plan, or simple-video-generate"
+        "simple-video-plan, simple-video-generate, higgsfield-scene-plan, "
+        "or higgsfield-scene-generate"
     )
 
 
