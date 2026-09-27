@@ -94,6 +94,19 @@ GAIN: dict[SceneProductionClass, dict[str, float]] = {
         "dialogue": 0.05,
     },
 }
+GAIN[SceneProductionClass.STATIC_KEYFRAME] = GAIN[SceneProductionClass.STATIC_CINEMATIC]
+GAIN[SceneProductionClass.CINEMATIC_MOTION] = GAIN[SceneProductionClass.SIMPLE_MOTION]
+GAIN[SceneProductionClass.DIALOGUE_COVERAGE] = GAIN[SceneProductionClass.DIALOGUE_SHOT]
+GAIN[SceneProductionClass.MOTION_CONTROLLED_PERFORMANCE] = GAIN[
+    SceneProductionClass.PERFORMANCE_SHOT
+]
+GAIN[SceneProductionClass.MULTI_REFERENCE_SCENE] = GAIN[SceneProductionClass.HERO_CINEMATIC]
+GAIN[SceneProductionClass.VIDEO_EDIT] = GAIN[SceneProductionClass.SIMPLE_MOTION]
+GAIN[SceneProductionClass.VIDEO_EXTEND] = GAIN[SceneProductionClass.SIMPLE_MOTION]
+GAIN[SceneProductionClass.NATIVE_AUDIO_SCENE] = GAIN[SceneProductionClass.REACTION_SHOT]
+GAIN[SceneProductionClass.POST_PRODUCTION_MOTION_GRAPHICS] = GAIN[
+    SceneProductionClass.TITLE_CARD
+]
 
 
 def quality_gain(production_class: SceneProductionClass, technique: str) -> float:

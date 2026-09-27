@@ -14,6 +14,18 @@ from docprod.product.models import (
 from docprod.product.repository import MemoryRepository
 from docprod.quality.policy_select import OPENAI_STOCK_VOICES
 
+BIRKO_E2_TARGET_STACK = {
+    "story_treatments": "gpt-6-astra",
+    "script_critic": "claude-opus-5-5",
+    "final_script": "gpt-6-astra",
+    "identity": "locked_refs_plus_sunburst",
+    "scene_images": "sunburst_flare_routed",
+    "video": "per_shot_eligible",
+    "voices": "eleven-v3_or_stock",
+    "motion_graphics": "local_ffmpeg_first",
+    "execute": False,
+}
+
 BIRKO_LOCKED_REFS = {
     "birko": (
         "Birko",

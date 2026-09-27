@@ -6,7 +6,10 @@ from docprod.quality.enums import (
     AdapterStatus,
     CostConfidence,
     Modality,
+    ModelReadiness,
+    NativeAudioPolicy,
     PriceMode,
+    ProductionBackend,
     ProviderStatus,
     QualityProfile,
     QualityTier,
@@ -73,6 +76,12 @@ class ModelSpec(BaseModel):
     required_credentials: tuple[str, ...] = ()
     fallbacks: tuple[str, ...] = ()
     close_up_mouth_reliable: bool = False
+    vendor: str = ""
+    model_family: str = ""
+    gateway_model_id: str = ""
+    readiness: ModelReadiness = ModelReadiness.CATALOG_ONLY
+    native_audio_policy: NativeAudioPolicy = NativeAudioPolicy.NONE
+    production_backend: ProductionBackend = ProductionBackend.SERVER_API
 
 
 class ProviderSpec(BaseModel):

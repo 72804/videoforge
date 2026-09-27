@@ -135,17 +135,26 @@ def score_scene(scene: Scene, production_class: SceneProductionClass) -> SceneVa
     }[fn]
     motion = {
         SceneProductionClass.STATIC_CINEMATIC: 0.18,
+        SceneProductionClass.STATIC_KEYFRAME: 0.18,
         SceneProductionClass.ESTABLISHING_SHOT: 0.28,
         SceneProductionClass.SIMPLE_MOTION: 0.72,
+        SceneProductionClass.CINEMATIC_MOTION: 0.76,
         SceneProductionClass.REACTION_SHOT: 0.64,
         SceneProductionClass.DIALOGUE_SHOT: 0.55,
+        SceneProductionClass.DIALOGUE_COVERAGE: 0.55,
         SceneProductionClass.HERO_CINEMATIC: 0.88,
         SceneProductionClass.PERFORMANCE_SHOT: 0.80,
+        SceneProductionClass.MOTION_CONTROLLED_PERFORMANCE: 0.90,
         SceneProductionClass.MUSIC_SYNCED_PERFORMANCE: 0.95,
+        SceneProductionClass.MULTI_REFERENCE_SCENE: 0.70,
+        SceneProductionClass.VIDEO_EDIT: 0.60,
+        SceneProductionClass.VIDEO_EXTEND: 0.65,
+        SceneProductionClass.NATIVE_AUDIO_SCENE: 0.55,
+        SceneProductionClass.POST_PRODUCTION_MOTION_GRAPHICS: 0.10,
         SceneProductionClass.TITLE_CARD: 0.05,
         SceneProductionClass.ARCHIVAL_SHOT: 0.15,
         SceneProductionClass.TRANSITION_SHOT: 0.40,
-    }[production_class]
+    }.get(production_class, 0.40)
     dialogue = 0.85 if production_class is SceneProductionClass.DIALOGUE_SHOT else 0.05
     if production_class is SceneProductionClass.DIALOGUE_SHOT:
         dialogue = 0.88

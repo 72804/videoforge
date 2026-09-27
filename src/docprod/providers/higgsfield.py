@@ -10,15 +10,81 @@ from docprod.quality.shots import PerformanceShotRequest
 from docprod.storage.hashing import file_sha256
 
 # Product constraints from https://higgsfield.ai/genjutsu (not a REST schema).
-GENJUTSU_MIN_SECONDS = 3
+GENJUTSU_MIN_SECONDS = 1
 GENJUTSU_MAX_SECONDS = 30
 GENJUTSU_MAX_REFS = 30
 GENJUTSU_REASON = (
-    "Higgsfield Genjutsu Motion Transfer is documented as a product "
-    "(driving video 3–30s, up to 30 reference photos, up to 1080p) at "
-    "https://higgsfield.ai/genjutsu, but docs.higgsfield.ai does not publish "
-    "a request body or endpoint. Adapter stays DOCUMENTED_UNIMPLEMENTED."
+    "Higgsfield Genjutsu Motion Transfer has a documented subscribe path "
+    "higgsfield/genjutsu/motion-transfer/v1.0 (prompt, video_url, image_urls, resolution) "
+    "on open.higgsfield.ai. docs.higgsfield.ai still points integrators to console "
+    "for per-model schemas. Product adapter does not POST; CATALOG_ONLY contract only."
 )
+SEEDANCE_CONTRACTS: dict[str, dict[str, object]] = {
+    "seedance-2.5-text-to-video": {
+        "gateway_model_id": "bytedance/seedance-2.5/text-to-video",
+        "url": "https://api.higgsfield.ai/bytedance/seedance-2.5/text-to-video",
+        "fields": (
+            "prompt",
+            "duration",
+            "resolution",
+            "aspect_ratio",
+            "output_format",
+            "generate_audio",
+        ),
+    },
+    "seedance-2.5-image-to-video": {
+        "gateway_model_id": "bytedance/seedance-2.5/image-to-video",
+        "url": "https://api.higgsfield.ai/bytedance/seedance-2.5/image-to-video",
+        "fields": (
+            "prompt",
+            "duration",
+            "image_url",
+            "resolution",
+            "end_image_url",
+            "output_format",
+            "generate_audio",
+        ),
+    },
+    "seedance-2.5-reference-to-video": {
+        "gateway_model_id": "bytedance/seedance-2.5/reference-to-video",
+        "url": "https://api.higgsfield.ai/bytedance/seedance-2.5/reference-to-video",
+        "fields": (
+            "duration",
+            "resolution",
+            "aspect_ratio",
+            "bitrate_mode",
+            "generate_audio",
+        ),
+    },
+    "seedance-2.5-video-edit": {
+        "gateway_model_id": "bytedance/seedance-2.5/video-edit",
+        "url": "https://api.higgsfield.ai/bytedance/seedance-2.5/video-edit",
+        "fields": ("prompt", "video_url", "resolution", "bitrate_mode", "generate_audio"),
+    },
+    "seedance-2.5-video-extend": {
+        "gateway_model_id": "bytedance/seedance-2.5/video-extend",
+        "url": "https://api.higgsfield.ai/bytedance/seedance-2.5/video-extend",
+        "fields": (
+            "prompt",
+            "duration",
+            "video_url",
+            "resolution",
+            "bitrate_mode",
+            "generate_audio",
+        ),
+    },
+}
+KLING_MOTION_CONTRACT = {
+    "gateway_model_id": "kling-video/v3/motion-control/pro",
+    "url": "https://api.higgsfield.ai/kling-video/v3/motion-control/pro",
+    "fields": (
+        "prompt",
+        "image_url",
+        "video_url",
+        "keep_original_sound",
+        "character_orientation",
+    ),
+}
 SEEDANCE_I2V_REASON = (
     "Official Higgsfield blog documents Seedance 2.0 text-to-video at "
     "https://api.higgsfield.ai/bytedance/seedance-2.0/text-to-video "
@@ -147,3 +213,51 @@ class HiggsfieldGenjutsuAdapter:
 class HiggsfieldKlingAdapter:
     def generate_video(self, **_kwargs: object) -> None:
         raise DocumentedUnimplementedError("kling-3", KLING_I2V_REASON)
+
+    def plan_motion_control(self) -> dict[str, Any]:
+        return {
+            "dry_run": True,
+            "adapter_status": "catalog_only",
+            "paid_calls": 0,
+            "contract": KLING_MOTION_CONTRACT,
+        }
+
+
+def documented_higgsfield_plan(model_id: str) -> dict[str, Any]:
+    contract = SEEDANCE_CONTRACTS.get(model_id)
+    if model_id == "kling-3.0-motion-control-pro":
+        contract = KLING_MOTION_CONTRACT
+    if contract is None:
+        raise DocumentedUnimplementedError(model_id, "No documented Higgsfield contract recorded.")
+    return {
+        "dry_run": True,
+        "adapter_status": "catalog_only",
+        "paid_calls": 0,
+        "model_id": model_id,
+        "provider": "higgsfield",
+        "vendor": "bytedance" if model_id.startswith("seedance") else "kling",
+        "contract": contract,
+    }
+
+
+class HiggsfieldCatalogAdapter:
+    """Records official subscribe paths. Never opens HTTP."""
+
+    def plan(self, model_id: str) -> dict[str, Any]:
+        return documented_higgsfield_plan(model_id)
+
+    def generate(
+        self,
+        model_id: str,
+        *,
+        confirm_paid: bool,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        planned = self.plan(model_id)
+        if dry_run:
+            return planned
+        require_paid_call_allowed("higgsfield", confirm_paid=confirm_paid)
+        raise DocumentedUnimplementedError(
+            model_id,
+            "Higgsfield HTTP is not implemented this phase; catalog contract only.",
+        )

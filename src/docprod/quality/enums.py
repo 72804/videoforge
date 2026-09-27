@@ -5,12 +5,21 @@ from enum import StrEnum
 
 class SceneProductionClass(StrEnum):
     STATIC_CINEMATIC = "static_cinematic"
+    STATIC_KEYFRAME = "static_keyframe"
     SIMPLE_MOTION = "simple_motion"
+    CINEMATIC_MOTION = "cinematic_motion"
     REACTION_SHOT = "reaction_shot"
     DIALOGUE_SHOT = "dialogue_shot"
+    DIALOGUE_COVERAGE = "dialogue_coverage"
     HERO_CINEMATIC = "hero_cinematic"
     PERFORMANCE_SHOT = "performance_shot"
+    MOTION_CONTROLLED_PERFORMANCE = "motion_controlled_performance"
     MUSIC_SYNCED_PERFORMANCE = "music_synced_performance"
+    MULTI_REFERENCE_SCENE = "multi_reference_scene"
+    VIDEO_EDIT = "video_edit"
+    VIDEO_EXTEND = "video_extend"
+    NATIVE_AUDIO_SCENE = "native_audio_scene"
+    POST_PRODUCTION_MOTION_GRAPHICS = "post_production_motion_graphics"
     ESTABLISHING_SHOT = "establishing_shot"
     ARCHIVAL_SHOT = "archival_shot"
     TITLE_CARD = "title_card"
@@ -113,6 +122,33 @@ class CapabilityMaturity(StrEnum):
     CATALOG_CAPABILITY = "catalog_capability"
     IMPLEMENTED_CAPABILITY = "implemented_capability"
     TESTED_CAPABILITY = "tested_capability"
+
+
+class ModelReadiness(StrEnum):
+    """Customer auto-routing uses PRODUCTION_READY / ADAPTER_IMPLEMENTED only."""
+
+    CATALOG_ONLY = "catalog_only"
+    ADAPTER_IMPLEMENTED = "adapter_implemented"
+    INTERNAL_CANARY = "internal_canary"
+    PRODUCTION_READY = "production_ready"
+
+
+class EnsembleRole(StrEnum):
+    PRIMARY_MODEL = "primary_model"
+    CRITIC_MODEL = "critic_model"
+    FINALIZER_MODEL = "finalizer_model"
+
+
+class NativeAudioPolicy(StrEnum):
+    NONE = "none"
+    AMBIENT_OPTIONAL = "ambient_optional"
+    NATIVE_DIALOGUE_REPLACEABLE = "native_dialogue_replaceable"
+
+
+class ProductionBackend(StrEnum):
+    SERVER_API = "server_api"
+    LOCAL_FFMPEG = "local_ffmpeg"
+    OPTIONAL_PRODUCTION_BACKEND = "optional_production_backend"
 
 
 class UpgradeKind(StrEnum):

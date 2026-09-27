@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from docprod.exceptions import DocumentedUnimplementedError, UnimplementedProviderError
-from docprod.providers.higgsfield import HiggsfieldGenjutsuAdapter, HiggsfieldKlingAdapter
+from docprod.providers.higgsfield import (
+    HiggsfieldCatalogAdapter,
+    HiggsfieldGenjutsuAdapter,
+    HiggsfieldKlingAdapter,
+)
 from docprod.providers.runway_video import RunwayVideoProvider, act_two_from_requests
 from docprod.quality.catalog import get_model
 from docprod.quality.duration import billable_seconds
@@ -37,6 +41,18 @@ class ProviderAdapter:
     def generate_video(self, **_kwargs: object) -> None:
         if self.model_id in {"kling-3", "kling-2.5-turbo-i2v"}:
             HiggsfieldKlingAdapter().generate_video()
+        if self.model_id.startswith("seedance-2.5") or self.model_id in {
+            "kling-3.0-motion-control-pro",
+            "kling-3.0-4k-text-to-video",
+            "kling-3.0-turbo-text-to-video",
+            "kling-3.0-pro-image-to-video",
+        }:
+            HiggsfieldCatalogAdapter().generate(
+                self.model_id, confirm_paid=False, dry_run=True
+            )
+            raise UnimplementedProviderError(
+                f"{self.model_id} is CATALOG_ONLY; documented contract exists, no HTTP."
+            )
         raise UnimplementedProviderError(
             f"{self.model_id} has no implemented network adapter in this phase."
         )

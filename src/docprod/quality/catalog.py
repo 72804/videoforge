@@ -12,7 +12,16 @@ from docprod.providers.pricing import (
     RUNWAY_GEN45_USD_PER_SEC,
     VEO_LITE_720P_USD_PER_SEC,
 )
-from docprod.quality.enums import AdapterStatus, CostConfidence, Modality, PriceMode, QualityTier
+from docprod.quality.enums import (
+    AdapterStatus,
+    CostConfidence,
+    Modality,
+    ModelReadiness,
+    NativeAudioPolicy,
+    PriceMode,
+    ProductionBackend,
+    QualityTier,
+)
 from docprod.quality.specs import ModelSpec, PricingSpec
 
 KNOWN_TTS_TEXT = PricingSpec(
@@ -104,6 +113,51 @@ FREE = PricingSpec(
     pricing_as_of=PRICING_AS_OF,
 )
 UNKNOWN = PricingSpec(mode=PriceMode.UNKNOWN, confidence=CostConfidence.UNRESOLVED)
+HF_SEEDANCE_25_GEN = PricingSpec(
+    mode=PriceMode.PER_SECOND,
+    value=0.144,
+    unit="second",
+    notes="Playground range $0.144–$0.3236/s at 480p–720p; using documented low bound.",
+    confidence=CostConfidence.ESTIMATED,
+    pricing_as_of="2026-09-27",
+    source_note="https://open.higgsfield.ai/models/bytedance/seedance-2.5/video-extend/playground",
+)
+HF_SEEDANCE_25_EDIT = PricingSpec(
+    mode=PriceMode.PER_SECOND,
+    value=0.0864,
+    unit="second",
+    notes="Playground range $0.0864–$0.1942/s for Video Edit / Video Extend.",
+    confidence=CostConfidence.ESTIMATED,
+    pricing_as_of="2026-09-27",
+    source_note="https://open.higgsfield.ai/models/bytedance/seedance-2.5/video-edit/playground",
+)
+HF_KLING_MOTION = PricingSpec(
+    mode=PriceMode.PER_SECOND,
+    value=0.084,
+    unit="second",
+    notes="Kling 3.0 Motion Control (Pro) playground $0.084/s.",
+    confidence=CostConfidence.ESTIMATED,
+    pricing_as_of="2026-09-27",
+    source_note="https://open.higgsfield.ai/models/kling-video/v3.0/4k/text-to-video/playground",
+)
+HF_KLING_4K_T2V = PricingSpec(
+    mode=PriceMode.PER_SECOND,
+    value=0.21,
+    unit="second",
+    notes="Kling 3.0 Text to Video (4K) playground $0.21/s.",
+    confidence=CostConfidence.ESTIMATED,
+    pricing_as_of="2026-09-27",
+    source_note="https://open.higgsfield.ai/models/kling-video/v3.0/4k/text-to-video/playground",
+)
+HF_GENJUTSU = PricingSpec(
+    mode=PriceMode.PER_SECOND,
+    value=0.159,
+    unit="second",
+    notes="Genjutsu Motion Transfer playground $0.159–$0.816/s.",
+    confidence=CostConfidence.ESTIMATED,
+    pricing_as_of="2026-09-27",
+    source_note="https://open.higgsfield.ai/models/workflows/genjutsu/playground",
+)
 
 
 def _m(
@@ -142,12 +196,30 @@ def _m(
     fallbacks: tuple[str, ...] = (),
     close_up_mouth_reliable: bool = False,
     catalog_capabilities: tuple[str, ...] | None = None,
+    vendor: str = "",
+    model_family: str = "",
+    gateway_model_id: str = "",
+    readiness: ModelReadiness | None = None,
+    native_audio_policy: NativeAudioPolicy | None = None,
+    production_backend: ProductionBackend = ProductionBackend.SERVER_API,
 ) -> ModelSpec:
     status = adapter_status
     if status is None:
         status = AdapterStatus.IMPLEMENTED if implemented else AdapterStatus.CATALOG_ONLY
     avail = availability or ("available" if implemented else "catalog")
     catalog_caps = catalog_capabilities if catalog_capabilities is not None else caps
+    if readiness is None:
+        if implemented and not manual_input_required:
+            readiness = ModelReadiness.PRODUCTION_READY
+        elif implemented:
+            readiness = ModelReadiness.ADAPTER_IMPLEMENTED
+        else:
+            readiness = ModelReadiness.CATALOG_ONLY
+    audio_policy = native_audio_policy
+    if audio_policy is None:
+        audio_policy = (
+            NativeAudioPolicy.AMBIENT_OPTIONAL if native_audio else NativeAudioPolicy.NONE
+        )
     return ModelSpec(
         model_id=model_id,
         provider=provider,
@@ -184,6 +256,12 @@ def _m(
         required_credentials=required_credentials,
         fallbacks=fallbacks,
         close_up_mouth_reliable=close_up_mouth_reliable,
+        vendor=vendor or provider,
+        model_family=model_family,
+        gateway_model_id=gateway_model_id,
+        readiness=readiness,
+        native_audio_policy=audio_policy,
+        production_backend=production_backend,
     )
 
 
@@ -234,6 +312,43 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             output_modalities=("text",),
             required_credentials=("OPENAI_API_KEY",),
             notes="GPT-6 Economy / high-volume.",
+        ),
+        _m(
+            "claude-opus-5-5",
+            "anthropic",
+            Modality.TEXT,
+            caps=(
+                "story_writing",
+                "script_doctor",
+                "dialogue_writing",
+                "creative_critique",
+                "continuity_review",
+                "character_consistency_review",
+                "scene_feasibility_review",
+                *text,
+            ),
+            tier=QualityTier.MAX,
+            implemented=False,
+            implemented_capabilities=(),
+            catalog_capabilities=(
+                "story_writing",
+                "script_doctor",
+                "dialogue_writing",
+                "creative_critique",
+                "continuity_review",
+                "character_consistency_review",
+                "scene_feasibility_review",
+            ),
+            input_modalities=("text",),
+            output_modalities=("text",),
+            required_credentials=("ANTHROPIC_API_KEY",),
+            gateway_model_id="claude-opus-5-5",
+            model_family="claude-opus",
+            vendor="anthropic",
+            notes=(
+                "Official Claude API id claude-opus-5-5. Messages API adapter is payload-only; "
+                "no HTTP in this phase. Premium script critic."
+            ),
         ),
         _m(
             "gpt-5.6-sol",
@@ -421,9 +536,11 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             Modality.VIDEO,
             caps=("image_to_video", "text_to_video"),
             adapter_status=AdapterStatus.DOCUMENTED_UNIMPLEMENTED,
+            vendor="kling",
+            model_family="kling-3",
             notes=(
-                "Kling I2V body is not in docs.higgsfield.ai public index "
-                "(console-discovered schemas only)."
+                "Legacy Kling slot. Prefer documented kling-3.0-* catalog ids. "
+                "No HTTP adapter."
             ),
         ),
         _m(
@@ -432,8 +549,87 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             Modality.VIDEO,
             caps=("image_to_video",),
             adapter_status=AdapterStatus.DOCUMENTED_UNIMPLEMENTED,
+            vendor="kling",
+            model_family="kling-2.5",
             duration_options=(5, 10),
             notes="Unofficial mirrors list 5/10s I2V; not taken as official schema.",
+        ),
+        _m(
+            "kling-3.0-4k-text-to-video",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=("text_to_video", "native_audio", "portrait"),
+            tier=QualityTier.PREMIUM,
+            vendor="kling",
+            model_family="kling-3.0",
+            gateway_model_id="kling-video/v3.0/4k/text-to-video",
+            pricing=HF_KLING_4K_T2V,
+            min_duration_seconds=3,
+            max_duration_seconds=15,
+            aspect_ratios=("16:9", "9:16", "1:1"),
+            native_audio=True,
+            native_audio_policy=NativeAudioPolicy.NATIVE_DIALOGUE_REPLACEABLE,
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
+            notes=(
+                "CATALOG_ONLY. POST https://api.higgsfield.ai/kling-video/v3.0/4k/text-to-video "
+                "params: sound, prompt, duration 3–15, cfg_scale, multi_shots, aspect_ratio."
+            ),
+        ),
+        _m(
+            "kling-3.0-turbo-text-to-video",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=("text_to_video", "portrait"),
+            vendor="kling",
+            model_family="kling-3.0",
+            gateway_model_id="kling-video/v3.0-turbo/text-to-video",
+            min_duration_seconds=3,
+            max_duration_seconds=15,
+            aspect_ratios=("16:9", "9:16", "1:1"),
+            resolution_options=("720p", "1080p"),
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
+            notes="CATALOG_ONLY. Documented prompt/duration/resolution/aspect_ratio.",
+        ),
+        _m(
+            "kling-3.0-pro-image-to-video",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=("image_to_video", "native_audio"),
+            vendor="kling",
+            model_family="kling-3.0",
+            gateway_model_id="kling-video/v3.0/pro/image-to-video",
+            min_duration_seconds=3,
+            max_duration_seconds=15,
+            native_audio=True,
+            native_audio_policy=NativeAudioPolicy.NATIVE_DIALOGUE_REPLACEABLE,
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
+            notes=(
+                "CATALOG_ONLY. image_url required; optional last_image_url, sound, duration 3–15."
+            ),
+        ),
+        _m(
+            "kling-3.0-motion-control-pro",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=(
+                "motion_controlled_performance",
+                "performance_transfer",
+                "driving_video",
+                "image_to_video",
+            ),
+            tier=QualityTier.PREMIUM,
+            vendor="kling",
+            model_family="kling-3.0",
+            gateway_model_id="kling-video/v3/motion-control/pro",
+            pricing=HF_KLING_MOTION,
+            performance_transfer=True,
+            input_modalities=("image", "video", "text"),
+            output_modalities=("video",),
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
+            notes=(
+                "CATALOG_ONLY. POST .../kling-video/v3/motion-control/pro "
+                "requires image_url + video_url; keep_original_sound; character_orientation."
+            ),
         ),
         _m(
             "seedance",
@@ -441,8 +637,121 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             Modality.VIDEO,
             caps=("text_to_video",),
             adapter_status=AdapterStatus.DOCUMENTED_UNIMPLEMENTED,
+            vendor="bytedance",
+            model_family="seedance-2.0",
+            notes="Legacy Seedance 2.0 T2V slot. Prefer seedance-2.5-* catalog ids.",
+        ),
+        _m(
+            "seedance-2.5-text-to-video",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=("text_to_video", "native_audio", "portrait"),
+            tier=QualityTier.PREMIUM,
+            vendor="bytedance",
+            model_family="seedance-2.5",
+            gateway_model_id="bytedance/seedance-2.5/text-to-video",
+            pricing=HF_SEEDANCE_25_GEN,
+            min_duration_seconds=4,
+            max_duration_seconds=30,
+            aspect_ratios=("16:9", "4:3", "1:1", "3:4", "9:16", "21:9"),
+            resolution_options=("480p", "720p"),
+            native_audio=True,
+            native_audio_policy=NativeAudioPolicy.NATIVE_DIALOGUE_REPLACEABLE,
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
             notes=(
-                "Official blog documents Seedance 2.0 T2V only; I2V schema unpublished."
+                "CATALOG_ONLY. Documented: prompt, duration 4–30, resolution 480p/720p, "
+                "aspect_ratio incl 9:16, output_format mp4/mov, generate_audio."
+            ),
+        ),
+        _m(
+            "seedance-2.5-image-to-video",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=("image_to_video", "native_audio", "first_last_frame"),
+            tier=QualityTier.PREMIUM,
+            vendor="bytedance",
+            model_family="seedance-2.5",
+            gateway_model_id="bytedance/seedance-2.5/image-to-video",
+            pricing=HF_SEEDANCE_25_GEN,
+            min_duration_seconds=4,
+            max_duration_seconds=30,
+            max_reference_images=2,
+            resolution_options=("480p", "720p"),
+            native_audio=True,
+            native_audio_policy=NativeAudioPolicy.NATIVE_DIALOGUE_REPLACEABLE,
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
+            notes=(
+                "CATALOG_ONLY. image_url required; optional prompt, end_image_url, "
+                "duration 4–30, generate_audio. No invented extra refs."
+            ),
+        ),
+        _m(
+            "seedance-2.5-reference-to-video",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=(
+                "reference_to_video",
+                "multi_reference",
+                "native_audio",
+                "portrait",
+            ),
+            tier=QualityTier.PREMIUM,
+            vendor="bytedance",
+            model_family="seedance-2.5",
+            gateway_model_id="bytedance/seedance-2.5/reference-to-video",
+            pricing=HF_SEEDANCE_25_GEN,
+            min_duration_seconds=4,
+            max_duration_seconds=30,
+            aspect_ratios=("16:9", "9:16"),
+            resolution_options=("480p", "720p"),
+            native_audio=True,
+            native_audio_policy=NativeAudioPolicy.NATIVE_DIALOGUE_REPLACEABLE,
+            identity_consistency_suitability="multi_reference_candidate",
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
+            notes=(
+                "CATALOG_ONLY. Documented subscribe input: duration, resolution, "
+                "aspect_ratio, bitrate_mode, generate_audio. Extra media field names "
+                "not fully listed in the public snippet — do not invent."
+            ),
+        ),
+        _m(
+            "seedance-2.5-video-edit",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=("video_edit", "video_to_video", "native_audio"),
+            tier=QualityTier.PREMIUM,
+            vendor="bytedance",
+            model_family="seedance-2.5",
+            gateway_model_id="bytedance/seedance-2.5/video-edit",
+            pricing=HF_SEEDANCE_25_EDIT,
+            min_duration_seconds=4,
+            max_duration_seconds=30,
+            native_audio=True,
+            native_audio_policy=NativeAudioPolicy.NATIVE_DIALOGUE_REPLACEABLE,
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
+            notes=(
+                "CATALOG_ONLY. Documented: prompt, video_url, resolution, bitrate_mode, "
+                "generate_audio."
+            ),
+        ),
+        _m(
+            "seedance-2.5-video-extend",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=("video_extend", "video_to_video", "native_audio"),
+            tier=QualityTier.PREMIUM,
+            vendor="bytedance",
+            model_family="seedance-2.5",
+            gateway_model_id="bytedance/seedance-2.5/video-extend",
+            pricing=HF_SEEDANCE_25_EDIT,
+            min_duration_seconds=4,
+            max_duration_seconds=30,
+            native_audio=True,
+            native_audio_policy=NativeAudioPolicy.NATIVE_DIALOGUE_REPLACEABLE,
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
+            notes=(
+                "CATALOG_ONLY. Documented: prompt, duration, video_url, resolution, "
+                "bitrate_mode, generate_audio."
             ),
         ),
         _m(
@@ -496,13 +805,47 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             "higgsfield-genjutsu",
             "higgsfield",
             Modality.VIDEO,
-            caps=("performance_transfer", "driving_video"),
+            caps=(
+                "performance_transfer",
+                "driving_video",
+                "motion_controlled_performance",
+            ),
             tier=QualityTier.PREMIUM,
             adapter_status=AdapterStatus.DOCUMENTED_UNIMPLEMENTED,
-            min_duration_seconds=3,
+            vendor="higgsfield",
+            model_family="genjutsu",
+            gateway_model_id="higgsfield/genjutsu/motion-transfer/v1.0",
+            pricing=HF_GENJUTSU,
+            min_duration_seconds=1,
             max_duration_seconds=30,
-            notes="Product page only; no public REST body. Preflight uses 3–30s / 30 refs.",
+            performance_transfer=True,
+            resolution_options=("480p", "720p", "1080p"),
+            required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
+            notes=(
+                "Documented subscribe path higgsfield/genjutsu/motion-transfer/v1.0 "
+                "(prompt, video_url, image_urls, resolution). No product HTTP POST yet."
+            ),
             manual_input_required=True,
+        ),
+        _m(
+            "higgsfield-motion-designer",
+            "higgsfield",
+            Modality.VIDEO,
+            caps=(
+                "post_production",
+                "motion_graphics",
+                "titles",
+                "kinetic_subtitles",
+            ),
+            vendor="higgsfield",
+            model_family="motion-designer",
+            production_backend=ProductionBackend.OPTIONAL_PRODUCTION_BACKEND,
+            required_credentials=(),
+            notes=(
+                "OPTIONAL_PRODUCTION_BACKEND. After Effects plugin + MCP "
+                "bridge.higgsfield.ai/mcp. Not ordinary cinematic I2V. "
+                "Not required for MVP; local FFmpeg first."
+            ),
         ),
         _m(
             "audio-driven-lipsync",

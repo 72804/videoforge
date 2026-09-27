@@ -69,15 +69,32 @@ def automated_dialogue_chain(profile: QualityProfile) -> list[str]:
 
 def preferred_video_model(production_class: SceneProductionClass, profile: QualityProfile) -> str:
     policy = policy_for(profile)
+    if production_class in {
+        SceneProductionClass.STATIC_CINEMATIC,
+        SceneProductionClass.STATIC_KEYFRAME,
+        SceneProductionClass.TITLE_CARD,
+        SceneProductionClass.ARCHIVAL_SHOT,
+        SceneProductionClass.POST_PRODUCTION_MOTION_GRAPHICS,
+    }:
+        if production_class is SceneProductionClass.POST_PRODUCTION_MOTION_GRAPHICS:
+            return "local-title"
+        return "local-camera"
     mapping = {
         SceneProductionClass.SIMPLE_MOTION: policy.simple_motion_model,
+        SceneProductionClass.CINEMATIC_MOTION: policy.simple_motion_model,
         SceneProductionClass.REACTION_SHOT: policy.reaction_model,
         SceneProductionClass.HERO_CINEMATIC: policy.hero_model,
         SceneProductionClass.DIALOGUE_SHOT: policy.dialogue_model,
+        SceneProductionClass.DIALOGUE_COVERAGE: policy.dialogue_model,
         SceneProductionClass.PERFORMANCE_SHOT: policy.performance_model,
         SceneProductionClass.MUSIC_SYNCED_PERFORMANCE: policy.performance_model,
         SceneProductionClass.ESTABLISHING_SHOT: policy.simple_motion_model,
         SceneProductionClass.TRANSITION_SHOT: policy.simple_motion_model,
+        SceneProductionClass.MOTION_CONTROLLED_PERFORMANCE: "kling-3.0-motion-control-pro",
+        SceneProductionClass.MULTI_REFERENCE_SCENE: "seedance-2.5-reference-to-video",
+        SceneProductionClass.VIDEO_EDIT: "seedance-2.5-video-edit",
+        SceneProductionClass.VIDEO_EXTEND: "seedance-2.5-video-extend",
+        SceneProductionClass.NATIVE_AUDIO_SCENE: "veo-3.1-lite-generate-preview",
     }
     return mapping.get(production_class, "local-camera")
 
@@ -100,6 +117,26 @@ def fallback_chain(production_class: SceneProductionClass, profile: QualityProfi
             "veo-3.1-lite-generate-preview",
             "local-camera",
         ]
+    if production_class is SceneProductionClass.MOTION_CONTROLLED_PERFORMANCE:
+        return [
+            "kling-3.0-motion-control-pro",
+            "higgsfield-genjutsu",
+            "runway-act-two",
+            "local-camera",
+        ]
+    if production_class is SceneProductionClass.MULTI_REFERENCE_SCENE:
+        return [
+            "seedance-2.5-reference-to-video",
+            "runway-gen-4.5",
+            "veo-3.1-lite-generate-preview",
+            "local-camera",
+        ]
+    if production_class is SceneProductionClass.VIDEO_EDIT:
+        return ["seedance-2.5-video-edit", "local-camera"]
+    if production_class is SceneProductionClass.VIDEO_EXTEND:
+        return ["seedance-2.5-video-extend", "local-camera"]
+    if production_class is SceneProductionClass.POST_PRODUCTION_MOTION_GRAPHICS:
+        return ["local-title", "higgsfield-motion-designer"]
     if production_class is SceneProductionClass.DIALOGUE_SHOT:
         return automated_dialogue_chain(profile)
     if production_class in {
@@ -131,6 +168,8 @@ def wants_video(
         SceneProductionClass.TITLE_CARD,
         SceneProductionClass.ARCHIVAL_SHOT,
         SceneProductionClass.STATIC_CINEMATIC,
+        SceneProductionClass.STATIC_KEYFRAME,
+        SceneProductionClass.POST_PRODUCTION_MOTION_GRAPHICS,
     }:
         return False
     if music_sync:
@@ -176,6 +215,8 @@ def still_route(scene_id: str, production_class: SceneProductionClass, profile: 
         else "comfyui-local"
     )
     if production_class is SceneProductionClass.TITLE_CARD:
+        model = "local-title"
+    if production_class is SceneProductionClass.POST_PRODUCTION_MOTION_GRAPHICS:
         model = "local-title"
     provider = "local" if model.startswith("local") or model == "comfyui-local" else "openai"
     return RouteDecision(

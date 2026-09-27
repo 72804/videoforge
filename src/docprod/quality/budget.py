@@ -17,6 +17,7 @@ from docprod.quality.enums import (
 )
 from docprod.quality.locked import locked_video_models
 from docprod.quality.profiles import policy_for
+from docprod.quality.registry import auto_route_allowed
 from docprod.quality.router import (
     estimate_model_cost,
     fallback_chain,
@@ -61,6 +62,8 @@ def pick_from_chain(
         if spec is None:
             continue
         if spec.adapter_status is AdapterStatus.DOCUMENTED_UNIMPLEMENTED:
+            continue
+        if not auto_route_allowed(model_id):
             continue
         if spec.manual_input_required and not has_driving_video and not allow_manual_inputs:
             continue
@@ -123,6 +126,8 @@ def allocate_video(
             klass is SceneProductionClass.TITLE_CARD
             or must_static
             or klass is SceneProductionClass.ARCHIVAL_SHOT
+            or klass is SceneProductionClass.STATIC_KEYFRAME
+            or klass is SceneProductionClass.POST_PRODUCTION_MOTION_GRAPHICS
         ):
             decision = still_route(scene.id, klass, profile)
             decision.scores = scores
