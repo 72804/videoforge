@@ -117,6 +117,7 @@ def test_visible_cast_and_unique_refs(tmp_path: Path) -> None:
             if scene.scene_id in {
                 "HF1_hook_bill",
                 "HF3_birko_slips",
+                "HF4_muge_kemal",
                 "HF7_kemal_pays",
                 "HF8_payoff",
             }
@@ -152,6 +153,8 @@ def test_seedance_native_audio_not_external_tts(tmp_path: Path) -> None:
             if scene.scene_id == "HF4_muge_kemal":
                 assert "Character bible:" not in item.voice
                 assert "flörtöz" not in item.voice
+                assert "materialistic" not in item.voice
+                assert "flirting" not in item.voice
             else:
                 assert "Character bible:" in item.voice
         if scene.dialogue_lines:
@@ -217,8 +220,8 @@ def test_concat_and_zero_http_plan(tmp_path: Path) -> None:
     assert result["provider_http_calls"] == 0
     assert result["execute"] is False
     assert result["scene_count"] == 8
-    assert result["expected_usd"] == 9.4464
-    assert result["reserved_usd"] == 11.6352
+    assert result["expected_usd"] == 9.216
+    assert result["reserved_usd"] == 11.3472
     assert result["new_image_usd"] == 0.0
     assert result["new_tts_usd"] == 0.0
     assert result["new_llm_usd"] == 0.0
@@ -495,7 +498,7 @@ def test_preflight_zero_http() -> None:
     assert payload["provider_http_calls"] == 0
     assert payload["generation_posts"] == 0
     assert payload["live_post_authorized"] is True
-    assert payload["expected_usd"] == 9.4464
-    assert payload["reserved_usd"] == 11.6352
+    assert payload["expected_usd"] == 9.216
+    assert payload["reserved_usd"] == 11.3472
     assert payload["hard_cap_usd"] == 12.0
     assert payload["ready_for_live"] is True

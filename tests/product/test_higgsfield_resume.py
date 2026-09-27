@@ -12,6 +12,8 @@ from docprod.product.higgsfield_scenes import (
     APPROVED_SCENE_IDS,
     HF3_REVISION_2_VIDEO_PROMPT,
     HF3_REVISION_3_PROMPT,
+    HF4_REVISION_2_VIDEO_PROMPT,
+    HF4_REVISION_3_PROMPT,
     HIGGSFIELD_LEDGER_RELATIVE,
     ORIGINAL_HF3_VIDEO_PROMPT,
     ORIGINAL_HF4_VIDEO_PROMPT,
@@ -676,6 +678,37 @@ def test_one_scene_hf3_retry_leaves_hf4(tmp_path: Path) -> None:
     )
 
 
+def test_one_scene_hf4_retry_leaves_hf3(tmp_path: Path) -> None:
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    ledger_path = tmp_path / HIGGSFIELD_LEDGER_RELATIVE
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    ledger_path.write_text(json.dumps(_current_style_ledger()) + "\n", encoding="utf-8")
+    _write_succeeded_clips(tmp_path)
+    posts: list[str] = []
+    recover_higgsfield_jobs(
+        plan,
+        allow_submit=True,
+        retry_failed=True,
+        confirm_paid=True,
+        only_scenes=parse_only_scenes("HF4_muge_kemal"),
+        submit=lambda **kwargs: posts.append(kwargs.get("url", "p"))
+        or {"request_id": "hf4-new"},
+        status_fn=lambda request_id, settings=None: {"status": "queued"},
+        sleeper=lambda _delay: None,
+        now_fn=lambda: 0.0,
+        deadline_seconds=0.0,
+        root=tmp_path,
+    )
+    saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert len(posts) == 1
+    assert str(posts[0]).endswith("image-to-video")
+    assert saved["operations"]["HF4_muge_kemal"]["request_id"] == "hf4-new"
+    assert saved["operations"]["HF4_muge_kemal"]["prompt_revision"] == 3
+    assert saved["operations"]["HF3_birko_slips"]["request_id"] == (
+        "7debbdd7-7bc1-452e-9b64-3576d47f8c10"
+    )
+
+
 def test_sanitized_prompts_preserve_history_and_drop_bible(tmp_path: Path) -> None:
     plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
     hf3 = next(scene for scene in plan.scenes if scene.scene_id == "HF3_birko_slips")
@@ -693,10 +726,31 @@ def test_sanitized_prompts_preserve_history_and_drop_bible(tmp_path: Path) -> No
     assert "image_urls" not in hf3.request_body
     assert hf3.request_body["generate_audio"] is True
     assert "audio_urls" not in hf3.request_body
-    assert hf4.prompt_revision == 2
+    assert hf4.prompt_revision == 3
+    assert hf4.prompt_revision_reason == (
+        "Müge-only I2V safety fallback preserving character visibility"
+    )
+    assert hf4.model == "seedance-2.5-image-to-video"
+    assert hf4.visible_characters == ["muge"]
+    assert hf4.offscreen_speakers == ["kemal"]
+    assert len(hf4.input_assets) == 1
+    assert hf4.input_assets[0]["key"] == "muge"
+    assert hf4.video_prompt == HF4_REVISION_3_PROMPT
+    assert hf4.expected_usd == 1.152
+    assert "image_url" in hf4.request_body
+    assert "image_urls" not in hf4.request_body
+    assert hf4.request_body["generate_audio"] is True
+    assert "audio_urls" not in hf4.request_body
     assert hf3.prompt_history[0]["prompt"] == ORIGINAL_HF3_VIDEO_PROMPT
     assert hf3.prompt_history[1]["prompt"] == HF3_REVISION_2_VIDEO_PROMPT
     assert hf4.prompt_history[0]["prompt"] == ORIGINAL_HF4_VIDEO_PROMPT
+    assert hf4.prompt_history[1]["prompt"] == HF4_REVISION_2_VIDEO_PROMPT
+    assert "materialistic" not in hf4.video_prompt
+    assert "flirting" not in hf4.video_prompt
+    assert "offscreen" in hf4.video_prompt
+    hf4_cost = selected_scene_cost_report(plan, parse_only_scenes("HF4_muge_kemal"))
+    assert hf4_cost["selected_expected_total"] == 1.152
+    assert hf4_cost["selected_generation_posts_max"] == 1
     assert "No sexual content" not in hf3.video_prompt
     assert "No nudity" not in hf3.video_prompt
     assert "No violence" not in hf3.video_prompt

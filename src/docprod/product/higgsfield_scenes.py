@@ -78,8 +78,8 @@ HIGGSFIELD_FINAL_RELATIVE = (
 RESUME_DEADLINE_SECONDS = 720.0
 POLL_INTERVAL_SECONDS = 5.0
 POLL_MAX_INTERVAL_SECONDS = 15.0
-APPROVED_EXPECTED_USD = 9.4464
-APPROVED_RESERVED_USD = 11.6352
+APPROVED_EXPECTED_USD = 9.216
+APPROVED_RESERVED_USD = 11.3472
 APPROVED_HARD_CAP_USD = 12.0
 APPROVED_SCENE_IDS = (
     "HF1_hook_bill",
@@ -93,7 +93,13 @@ APPROVED_SCENE_IDS = (
 )
 APPROVED_DURATIONS = (6, 7, 6, 8, 9, 9, 8, 6)
 LOCKED_DURATION = dict(zip(APPROVED_SCENE_IDS, APPROVED_DURATIONS, strict=True))
-I2V_SCENE_IDS = {"HF1_hook_bill", "HF3_birko_slips", "HF7_kemal_pays", "HF8_payoff"}
+I2V_SCENE_IDS = {
+    "HF1_hook_bill",
+    "HF3_birko_slips",
+    "HF4_muge_kemal",
+    "HF7_kemal_pays",
+    "HF8_payoff",
+}
 SIMPLE_I2V_MODEL = "seedance-2.5-image-to-video"
 PROMPT_REVISION_REASON = "provider safety retry"
 HF3_REVISION_3_REASON = "Birko-only I2V safety fallback"
@@ -156,19 +162,53 @@ ORIGINAL_HF4_VIDEO_PROMPT = (
     "evening interior beds. Keep foley under the spoken Turkish. Paper receipt, overlapping "
     "café room tone."
 )
-HF4_SAFE_ACTION = (
-    "Two fully clothed adult friends seated in a bright casual café. Müge looks at an "
-    "expensive donut box and the receipt. Kemal reacts with frustrated disbelief. They have a "
-    "normal verbal disagreement about the price and who ordered it. No physical contact. "
-    "No romance. No flirting. No suggestive posing. No body emphasis. No sexual content. "
-    "No nudity. Natural conversational comedy."
+HF4_REVISION_3_REASON = "Müge-only I2V safety fallback preserving character visibility"
+HF4_REVISION_3_PROMPT = (
+    "9:16 cinematic live-action. An adult woman sits at a table in a bright casual café with "
+    "an expensive donut box and a receipt in front of her. She looks between the box and receipt, "
+    "asks a question to a man seated just outside the camera frame, listens to his offscreen "
+    "response with mild surprise, then looks back at the price on the receipt and answers him. "
+    "Dry conversational comedy, understated realistic acting, natural facial reactions and hand "
+    "movement, consistent face and appearance with the attached reference photo. Continuous "
+    "cinematic movement for the full shot. Generate natural café ambience and synchronized "
+    "Turkish dialogue. Seedance native audio: generate_audio=true. Characters speak natural, "
+    "lip-synced Turkish in sync with the picture. Use only the approved lines below; do not add, "
+    "translate, or rewrite dialogue. Müge says EXACTLY these Turkish words: "
+    "\"Bu özel kutuyu kim söyledi?\" (speaker=muge; on-camera, lip-synced; "
+    "intended voice/delivery: "
+    "natural adult Turkish female voice, mildly incredulous). Kemal says EXACTLY these Turkish "
+    "words: \"Kocan kaçmış, sen kutuyu soruyorsun!\" (speaker=kemal; offscreen native audio; "
+    "intended voice/delivery: natural young adult Turkish male voice, frustrated disbelief). "
+    "Müge says EXACTLY these Turkish words: \"Fiyatını gördün mü?\" (speaker=muge; on-camera, "
+    "lip-synced; intended voice/delivery: natural adult Turkish female voice, mildly incredulous)."
 )
-SAFE_MOVING = (
-    "Natural conversational motion continues for the full duration; fully clothed adults; "
-    "no freeze-frame."
+HF4_REVISION_2_VIDEO_PROMPT = (
+    "9:16 cinematic live-action, continuous motion, no slideshow. same Krispy Kreme café "
+    "interior, six-top table, window, door, counter, evening. Visible: Müge, Kemal. Two fully "
+    "clothed adult friends seated in a bright casual café. Müge looks at an expensive donut box "
+    "and the receipt. Kemal reacts with frustrated disbelief. They have a normal verbal "
+    "disagreement about the price and who ordered it. No physical contact. No romance. "
+    "No flirting. "
+    "No suggestive posing. No body emphasis. No sexual content. No nudity. Natural conversational "
+    "comedy. Natural conversational motion continues for the full duration; fully clothed adults; "
+    "no freeze-frame. Turkish café evening, natural light, real acting, keep faces consistent with "
+    "attached reference photos. Do not freeze into a still. Seedance native audio: generate_audio="
+    "true. Characters speak natural, lip-synced Turkish in sync with the picture. Use only the "
+    "approved lines below; do not add, translate, or rewrite dialogue. Müge says EXACTLY these "
+    "Turkish words: \"Bu özel kutuyu kim söyledi?\" (speaker=muge; intended voice/delivery: "
+    "confident Turkish female, slightly incredulous/materialistic energy). Kemal says EXACTLY "
+    "these Turkish words: \"Kocan kaçmış, sen kutuyu soruyorsun!\" "
+    "(speaker=kemal; intended voice/delivery: "
+    "natural young Turkish male, increasingly frustrated). Müge says EXACTLY these Turkish words: "
+    "\"Fiyatını gördün mü?\" (speaker=muge; intended voice/delivery: confident Turkish female, "
+    "slightly incredulous/materialistic energy). Native scene sound: Krispy Kreme café ambience, "
+    "cups, distant POS, chairs, evening interior beds. Keep foley under the spoken Turkish. "
+    "Paper receipt, overlapping café room tone."
 )
+HF4_MUGE_VOICE = "natural adult Turkish female voice, mildly incredulous"
+HF4_KEMAL_OFFSCREEN_VOICE = "natural young adult Turkish male voice, frustrated disbelief"
 APPROVED_PLAN_FINGERPRINT = (
-    "688b969c1dce3fbbc804d1f7873aaabd5f796b2dad93ca3c91deabe8c1aca919"
+    "24089ff09e662a5579a2632b57a61c14794b03f55cad301e2fe7fac13ca1b8fb"
 )
 INTERIOR_LOCATION_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/stills/"
@@ -379,6 +419,7 @@ def _attach_dialogue(
     wavs: dict[str, Path],
     *,
     include_bible: bool = True,
+    voice_overrides: dict[str, str] | None = None,
 ) -> list[HiggsfieldDialogue]:
     by_text = {_norm_text(line.text): line for line in spec.dialogue_lines}
     rows: list[HiggsfieldDialogue] = []
@@ -398,7 +439,11 @@ def _attach_dialogue(
                 audio_path=str(wav) if wav else "",
                 audio_seconds=round(seconds, 3),
                 missing_tts=wav is None,
-                voice=_voice_direction(slug, include_bible=include_bible),
+                voice=_voice_direction(
+                    slug,
+                    include_bible=include_bible,
+                    override=(voice_overrides or {}).get(slug),
+                ),
             )
         )
     return rows
@@ -414,7 +459,14 @@ def _display_name(slug: str) -> str:
     return CHARACTER_DISPLAY.get(slug, slug)
 
 
-def _voice_direction(slug: str, *, include_bible: bool = True) -> str:
+def _voice_direction(
+    slug: str,
+    *,
+    include_bible: bool = True,
+    override: str | None = None,
+) -> str:
+    if override:
+        return override
     directed = SEEDANCE_VOICE_DIRECTION[slug]
     if not include_bible:
         return directed
@@ -646,8 +698,19 @@ def build_higgsfield_scenes(
     )
     lookup = asset_lookup(public_payload)
 
-    def attach(texts: list[str], *, include_bible: bool = True) -> list[HiggsfieldDialogue]:
-        return _attach_dialogue(spec, texts, wavs, include_bible=include_bible)
+    def attach(
+        texts: list[str],
+        *,
+        include_bible: bool = True,
+        voice_overrides: dict[str, str] | None = None,
+    ) -> list[HiggsfieldDialogue]:
+        return _attach_dialogue(
+            spec,
+            texts,
+            wavs,
+            include_bible=include_bible,
+            voice_overrides=voice_overrides,
+        )
 
     scenes = [
         _fill_scene(
@@ -716,10 +779,13 @@ def build_higgsfield_scenes(
         ),
         _fill_scene(
             scene_id="HF4_muge_kemal",
-            visible=["muge", "kemal"],
-            offscreen=["hg"],
-            action=HF4_SAFE_ACTION,
-            camera="shot-reverse at the six-top",
+            visible=["muge"],
+            offscreen=["kemal"],
+            action=(
+                "Müge looks at the expensive donut box and receipt, asks who ordered it, "
+                "listens to offscreen Kemal, then answers about the price."
+            ),
+            camera="reaction shot on Müge; Kemal remains offscreen",
             props=["receipt", "premium donut box"],
             lines=attach(
                 [
@@ -728,20 +794,30 @@ def build_higgsfield_scenes(
                     "Fiyatını gördün mü?",
                 ],
                 include_bible=False,
+                voice_overrides={
+                    "muge": HF4_MUGE_VOICE,
+                    "kemal": HF4_KEMAL_OFFSCREEN_VOICE,
+                },
             ),
             motion=1.2,
             location_path=interior,
             ref_map=ref_map,
             public_lookup=lookup,
-            moving=SAFE_MOVING,
-            prompt_revision=2,
-            prompt_revision_reason=PROMPT_REVISION_REASON,
+            include_location=False,
+            prompt_override=HF4_REVISION_3_PROMPT,
+            prompt_revision=3,
+            prompt_revision_reason=HF4_REVISION_3_REASON,
             prompt_history=[
                 {
                     "revision": 1,
                     "prompt": ORIGINAL_HF4_VIDEO_PROMPT,
                     "reason": "original failed paid attempt",
-                }
+                },
+                {
+                    "revision": 2,
+                    "prompt": HF4_REVISION_2_VIDEO_PROMPT,
+                    "reason": PROMPT_REVISION_REASON,
+                },
             ],
         ),
         _fill_scene(
