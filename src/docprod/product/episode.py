@@ -174,3 +174,94 @@ class VoiceAssignment(BaseModel):
     fallback_voice_id: str = ""
     vibe: str = ""
     cloning: bool = False
+
+
+class AnimaticKeyframeSpec(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    keyframe_id: str
+    role: str = "identity_plate"
+    location_slot: str = ""
+    visible_characters: list[str] = Field(default_factory=list)
+    reference_files: list[str] = Field(default_factory=list)
+    props: list[str] = Field(default_factory=list)
+    model: str = ""
+    identity_critical: bool = False
+    prompt: str = ""
+    request_fingerprint: str = ""
+    generate: bool = True
+    notes: str = ""
+
+
+class AnimaticShotEdit(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    shot_id: str
+    keyframe_id: str
+    motion: str = "slow_push_in"
+    overlay_kind: str = ""
+    overlay_copy: list[str] = Field(default_factory=list)
+    planned_duration_seconds: float = 0.0
+    speech_seconds: float = 0.0
+    edit_duration_seconds: float = 0.0
+    local_sfx: list[str] = Field(default_factory=list)
+    upgrade: str = "LOCAL_MOTION_SUFFICIENT"
+    upgrade_reason: str = ""
+    upgrade_executable_model: str = ""
+    upgrade_ideal_model: str = ""
+    upgrade_estimated_usd: float | None = None
+    reused: bool = False
+    location_slot: str = ""
+    props: list[str] = Field(default_factory=list)
+    visible_cast: list[str] = Field(default_factory=list)
+
+
+class AnimaticVoiceLine(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    line_id: str
+    shot_id: str
+    speaker: str
+    text: str
+    emotion: str = ""
+    delivery: str = ""
+    provider: str = ""
+    model: str = ""
+    voice_id: str = ""
+    estimated_seconds: float = 0.0
+    request_fingerprint: str = ""
+    cloning: bool = False
+
+
+class AnimaticPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    series_slug: str
+    episode_number: int
+    quality_profile: str = "premium"
+    shot_count: int = 0
+    keyframes: list[AnimaticKeyframeSpec] = Field(default_factory=list)
+    shots: list[AnimaticShotEdit] = Field(default_factory=list)
+    voice_lines: list[AnimaticVoiceLine] = Field(default_factory=list)
+    voice_assignments: list[VoiceAssignment] = Field(default_factory=list)
+    voice_provider: str = ""
+    voice_model: str = ""
+    sunburst_count: int = 0
+    flare_count: int = 0
+    unique_image_count: int = 0
+    reused_or_local_shot_count: int = 0
+    expected_image_usd: float = 0.0
+    reserved_image_usd: float = 0.0
+    expected_voice_usd: float = 0.0
+    reserved_voice_usd: float = 0.0
+    other_provider_usd: float = 0.0
+    expected_usd: float = 0.0
+    reserved_usd: float = 0.0
+    hard_cap_usd: float = 2.0
+    cap_ok: bool = True
+    total_edit_seconds: float = 0.0
+    expected_voice_seconds: float = 0.0
+    upgrade_estimated_usd: float = 0.0
+    execute: bool = False
+    video_provider_calls: int = 0
+    notes: list[str] = Field(default_factory=list)

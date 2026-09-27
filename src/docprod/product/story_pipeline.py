@@ -8,6 +8,14 @@ from PIL import Image
 
 from docprod.config import Settings, get_settings
 from docprod.exceptions import MissingApiKeyError, PaidApiNotConfirmedError
+from docprod.product.animatic import (
+    ANIMATIC_PROVIDER_HARD_CAP_USD,
+    animatic_render_dir,
+    animatic_review_relative,
+    build_animatic_plan,
+    execute_animatic_generate,
+    format_animatic_review,
+)
 from docprod.product.birko_bible import (
     BIRKO_CAST,
     GROUP_DYNAMIC,
@@ -25,6 +33,7 @@ from docprod.product.episode import (
 from docprod.product.errors import AuthorizationError, ProductError
 from docprod.product.friend_group import HOOK_FIRST_WRITER_INSTRUCTIONS
 from docprod.product.production_director import (
+    DirectedEpisode,
     direct_friend_group_episode,
     format_production_review,
     production_plans_for_profiles,
@@ -95,6 +104,10 @@ PRODUCTION_REVIEW_RELATIVE = (
 PRODUCTION_PLAN_JSON_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/review/"
     "episode_2_production_plan.json"
+)
+ANIMATIC_PLAN_JSON_RELATIVE = (
+    "projects/birko_kemal_drama_canary/artifacts/review/"
+    "episode_2_animatic_plan.json"
 )
 
 _ELEVEN_PROPOSED = {
@@ -626,6 +639,150 @@ def execute_production_director(
     }
 
 
+def reconstruct_directed_episode(
+    plan: StoryGenerationPlan,
+    refs: list[dict[str, object]],
+) -> tuple[DirectedEpisode, EpisodeBrief, LocationBible, Any]:
+    brief = locked_episode_brief(series_slug=plan.series_slug, episode_number=plan.episode_number)
+    run = load_ensemble_checkpoint()
+    if run is None or not run.final_script.strip():
+        raise ProductError("animatic-plan requires a completed story checkpoint")
+    hydrate_succeeded_stages(run)
+    spec = parse_friend_group_story(run, brief)
+    payload = _parse_json_blob(run.final_script)
+    location = location_bible_from_story(brief)
+    role_hints = {member.name: member.role_archetype for member in BIRKO_CAST}
+    directed = direct_friend_group_episode(
+        payload,
+        spec,
+        brief,
+        location,
+        locked_refs=refs,
+        profile=QualityProfile.PREMIUM,
+        role_hints=role_hints,
+    )
+    return directed, brief, location, run
+
+
+def execute_animatic_plan(
+    *,
+    plan: StoryGenerationPlan,
+    refs: list[dict[str, object]],
+    settings: Settings | None = None,
+) -> dict[str, object]:
+    directed, brief, location, run = reconstruct_directed_episode(plan, refs)
+    voices = proposed_voice_assignments(language=brief.language)
+    animatic = build_animatic_plan(
+        brief=brief,
+        spec=directed.spec,
+        shot_plan=directed.shot_plan,
+        location=location,
+        locked_refs=refs,
+        voices=voices,
+        settings=settings,
+        profile=QualityProfile.PREMIUM,
+    )
+    root = _repo_root()
+    review_rel = animatic_review_relative(brief.series_slug, brief.episode_number)
+    review_path = root / review_rel
+    json_path = root / ANIMATIC_PLAN_JSON_RELATIVE
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_path.write_text(
+        format_animatic_review(animatic, directed.spec),
+        encoding="utf-8",
+    )
+    json_path.write_text(animatic.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    known = sum(float(item.usd or 0) for item in run.model_usage)
+    return {
+        "stage": "animatic-plan",
+        "plan": plan.model_dump(),
+        "animatic": animatic.model_dump(),
+        "artifacts": {
+            "review": str(review_path),
+            "animatic_plan": str(json_path),
+        },
+        "shot_count": animatic.shot_count,
+        "unique_image_count": animatic.unique_image_count,
+        "sunburst_count": animatic.sunburst_count,
+        "flare_count": animatic.flare_count,
+        "reused_or_local_shot_count": animatic.reused_or_local_shot_count,
+        "voice_provider": animatic.voice_provider,
+        "expected_image_usd": animatic.expected_image_usd,
+        "expected_voice_usd": animatic.expected_voice_usd,
+        "expected_usd": animatic.expected_usd,
+        "reserved_usd": animatic.reserved_usd,
+        "hard_cap_usd": animatic.hard_cap_usd,
+        "cap_ok": animatic.cap_ok,
+        "upgrade_estimated_usd": animatic.upgrade_estimated_usd,
+        "story_usage_usd": known,
+        "media_calls": 0,
+        "stars": 0,
+        "provider_http_calls": 0,
+        "video_provider_calls": 0,
+        "planned_text_model_calls": len(plan.calls),
+        "submitted_text_model_calls": 0,
+        "completed_text_model_calls": len(run.model_usage),
+        "text_model_calls": 0,
+        "ready_for_animatic_generation": bool(animatic.cap_ok),
+    }
+
+
+def execute_animatic_generation(
+    *,
+    confirm_paid: bool,
+    plan: StoryGenerationPlan,
+    refs: list[dict[str, object]],
+    settings: Settings | None = None,
+    execute_calls: bool = False,
+    image_client: Any = None,
+    voice_client: Any = None,
+    renderer: Any = None,
+    work_dir: Path | None = None,
+) -> dict[str, object]:
+    if not confirm_paid:
+        raise PaidApiNotConfirmedError(
+            "animatic-generate requires --confirm-paid after animatic-plan approval"
+        )
+    directed, brief, location, _run = reconstruct_directed_episode(plan, refs)
+    voices = proposed_voice_assignments(language=brief.language)
+    animatic = build_animatic_plan(
+        brief=brief,
+        spec=directed.spec,
+        shot_plan=directed.shot_plan,
+        location=location,
+        locked_refs=refs,
+        voices=voices,
+        settings=settings,
+        profile=QualityProfile.PREMIUM,
+    )
+    if animatic.reserved_usd - 1e-9 > ANIMATIC_PROVIDER_HARD_CAP_USD:
+        raise ProductError(
+            f"STOP BEFORE HTTP: reserved ${animatic.reserved_usd:.4f} exceeds "
+            f"hard cap ${ANIMATIC_PROVIDER_HARD_CAP_USD:.2f}"
+        )
+    root = _repo_root()
+    dest = work_dir or animatic_render_dir(brief.series_slug, brief.episode_number, root=root)
+    dest.mkdir(parents=True, exist_ok=True)
+    result = execute_animatic_generate(
+        animatic,
+        confirm_paid=confirm_paid,
+        work_dir=dest,
+        image_client=image_client,
+        voice_client=voice_client,
+        renderer=renderer,
+        execute_calls=execute_calls,
+    )
+    result["animatic"] = animatic.model_dump()
+    result["plan"] = plan.model_dump()
+    result["stars"] = 0
+    result["media_calls"] = 0 if not execute_calls else result.get("provider_http_calls", 0)
+    result["planned_text_model_calls"] = len(plan.calls)
+    result["submitted_text_model_calls"] = 0
+    result["completed_text_model_calls"] = 0
+    result["text_model_calls"] = 0
+    return result
+
+
 def story_status_report(
     plan: StoryGenerationPlan,
     run: CreativeEnsembleRun | None,
@@ -847,6 +1004,7 @@ def story_generation_outputs() -> list[str]:
         PRODUCTION_REVIEW_RELATIVE,
         PLAN_JSON_RELATIVE,
         CHECKPOINT_RELATIVE,
+        ANIMATIC_PLAN_JSON_RELATIVE,
     ]
 
 
@@ -1115,9 +1273,19 @@ def run_friend_group_episode(
             refs=refs,
             settings=settings,
         )
+    if token in {"animatic-plan"}:
+        return execute_animatic_plan(plan=plan, refs=refs, settings=settings)
+    if token in {"animatic-generate"}:
+        return execute_animatic_generation(
+            confirm_paid=confirm_paid,
+            plan=plan,
+            refs=refs,
+            settings=settings,
+            execute_calls=True if execute_calls is None else execute_calls,
+        )
     raise ValueError(
         f"unknown stage {stage!r}; use story-plan, story-check, story-status, "
-        "story-generate, or production-plan"
+        "story-generate, production-plan, animatic-plan, or animatic-generate"
     )
 
 

@@ -3068,8 +3068,8 @@ def friend_group_episode(
     stage: str = typer.Option(
         "story-plan",
         "--stage",
-        help="story-plan, story-check, story-status (zero network), story-generate, "
-        "or production-plan",
+        help="story-plan, story-check, story-status, story-generate, "
+        "production-plan, animatic-plan, or animatic-generate",
     ),
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
@@ -3166,6 +3166,24 @@ def friend_group_episode(
             f"new_shot_count={payload.get('new_shot_count')} "
             f"total_duration={payload.get('total_duration_seconds')}"
         )
+    if payload.get("unique_image_count") is not None:
+        console.print(
+            f"animatic_shots={payload.get('shot_count')} "
+            f"unique_images={payload.get('unique_image_count')} "
+            f"sunburst={payload.get('sunburst_count')} flare={payload.get('flare_count')}"
+        )
+        console.print(
+            f"voice_provider={payload.get('voice_provider')} "
+            f"expected_image={payload.get('expected_image_usd')} "
+            f"expected_voice={payload.get('expected_voice_usd')} "
+            f"expected_total={payload.get('expected_usd')} "
+            f"reserved_total={payload.get('reserved_usd')} "
+            f"hard_cap={payload.get('hard_cap_usd')} cap_ok={payload.get('cap_ok')}"
+        )
+        if artifacts.get("animatic_plan"):
+            console.print(f"animatic_plan={artifacts.get('animatic_plan')}")
+        if payload.get("ready_for_animatic_generation"):
+            console.print("READY FOR ANIMATIC GENERATION")
 
 
 @app.command("birko-episode2")
