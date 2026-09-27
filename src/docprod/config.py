@@ -57,7 +57,10 @@ class Settings(BaseSettings):
     quality_profile: str = Field(default="balanced")
     elevenlabs_api_key: SecretStr | None = Field(default=None)
     elevenlabs_voice_id: str = Field(default="")
-    higgsfield_api_key: SecretStr | None = Field(default=None)
+    higgsfield_api_key: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices("HF_API_KEY", "HIGGSFIELD_API_KEY", "higgsfield_api_key"),
+    )
     higgsfield_api_key_id: SecretStr | None = Field(default=None)
     higgsfield_api_key_secret: SecretStr | None = Field(default=None)
     runway_api_key: SecretStr | None = Field(default=None)
@@ -134,20 +137,37 @@ class Settings(BaseSettings):
         return self._secret_configured(self.elevenlabs_api_key)
 
     def higgsfield_key_configured(self) -> bool:
-        if self._secret_configured(self.higgsfield_api_key_id) and self._secret_configured(
-            self.higgsfield_api_key_secret
-        ):
-            return True
-        if not self._secret_configured(self.higgsfield_api_key):
-            return False
-        combined = self.higgsfield_api_key.get_secret_value()  # type: ignore[union-attr]
-        return ":" in combined
+        return bool(resolve_higgsfield_api_key(self))
 
     def runway_key_configured(self) -> bool:
         return self._secret_configured(self.runway_api_key)
 
     def anthropic_key_configured(self) -> bool:
         return self._secret_configured(self.anthropic_api_key)
+
+
+def resolve_higgsfield_api_key(settings: Settings | None = None) -> str | None:
+    """Canonical Higgsfield credential. Never log the returned secret.
+
+    Order: HF_API_KEY (complete), then legacy HIGGSFIELD_API_KEY_ID/SECRET.
+    """
+    complete = (os.getenv("HF_API_KEY") or "").strip()
+    cfg = settings
+    if cfg is None:
+        cfg = get_settings()
+    if not complete and cfg._secret_configured(cfg.higgsfield_api_key):
+        complete = cfg.higgsfield_api_key.get_secret_value().strip()  # type: ignore[union-attr]
+    if complete:
+        return complete
+    ident = (os.getenv("HIGGSFIELD_API_KEY_ID") or "").strip()
+    secret = (os.getenv("HIGGSFIELD_API_KEY_SECRET") or "").strip()
+    if not ident and cfg._secret_configured(cfg.higgsfield_api_key_id):
+        ident = cfg.higgsfield_api_key_id.get_secret_value().strip()  # type: ignore[union-attr]
+    if not secret and cfg._secret_configured(cfg.higgsfield_api_key_secret):
+        secret = cfg.higgsfield_api_key_secret.get_secret_value().strip()  # type: ignore[union-attr]
+    if ident and secret:
+        return f"{ident}:{secret}"
+    return None
 
 
 @lru_cache

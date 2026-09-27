@@ -3,7 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from docprod.config import Settings, get_settings, require_paid_call_allowed
+from docprod.config import (
+    Settings,
+    require_paid_call_allowed,
+    resolve_higgsfield_api_key,
+)
 from docprod.exceptions import DocumentedUnimplementedError, MissingApiKeyError
 from docprod.providers.paid_cache import video_cache_hash
 from docprod.quality.shots import PerformanceShotRequest
@@ -114,24 +118,13 @@ KLING_I2V_REASON = (
 
 
 def higgsfield_auth_header(settings: Settings | None = None) -> str:
-    cfg = settings or get_settings()
-    ident = ""
-    if cfg.higgsfield_api_key_id:
-        ident = cfg.higgsfield_api_key_id.get_secret_value().strip()
-    secret = (
-        cfg.higgsfield_api_key_secret.get_secret_value() if cfg.higgsfield_api_key_secret else ""
-    ).strip()
-    combined = (
-        cfg.higgsfield_api_key.get_secret_value() if cfg.higgsfield_api_key else ""
-    ).strip()
-    if ident and secret:
-        return f"Key {ident}:{secret}"
-    if combined and ":" in combined:
-        return f"Key {combined}"
-    raise MissingApiKeyError(
-        "Set HIGGSFIELD_API_KEY_ID and HIGGSFIELD_API_KEY_SECRET "
-        "(or HIGGSFIELD_API_KEY as id:secret)."
-    )
+    key = resolve_higgsfield_api_key(settings)
+    if not key:
+        raise MissingApiKeyError(
+            "Set HF_API_KEY (complete key), or legacy HIGGSFIELD_API_KEY_ID "
+            "and HIGGSFIELD_API_KEY_SECRET."
+        )
+    return f"Key {key}"
 
 
 def preflight_genjutsu(
@@ -281,8 +274,7 @@ class HiggsfieldCatalogAdapter:
 
 
 def higgsfield_credentials_present(settings: Settings | None = None) -> bool:
-    cfg = settings or get_settings()
-    return cfg.higgsfield_key_configured()
+    return bool(resolve_higgsfield_api_key(settings))
 
 
 def seedance_reference_to_video_body(
