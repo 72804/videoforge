@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from typing import Any, Protocol
 
 from PIL import Image
 
-from docprod.exceptions import PaidApiNotConfirmedError
+from docprod.config import Settings, get_settings
+from docprod.exceptions import MissingApiKeyError, PaidApiNotConfirmedError
 from docprod.product.birko_bible import (
     BIRKO_CAST,
     GROUP_DYNAMIC,
@@ -20,6 +23,7 @@ from docprod.product.episode import (
     VoiceAssignment,
 )
 from docprod.product.errors import AuthorizationError, ProductError
+from docprod.product.friend_group import HOOK_FIRST_WRITER_INSTRUCTIONS
 from docprod.product.series import (
     BIRKO_E2_TARGET_STACK,
     birko_character_refs_dir,
@@ -31,14 +35,19 @@ from docprod.providers.pricing import (
     text_tokens_cost_usd,
 )
 from docprod.quality.catalog import get_model
-from docprod.quality.ensemble import CreativeEnsembleRun, remaining_ensemble_stages
+from docprod.quality.ensemble import (
+    CreativeEnsembleRun,
+    EnsembleUsageRecord,
+    remaining_ensemble_stages,
+)
 from docprod.quality.enums import QualityProfile
 from docprod.quality.policy_select import OPENAI_STOCK_VOICES
-from docprod.quality.story_director import script_ensemble_plan
+from docprod.quality.story_director import CRITIC_SYSTEM, FINALIZER_SYSTEM, script_ensemble_plan
 from docprod.storage.hashing import file_sha256
 
 STORY_HARD_CAP_USD = 2.50
-STORY_GENERATE_AUTHORIZED = False
+AUTHORIZED_STORY_EPISODES = frozenset({("birko", 2)})
+STORY_GENERATE_AUTHORIZED = False  # global paid-story switch stays off
 TREATMENT_COUNT = 3
 # Verified token envelope from the last story-plan (text-only context).
 BIRKO_E2_TREATMENT_EST_IN = 3107
@@ -72,6 +81,26 @@ _ELEVEN_PROPOSED = {
     "hg": ("eleven_v3_proposed_devilish_tr", "verse"),
     "musti": ("eleven_v3_proposed_young_gremlin_tr", "sage"),
 }
+
+
+class StoryTextClient(Protocol):
+    def create(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_text: str,
+        confirm_paid: bool,
+    ) -> Any: ...
+
+
+def story_generation_authorized(series_slug: str, episode_number: int) -> bool:
+    return (series_slug.strip().casefold(), int(episode_number)) in AUTHORIZED_STORY_EPISODES
+
+
+def openai_key_present(settings: Settings | None = None) -> bool:
+    cfg = settings or get_settings()
+    return cfg.openai_key_configured()
 
 
 def _repo_root() -> Path:
@@ -285,6 +314,117 @@ def _models_from_plan(plan: StoryGenerationPlan) -> tuple[str, str, str]:
     return primary, critic, finalizer
 
 
+def story_generation_readiness(
+    plan: StoryGenerationPlan,
+    *,
+    settings: Settings | None = None,
+) -> dict[str, object]:
+    authorized = story_generation_authorized(plan.series_slug, plan.episode_number)
+    key_ok = openai_key_present(settings)
+    return {
+        "ready": authorized and plan.cap_ok and key_ok,
+        "series": plan.series_slug,
+        "episode": plan.episode_number,
+        "model": "gpt-6-astra",
+        "calls": len(plan.calls),
+        "reserved_total": plan.reserved_usd,
+        "expected_total": plan.estimated_usd,
+        "hard_cap_usd": plan.hard_cap_usd,
+        "confirm_paid_required": True,
+        "media_generation": False,
+        "anthropic_required": False,
+        "openai_key_configured": key_ok,
+        "authorized_episode": authorized,
+        "global_story_generate_authorized": STORY_GENERATE_AUTHORIZED,
+    }
+
+
+def _checkpoint_path() -> Path:
+    return _repo_root() / CHECKPOINT_RELATIVE
+
+
+def load_ensemble_checkpoint() -> CreativeEnsembleRun | None:
+    path = _checkpoint_path()
+    if not path.is_file():
+        return None
+    return CreativeEnsembleRun.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def save_ensemble_checkpoint(run: CreativeEnsembleRun) -> Path:
+    path = _checkpoint_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(run.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _pad_treatments(run: CreativeEnsembleRun) -> None:
+    while len(run.treatments) < TREATMENT_COUNT:
+        run.treatments.append("")
+
+
+def _usage_from_response(response: Any, *, call_id: str, model_id: str) -> EnsembleUsageRecord:
+    usage = getattr(response, "usage", None)
+    payload: dict[str, Any] = {}
+    if usage is not None and hasattr(usage, "model_dump"):
+        dumped = usage.model_dump()
+        if isinstance(dumped, dict):
+            payload = dumped
+    elif isinstance(usage, dict):
+        payload = usage
+    input_tokens = int(payload.get("input_tokens") or 0)
+    output_tokens = int(payload.get("output_tokens") or 0)
+    in_rate, out_rate = _rates(model_id)
+    return EnsembleUsageRecord(
+        call_id=call_id,
+        model_id=model_id,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        usd=text_tokens_cost_usd(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            input_usd_per_million=in_rate,
+            output_usd_per_million=out_rate,
+        ),
+    )
+
+
+def _output_text(response: Any) -> str:
+    text = getattr(response, "output_text", None)
+    if isinstance(text, str) and text.strip():
+        return text
+    return str(response)
+
+
+class OpenAIStoryClient:
+    """Scoped Astra text client. Does not enable image/video/TTS or Anthropic."""
+
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+
+    def create(
+        self,
+        *,
+        model: str,
+        instructions: str,
+        input_text: str,
+        confirm_paid: bool,
+    ) -> Any:
+        if not confirm_paid:
+            raise PaidApiNotConfirmedError(
+                "story-generate requires --confirm-paid after explicit authorization"
+            )
+        from openai import OpenAI
+
+        from docprod.config import require_openai_api_key
+
+        client = OpenAI(api_key=require_openai_api_key(self.settings))
+        return client.responses.create(
+            model=model,
+            instructions=instructions,
+            input=input_text,
+        )
+
+
 def proposed_voice_assignments(*, language: str = "tr") -> list[VoiceAssignment]:
     assignments: list[VoiceAssignment] = []
     for index, member in enumerate(BIRKO_CAST):
@@ -425,7 +565,8 @@ def build_story_generation_plan(
             "Reference images are metadata only (path/hash/dims). No image binaries.",
             "No repository/code context is sent to story models.",
             "Partial ensemble outputs persist; completed treatments are not repeated.",
-            "Do not execute text models until story-generate is authorized.",
+            "Birko Episode 2 text-model story generation is allowlisted. "
+            "--confirm-paid and the $2.50 cap still apply. Media stays disabled.",
             "Zero image/video/audio calls in this plan.",
         ],
     )
@@ -597,8 +738,8 @@ def write_story_plan_artifacts(
                 "`uv run docprod friend-group-episode --series-slug birko "
                 "--episode 2 --stage story-plan`",
                 "`uv run docprod birko-episode2 --stage story-plan`",
-                "`uv run docprod birko-episode2 --stage story-generate`",
-                "(story-generate is refused until authorized)",
+                "`uv run docprod birko-episode2 --stage story-generate --confirm-paid`",
+                "(requires allowlisted episode + --confirm-paid; media stays off)",
                 "",
                 "## OUTPUTS STORY GENERATION WILL CREATE",
                 "",
@@ -611,15 +752,25 @@ def write_story_plan_artifacts(
     )
     plan_path.write_text(plan.model_dump_json(indent=2) + "\n", encoding="utf-8")
     primary, critic, finalizer = _models_from_plan(plan)
-    checkpoint = CreativeEnsembleRun(
-        project_id=f"{brief.series_slug}-ep{brief.episode_number}",
-        primary_model=primary,
-        critic_model=critic,
-        finalizer_model=finalizer,
-        treatments=["", "", ""],
-        executed=False,
-    )
-    checkpoint_path.write_text(checkpoint.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    existing = load_ensemble_checkpoint()
+    if existing is not None and remaining_ensemble_stages(existing) != [
+        "treatment_1",
+        "treatment_2",
+        "treatment_3",
+        "critic",
+        "finalizer",
+    ]:
+        checkpoint = existing
+    else:
+        checkpoint = CreativeEnsembleRun(
+            project_id=f"{brief.series_slug}-ep{brief.episode_number}",
+            primary_model=primary,
+            critic_model=critic,
+            finalizer_model=finalizer,
+            treatments=["", "", ""],
+            executed=False,
+        )
+    save_ensemble_checkpoint(checkpoint)
     return {
         "review": str(review_path),
         "plan": str(plan_path),
@@ -633,17 +784,23 @@ def run_friend_group_episode(
     series_slug: str = "birko",
     episode_number: int = 2,
     confirm_paid: bool = False,
+    settings: Settings | None = None,
+    text_client: StoryTextClient | None = None,
+    execute_calls: bool | None = None,
 ) -> dict[str, object]:
     token = stage.strip().lower().replace("_", "-")
     brief = locked_episode_brief(series_slug=series_slug, episode_number=episode_number)
     refs = inspect_locked_character_refs() if series_slug == "birko" else []
     plan = build_story_generation_plan(brief, flagship=True, refs=refs)
-    if token in {"story-plan", "plan"}:
+    readiness = story_generation_readiness(plan, settings=settings)
+    if token in {"story-plan", "plan", "story-check", "check"}:
         paths = write_story_plan_artifacts(brief, plan, refs)
         return {
-            "stage": "story-plan",
+            "stage": "story-check" if token in {"story-check", "check"} else "story-plan",
             "brief": brief.model_dump(),
             "plan": plan.model_dump(),
+            "readiness": readiness,
+            "ready": bool(readiness["ready"]),
             "refs": refs,
             "voices": [item.model_dump() for item in proposed_voice_assignments()],
             "location": location_bible_for_brief(brief).model_dump(),
@@ -654,8 +811,14 @@ def run_friend_group_episode(
             "text_model_calls": 0,
         }
     if token in {"story-generate", "generate"}:
-        return execute_story_generation(confirm_paid=confirm_paid, plan=plan)
-    raise ValueError(f"unknown stage {stage!r}; use story-plan or story-generate")
+        return execute_story_generation(
+            confirm_paid=confirm_paid,
+            plan=plan,
+            settings=settings,
+            text_client=text_client,
+            execute_calls=True if execute_calls is None else execute_calls,
+        )
+    raise ValueError(f"unknown stage {stage!r}; use story-plan, story-check, or story-generate")
 
 
 def execute_story_generation(
@@ -663,6 +826,10 @@ def execute_story_generation(
     confirm_paid: bool,
     plan: StoryGenerationPlan,
     checkpoint: CreativeEnsembleRun | None = None,
+    settings: Settings | None = None,
+    text_client: StoryTextClient | None = None,
+    execute_calls: bool = True,
+    persist: bool = True,
 ) -> dict[str, object]:
     if not confirm_paid:
         raise PaidApiNotConfirmedError(
@@ -673,19 +840,113 @@ def execute_story_generation(
             f"STOP: reserved story total ${plan.reserved_usd:.4f} exceeds hard cap "
             f"${plan.hard_cap_usd:.2f}. Cap was not increased."
         )
-    primary, critic, finalizer = _models_from_plan(plan)
-    run = checkpoint or CreativeEnsembleRun(
-        project_id=f"{plan.series_slug}-ep{plan.episode_number}",
-        primary_model=primary,
-        critic_model=critic,
-        finalizer_model=finalizer,
-        treatments=["", "", ""],
-        executed=False,
-    )
-    remaining = remaining_ensemble_stages(run)
-    if not STORY_GENERATE_AUTHORIZED:
+    if not story_generation_authorized(plan.series_slug, plan.episode_number):
         raise AuthorizationError(
-            "text-model story generation is not authorized in this checkpoint; "
-            f"remaining_stages={remaining}; usage_records={len(run.model_usage)}"
+            f"story generation is not allowlisted for {plan.series_slug} "
+            f"episode {plan.episode_number}"
         )
-    raise AuthorizationError("unreachable: story generate must not call providers yet")
+    cfg = settings or get_settings()
+    if not openai_key_present(cfg):
+        raise MissingApiKeyError(
+            "OPENAI_API_KEY is not set. Add it to .env (never commit the file)."
+        )
+    primary, critic, finalizer = _models_from_plan(plan)
+    run = checkpoint or load_ensemble_checkpoint()
+    if run is None:
+        run = CreativeEnsembleRun(
+            project_id=f"{plan.series_slug}-ep{plan.episode_number}",
+            primary_model=primary,
+            critic_model=critic,
+            finalizer_model=finalizer,
+            treatments=["", "", ""],
+            executed=False,
+        )
+    _pad_treatments(run)
+    remaining = remaining_ensemble_stages(run)
+    if not execute_calls:
+        return {
+            "stage": "story-generate",
+            "authorized": True,
+            "execute_calls": False,
+            "remaining_stages": remaining,
+            "usage_records": len(run.model_usage),
+            "media_calls": 0,
+            "stars": 0,
+            "text_model_calls": 0,
+            "plan": plan.model_dump(),
+        }
+    client = text_client or OpenAIStoryClient(cfg)
+    context = json.dumps(
+        story_model_context(
+            locked_episode_brief(
+                series_slug=plan.series_slug,
+                episode_number=plan.episode_number,
+            )
+        ),
+        ensure_ascii=False,
+    )
+    spent = sum(float(item.usd or 0) for item in run.model_usage)
+    reserved_by_id = {call.call_id: call.reserved_usd for call in plan.calls}
+    for stage_id in remaining:
+        reserved = float(reserved_by_id.get(stage_id, 0))
+        if spent + reserved - 1e-9 > plan.hard_cap_usd:
+            raise ProductError(
+                f"STOP: spent ${spent:.4f} plus reserved ${reserved:.4f} for {stage_id} "
+                f"exceeds hard cap ${plan.hard_cap_usd:.2f}"
+            )
+        if stage_id.startswith("treatment_"):
+            index = int(stage_id.rsplit("_", 1)[-1])
+            instructions = HOOK_FIRST_WRITER_INSTRUCTIONS
+            payload = (
+                f"Write creative treatment {index} of 3. Do not see other treatments.\n"
+                f"{context}"
+            )
+            model_id = primary
+        elif stage_id == "critic":
+            instructions = CRITIC_SYSTEM
+            payload = (
+                "FRESH CRITIC CALL. No hidden conversation state.\n"
+                f"{context}\n\nTREATMENT 1:\n{run.treatments[0]}\n\n"
+                f"TREATMENT 2:\n{run.treatments[1]}\n\nTREATMENT 3:\n{run.treatments[2]}"
+            )
+            model_id = critic
+        else:
+            instructions = FINALIZER_SYSTEM
+            payload = (
+                f"{context}\n\nTREATMENT 1:\n{run.treatments[0]}\n\n"
+                f"TREATMENT 2:\n{run.treatments[1]}\n\nTREATMENT 3:\n{run.treatments[2]}\n\n"
+                f"CRITIC:\n{run.critic_output}"
+            )
+            model_id = finalizer
+        response = client.create(
+            model=model_id,
+            instructions=instructions,
+            input_text=payload,
+            confirm_paid=True,
+        )
+        text = _output_text(response)
+        record = _usage_from_response(response, call_id=stage_id, model_id=model_id)
+        run.model_usage.append(record)
+        spent += float(record.usd or 0)
+        if stage_id.startswith("treatment_"):
+            index = int(stage_id.rsplit("_", 1)[-1])
+            run.treatments[index - 1] = text
+        elif stage_id == "critic":
+            run.critic_output = text
+        else:
+            run.final_script = text
+            run.executed = True
+        if persist:
+            save_ensemble_checkpoint(run)
+    return {
+        "stage": "story-generate",
+        "authorized": True,
+        "execute_calls": True,
+        "remaining_stages": remaining_ensemble_stages(run),
+        "usage_records": len(run.model_usage),
+        "media_calls": 0,
+        "stars": 0,
+        "text_model_calls": len(run.model_usage),
+        "plan": plan.model_dump(),
+        "checkpoint": str(_checkpoint_path()),
+    }

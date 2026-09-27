@@ -34,6 +34,13 @@ Also list: keep, change, reject_if_blindly_applied, memeable_moments,
 feasibility_risks. Prefer authenticity over generic AI-story polish.
 """.strip()
 
+FINALIZER_SYSTEM = """
+You produce the final shooting story as JSON matching FriendGroupStorySpec.
+Use the locked premise and ending. Dialogue-first. Language from the brief.
+Target 45-60 seconds. Synthesize useful critic notes; do not blindly obey.
+Make an independent judgment. Do not invent a different ending.
+""".strip()
+
 
 def uses_premium_script_ensemble(profile: QualityProfile, *, flagship: bool = False) -> bool:
     return flagship or profile in {QualityProfile.PREMIUM, QualityProfile.MAX_QUALITY}

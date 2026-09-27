@@ -3068,7 +3068,7 @@ def friend_group_episode(
     stage: str = typer.Option(
         "story-plan",
         "--stage",
-        help="story-plan (zero network) or story-generate (gated)",
+        help="story-plan, story-check (zero network), or story-generate (gated)",
     ),
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
@@ -3094,6 +3094,7 @@ def friend_group_episode(
         console.print(str(exc))
         raise typer.Exit(code=1) from exc
     plan = payload["plan"] if isinstance(payload.get("plan"), dict) else {}
+    readiness = payload.get("readiness") if isinstance(payload.get("readiness"), dict) else {}
     console.print(f"stage={payload.get('stage')} series={series_slug} episode={episode}")
     calls = plan.get("calls") if isinstance(plan.get("calls"), list) else []
     for call in calls:
@@ -3117,6 +3118,18 @@ def friend_group_episode(
         f"text_model_calls={payload.get('text_model_calls', 0)} "
         f"media_calls={payload.get('media_calls', 0)} stars={payload.get('stars', 0)}"
     )
+    if payload.get("ready"):
+        console.print("READY FOR PAID STORY GENERATION")
+        console.print(
+            f"series={readiness.get('series')} episode={readiness.get('episode')} "
+            f"model={readiness.get('model')} calls={readiness.get('calls')}"
+        )
+        console.print(
+            f"reserved_total={readiness.get('reserved_total')} "
+            f"hard_cap={readiness.get('hard_cap_usd')} "
+            f"confirm_paid_required={readiness.get('confirm_paid_required')} "
+            f"media_generation={readiness.get('media_generation')}"
+        )
     artifacts = payload.get("artifacts") if isinstance(payload.get("artifacts"), dict) else {}
     if artifacts:
         console.print(f"review={artifacts.get('review')}")

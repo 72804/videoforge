@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import SecretStr
 
+from docprod.config import Settings
 from docprod.exceptions import PaidApiNotConfirmedError
 from docprod.product.birko_bible import LOCKED_EPISODE_2_PREMISE, episode_2_draft_prompt
-from docprod.product.errors import AuthorizationError
+from docprod.product.errors import AuthorizationError, ProductError
 from docprod.product.friend_group import FriendGroupStorySpec
 from docprod.product.story_pipeline import (
+    AUTHORIZED_STORY_EPISODES,
     STORY_GENERATE_AUTHORIZED,
     STORY_HARD_CAP_USD,
     TREATMENT_COUNT,
@@ -15,6 +18,7 @@ from docprod.product.story_pipeline import (
     inspect_locked_character_refs,
     locked_episode_brief,
     run_friend_group_episode,
+    story_generation_authorized,
     story_model_context,
 )
 from docprod.providers.pricing import (
@@ -143,15 +147,103 @@ def test_story_plan_cli_path_writes_review_without_models() -> None:
     assert all(
         call["model_id"] == "gpt-6-astra" for call in payload["plan"]["calls"]
     )
+    payload = run_friend_group_episode(stage="story-check", settings=_story_settings())
+    assert payload["ready"] is True
+    assert payload["readiness"]["media_generation"] is False
+    assert payload["readiness"]["confirm_paid_required"] is True
+    assert payload["readiness"]["anthropic_required"] is False
+    assert payload["readiness"]["calls"] == 5
+    assert payload["text_model_calls"] == 0
 
 
-def test_story_generate_refuses_without_authorization() -> None:
+def _story_settings() -> Settings:
+    return Settings(_env_file=None, openai_api_key=SecretStr("sk-test-not-a-real-key"))
+
+
+def test_story_generate_requires_confirm_paid_and_allowlist() -> None:
     assert STORY_GENERATE_AUTHORIZED is False
+    assert AUTHORIZED_STORY_EPISODES == {("birko", 2)}
+    assert story_generation_authorized("birko", 2) is True
+    assert story_generation_authorized("other", 1) is False
     plan = build_story_generation_plan(locked_episode_brief())
+    settings = _story_settings()
     with pytest.raises(PaidApiNotConfirmedError):
-        execute_story_generation(confirm_paid=False, plan=plan)
+        execute_story_generation(confirm_paid=False, plan=plan, settings=settings)
+    passed = execute_story_generation(
+        confirm_paid=True,
+        plan=plan,
+        settings=settings,
+        execute_calls=False,
+    )
+    assert passed["authorized"] is True
+    assert passed["text_model_calls"] == 0
+    assert passed["media_calls"] == 0
+    other = build_story_generation_plan(
+        locked_episode_brief(series_slug="other", episode_number=1)
+    )
     with pytest.raises(AuthorizationError):
-        execute_story_generation(confirm_paid=True, plan=plan)
+        execute_story_generation(
+            confirm_paid=True,
+            plan=other,
+            settings=settings,
+            execute_calls=False,
+        )
+    over_cap = plan.model_copy(update={"reserved_usd": 3.0, "hard_cap_usd": STORY_HARD_CAP_USD})
+    with pytest.raises(ProductError, match="hard cap"):
+        execute_story_generation(
+            confirm_paid=True,
+            plan=over_cap,
+            settings=settings,
+            execute_calls=False,
+        )
+
+
+def test_mocked_story_calls_resume_without_repeating_success() -> None:
+    class _Resp:
+        def __init__(self, text: str) -> None:
+            self.output_text = text
+            self.usage = type(
+                "Usage",
+                (),
+                {"model_dump": lambda self=None: {"input_tokens": 8, "output_tokens": 4}},
+            )()
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def create(self, **_kwargs: object) -> _Resp:
+            self.calls += 1
+            return _Resp(f"output-{self.calls}")
+
+    settings = _story_settings()
+    plan = build_story_generation_plan(locked_episode_brief())
+    run = CreativeEnsembleRun(
+        project_id="p",
+        primary_model="gpt-6-astra",
+        critic_model="gpt-6-astra",
+        finalizer_model="gpt-6-astra",
+        treatments=["kept-1", "", ""],
+        critic_output="",
+        final_script="",
+    )
+    client = _Client()
+    result = execute_story_generation(
+        confirm_paid=True,
+        plan=plan,
+        checkpoint=run,
+        settings=settings,
+        text_client=client,
+        execute_calls=True,
+        persist=False,
+    )
+    assert result["media_calls"] == 0
+    assert client.calls == 4
+    assert run.treatments[0] == "kept-1"
+    assert run.treatments[1].startswith("output-")
+    assert run.critic_output.startswith("output-")
+    assert run.final_script.startswith("output-")
+    assert remaining_ensemble_stages(run) == []
 
 
 def test_ensemble_resume_skips_completed_treatments() -> None:
