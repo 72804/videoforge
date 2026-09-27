@@ -42,7 +42,9 @@ from docprod.product.production_director import (
 from docprod.product.series import (
     BIRKO_E2_TARGET_STACK,
     birko_character_refs_dir,
+    custom_identity_source,
     list_birko_ref_inventory,
+    promote_custom_identity_photos,
 )
 from docprod.product.story_artifacts import (
     _parse_json_blob,
@@ -191,6 +193,7 @@ def location_bible_for_brief(brief: EpisodeBrief) -> LocationBible:
 
 
 def inspect_locked_character_refs() -> list[dict[str, object]]:
+    promote_custom_identity_photos()
     folder = birko_character_refs_dir()
     inventory = list_birko_ref_inventory()
     by_slug = inventory["by_slug"] if isinstance(inventory["by_slug"], dict) else {}
@@ -198,6 +201,7 @@ def inspect_locked_character_refs() -> list[dict[str, object]]:
     for member in BIRKO_CAST:
         row = by_slug.get(member.slug) if isinstance(by_slug, dict) else {}
         found = list(row.get("found") or []) if isinstance(row, dict) else []
+        custom = custom_identity_source(member.slug)
         if not found:
             rows.append(
                 {
@@ -205,6 +209,7 @@ def inspect_locked_character_refs() -> list[dict[str, object]]:
                     "name": member.name,
                     "expected": list(member.expected_ref_filenames),
                     "resolved_path": "",
+                    "custom_source": str(custom) if custom else "",
                     "sha256": "",
                     "width": 0,
                     "height": 0,
@@ -223,6 +228,7 @@ def inspect_locked_character_refs() -> list[dict[str, object]]:
                 "name": member.name,
                 "expected": list(member.expected_ref_filenames),
                 "resolved_path": str(path.resolve()) if path.is_file() else str(path),
+                "custom_source": str(custom) if custom else "",
                 "sha256": file_sha256(path) if path.is_file() else "",
                 "width": width,
                 "height": height,
@@ -244,6 +250,7 @@ def _ref_metadata(refs: list[dict[str, object]]) -> list[dict[str, object]]:
                 "slug": row.get("slug"),
                 "name": row.get("name"),
                 "resolved_path": row.get("resolved_path"),
+                "custom_source": row.get("custom_source"),
                 "sha256": row.get("sha256"),
                 "width": row.get("width"),
                 "height": row.get("height"),
@@ -1353,10 +1360,40 @@ def run_friend_group_episode(
             refs=refs,
             settings=settings,
         )
+    if token in {"simple-script-plan"}:
+        from docprod.product.simple_video import execute_simple_script_plan
+
+        return execute_simple_script_plan(brief=brief, refs=refs)
+    if token in {"simple-script-generate"}:
+        from docprod.product.simple_video import execute_simple_script_generate
+
+        return execute_simple_script_generate(
+            confirm_paid=confirm_paid,
+            brief=brief,
+            refs=refs,
+            settings=settings,
+            text_client=text_client,
+            execute_calls=True if execute_calls is None else execute_calls,
+        )
+    if token in {"simple-video-plan"}:
+        from docprod.product.simple_video import execute_simple_video_plan
+
+        return execute_simple_video_plan(brief=brief, refs=refs, settings=settings)
+    if token in {"simple-video-generate"}:
+        from docprod.product.simple_video import execute_simple_video_generate
+
+        return execute_simple_video_generate(
+            confirm_paid=confirm_paid,
+            brief=brief,
+            refs=refs,
+            settings=settings,
+            execute_calls=True if execute_calls is None else execute_calls,
+        )
     raise ValueError(
         f"unknown stage {stage!r}; use story-plan, story-check, story-status, "
         "story-generate, production-plan, animatic-plan, animatic-generate, "
-        "or animatic-rerender"
+        "animatic-rerender, simple-script-plan, simple-script-generate, "
+        "simple-video-plan, or simple-video-generate"
     )
 
 

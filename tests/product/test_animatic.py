@@ -208,6 +208,26 @@ def test_locked_refs_preserved() -> None:
         assert all("ref_" in path for path in item.reference_files)
 
 
+def test_image_fingerprint_includes_reference_bytes(tmp_path: Path) -> None:
+    from PIL import Image
+
+    from docprod.product.animatic import AnimaticKeyframeSpec, _fingerprint_image
+
+    path = tmp_path / "ref_ada.jpg"
+    Image.new("RGB", (32, 32), (1, 2, 3)).save(path, "JPEG")
+    spec = AnimaticKeyframeSpec(
+        keyframe_id="kf",
+        prompt="still",
+        model="gpt-image-1.5",
+        reference_files=[str(path)],
+        visible_characters=["ada"],
+    )
+    first = _fingerprint_image(spec)
+    Image.new("RGB", (32, 32), (9, 8, 7)).save(path, "JPEG")
+    second = _fingerprint_image(spec)
+    assert first != second
+
+
 def test_no_video_provider_calls() -> None:
     directed, brief, location, refs, voices = _directed_plan()
     plan = build_animatic_plan(

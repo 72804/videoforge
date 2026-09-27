@@ -5,7 +5,9 @@ from pathlib import Path
 
 from docprod.product.birko_bible import (
     BIRKO_CAST,
+    CUSTOM_IDENTITY_INPUTS,
     GROUP_DYNAMIC,
+    INPUTS_CHARACTERS_RELATIVE,
     REFS_RELATIVE,
     BirkoCastMember,
     episode_2_draft_prompt,
@@ -58,6 +60,18 @@ def birko_character_refs_dir() -> Path:
     return _repo_root() / REFS_RELATIVE
 
 
+def birko_character_inputs_dir() -> Path:
+    return _repo_root() / INPUTS_CHARACTERS_RELATIVE
+
+
+def custom_identity_source(slug: str) -> Path | None:
+    filename = CUSTOM_IDENTITY_INPUTS.get(slug)
+    if not filename:
+        return None
+    path = birko_character_inputs_dir() / slug / filename
+    return path if path.is_file() else None
+
+
 def _jpeg_from(source: Path, dest: Path) -> None:
     from PIL import Image
 
@@ -88,6 +102,39 @@ def promote_muge_user_photos() -> dict[str, str]:
         _jpeg_from(alt_src, alt)
         result["alt"] = alt.name
     return result
+
+
+def promote_custom_identity_photos() -> dict[str, dict[str, str]]:
+    """Lock Birko/Kemal to user inputs/characters/*/front.png, not generated v1 stills.
+
+    Archives the old canonical JPEG once. Does not call image models.
+    """
+    from docprod.storage.hashing import file_sha256
+
+    folder = birko_character_refs_dir()
+    folder.mkdir(parents=True, exist_ok=True)
+    out: dict[str, dict[str, str]] = {}
+    for slug in CUSTOM_IDENTITY_INPUTS:
+        source = custom_identity_source(slug)
+        if source is None:
+            continue
+        canonical = folder / f"ref_{slug}.jpg"
+        archive = folder / f"ref_{slug}_v1_archive.jpg"
+        tmp = folder / f".ref_{slug}.promote.jpg"
+        _jpeg_from(source, tmp)
+        new_sha = file_sha256(tmp)
+        row = {"source": str(source), "primary": canonical.name}
+        if canonical.is_file() and file_sha256(canonical) == new_sha:
+            tmp.unlink(missing_ok=True)
+            row["unchanged"] = "1"
+            out[slug] = row
+            continue
+        if canonical.is_file() and not archive.is_file():
+            canonical.replace(archive)
+            row["archived"] = archive.name
+        tmp.replace(canonical)
+        out[slug] = row
+    return out
 
 
 def _norm(value: str) -> str:
@@ -190,6 +237,7 @@ def _apply_bible(
 def import_locked_birko_personas(repo: MemoryRepository, user: TelegramUser) -> list[Persona]:
     """Upsert the full Birko bible. Never copies or regenerates locked image files."""
     promote_muge_user_photos()
+    promote_custom_identity_photos()
     inventory = list_birko_ref_inventory()
     out: list[Persona] = []
     for member in BIRKO_CAST:

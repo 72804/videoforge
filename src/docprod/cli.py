@@ -3069,7 +3069,9 @@ def friend_group_episode(
         "story-plan",
         "--stage",
         help="story-plan, story-check, story-status, story-generate, "
-        "production-plan, animatic-plan, animatic-generate, or animatic-rerender",
+        "production-plan, animatic-plan, animatic-generate, animatic-rerender, "
+        "simple-script-plan, simple-script-generate, simple-video-plan, "
+        "or simple-video-generate",
     ),
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
@@ -3190,6 +3192,22 @@ def friend_group_episode(
             f"size={payload.get('width')}x{payload.get('height')} "
             f"vcodec={payload.get('video_codec')} acodec={payload.get('audio_codec')}"
         )
+    if payload.get("stage") in {
+        "simple-script-plan",
+        "simple-script-generate",
+        "simple-video-plan",
+        "simple-video-generate",
+    }:
+        console.print(
+            f"simple_expected={payload.get('expected_usd')} "
+            f"simple_reserved={payload.get('reserved_usd')} "
+            f"hard_cap={payload.get('hard_cap_usd')} cap_ok={payload.get('cap_ok')}"
+        )
+        if payload.get("scene_count_target"):
+            console.print(
+                f"scenes={payload.get('scene_count_target')} "
+                f"dialogue={payload.get('dialogue_target')}"
+            )
 
 
 @app.command("birko-episode2")

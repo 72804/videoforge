@@ -74,6 +74,33 @@ def test_six_locked_refs_present_with_hashes() -> None:
         assert "ref_" in str(row["resolved_path"]).lower()
 
 
+def test_birko_kemal_use_custom_front_png_not_generated_v1() -> None:
+    from PIL import Image
+
+    from docprod.product.series import birko_character_refs_dir, promote_custom_identity_photos
+    from docprod.storage.hashing import file_sha256
+
+    promoted = promote_custom_identity_photos()
+    assert "birko" in promoted
+    assert "kemal" in promoted
+    folder = birko_character_refs_dir()
+    assert (folder / "ref_birko_v1_archive.jpg").is_file()
+    assert (folder / "ref_kemal_v1_archive.jpg").is_file()
+    rows = {row["slug"]: row for row in inspect_locked_character_refs()}
+    assert str(rows["birko"]["custom_source"]).endswith("inputs/characters/birko/front.png")
+    assert str(rows["kemal"]["custom_source"]).endswith("inputs/characters/kemal/front.png")
+    assert int(rows["birko"]["height"]) > int(rows["birko"]["width"])
+    assert int(rows["kemal"]["height"]) > int(rows["kemal"]["width"])
+    assert file_sha256(folder / "ref_birko.jpg") != file_sha256(
+        folder / "ref_birko_v1_archive.jpg"
+    )
+    assert file_sha256(folder / "ref_kemal.jpg") != file_sha256(
+        folder / "ref_kemal_v1_archive.jpg"
+    )
+    with Image.open(folder / "ref_birko.jpg") as image:
+        assert image.size[1] > image.size[0]
+
+
 def test_story_generation_plan_is_zero_media() -> None:
     plan = build_story_generation_plan(locked_episode_brief())
     assert plan.treatment_count == TREATMENT_COUNT == 3

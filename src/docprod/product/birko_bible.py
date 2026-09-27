@@ -5,6 +5,11 @@ from dataclasses import dataclass, field
 from docprod.drama import DEFAULT_PROJECT_ID
 
 REFS_RELATIVE = f"projects/{DEFAULT_PROJECT_ID}/artifacts/visuals/character_refs"
+INPUTS_CHARACTERS_RELATIVE = f"projects/{DEFAULT_PROJECT_ID}/inputs/characters"
+CUSTOM_IDENTITY_INPUTS = {
+    "birko": "front.png",
+    "kemal": "front.png",
+}
 
 LOCKED_EPISODE_2_PREMISE = (
     "Birko invites everyone to Krispy Kreme, secretly tells each person that "

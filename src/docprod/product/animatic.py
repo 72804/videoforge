@@ -31,6 +31,7 @@ from docprod.quality.enums import QualityProfile, SceneProductionClass
 from docprod.quality.policy_select import OPENAI_STOCK_VOICES, image_model_for, tts_model_for
 from docprod.quality.router import estimate_model_cost
 from docprod.render.subtitles import ass_timestamp, burn_in_required, ffmpeg_subtitle_filter
+from docprod.storage.hashing import file_sha256
 
 ANIMATIC_PROVIDER_HARD_CAP_USD = 2.00
 TURKISH_CHARS_PER_SEC = 13.0
@@ -126,6 +127,10 @@ def _still_config(model: str) -> ImageGenerationConfig:
 
 
 def _fingerprint_image(keyframe: AnimaticKeyframeSpec) -> str:
+    ref_sha = ",".join(
+        file_sha256(Path(path)) if Path(path).is_file() else "missing"
+        for path in keyframe.reference_files
+    )
     return image_request_hash(
         prompt=keyframe.prompt,
         config=_still_config(keyframe.model),
@@ -133,6 +138,7 @@ def _fingerprint_image(keyframe: AnimaticKeyframeSpec) -> str:
         extra={
             "visible": ",".join(keyframe.visible_characters),
             "refs": ",".join(keyframe.reference_files),
+            "ref_sha": ref_sha,
             "slot": keyframe.location_slot,
             "keyframe": keyframe.keyframe_id,
         },

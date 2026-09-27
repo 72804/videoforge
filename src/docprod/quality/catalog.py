@@ -740,9 +740,9 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             identity_consistency_suitability="multi_reference_candidate",
             required_credentials=("HIGGSFIELD_API_KEY_ID", "HIGGSFIELD_API_KEY_SECRET"),
             notes=(
-                "CATALOG_ONLY. Documented subscribe input: duration, resolution, "
-                "aspect_ratio, bitrate_mode, generate_audio. Extra media field names "
-                "not fully listed in the public snippet — do not invent."
+                "Documented subscribe input: prompt, duration, image_urls, video_urls, "
+                "audio_urls, resolution 480p/720p, aspect_ratio incl 9:16, bitrate_mode, "
+                "generate_audio. Friend Group uses 720p 9:16."
             ),
         ),
         _m(

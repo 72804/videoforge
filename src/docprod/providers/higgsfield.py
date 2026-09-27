@@ -49,7 +49,11 @@ SEEDANCE_CONTRACTS: dict[str, dict[str, object]] = {
         "gateway_model_id": "bytedance/seedance-2.5/reference-to-video",
         "url": "https://api.higgsfield.ai/bytedance/seedance-2.5/reference-to-video",
         "fields": (
+            "prompt",
             "duration",
+            "image_urls",
+            "video_urls",
+            "audio_urls",
             "resolution",
             "aspect_ratio",
             "bitrate_mode",
@@ -73,6 +77,17 @@ SEEDANCE_CONTRACTS: dict[str, dict[str, object]] = {
             "generate_audio",
         ),
     },
+}
+KLING_I2V_CONTRACT = {
+    "gateway_model_id": "kling-video/v3.0/pro/image-to-video",
+    "url": "https://api.higgsfield.ai/kling-video/v3.0/pro/image-to-video",
+    "fields": (
+        "prompt",
+        "image_url",
+        "last_image_url",
+        "sound",
+        "duration",
+    ),
 }
 KLING_MOTION_CONTRACT = {
     "gateway_model_id": "kling-video/v3/motion-control/pro",
@@ -227,6 +242,8 @@ def documented_higgsfield_plan(model_id: str) -> dict[str, Any]:
     contract = SEEDANCE_CONTRACTS.get(model_id)
     if model_id == "kling-3.0-motion-control-pro":
         contract = KLING_MOTION_CONTRACT
+    if model_id == "kling-3.0-pro-image-to-video":
+        contract = KLING_I2V_CONTRACT
     if contract is None:
         raise DocumentedUnimplementedError(model_id, "No documented Higgsfield contract recorded.")
     return {
@@ -261,3 +278,124 @@ class HiggsfieldCatalogAdapter:
             model_id,
             "Higgsfield HTTP is not implemented this phase; catalog contract only.",
         )
+
+
+def higgsfield_credentials_present(settings: Settings | None = None) -> bool:
+    cfg = settings or get_settings()
+    return cfg.higgsfield_key_configured()
+
+
+def seedance_reference_to_video_body(
+    *,
+    prompt: str,
+    duration: float,
+    image_urls: list[str],
+    audio_urls: list[str] | None = None,
+    video_urls: list[str] | None = None,
+    resolution: str = "720p",
+    aspect_ratio: str = "9:16",
+    generate_audio: bool = True,
+) -> dict[str, Any]:
+    if resolution != "720p":
+        raise ValueError("Friend Group Seedance requests must use 720p")
+    if aspect_ratio != "9:16":
+        raise ValueError("Friend Group Seedance requests must use 9:16")
+    seconds = max(4, min(30, int(round(duration))))
+    body: dict[str, Any] = {
+        "prompt": prompt,
+        "duration": seconds,
+        "image_urls": list(image_urls),
+        "resolution": resolution,
+        "aspect_ratio": aspect_ratio,
+        "generate_audio": generate_audio,
+    }
+    if audio_urls:
+        body["audio_urls"] = list(audio_urls)
+    if video_urls:
+        body["video_urls"] = list(video_urls)
+    return body
+
+
+def kling_image_to_video_body(
+    *,
+    prompt: str,
+    image_url: str,
+    duration: float,
+    last_image_url: str | None = None,
+    sound: bool = True,
+) -> dict[str, Any]:
+    seconds = max(3, min(15, int(round(duration))))
+    body: dict[str, Any] = {
+        "prompt": prompt,
+        "image_url": image_url,
+        "duration": seconds,
+        "sound": sound,
+    }
+    if last_image_url:
+        body["last_image_url"] = last_image_url
+    return body
+
+
+def kling_motion_control_body(
+    *,
+    prompt: str,
+    image_url: str,
+    video_url: str,
+    keep_original_sound: bool = False,
+) -> dict[str, Any]:
+    return {
+        "prompt": prompt,
+        "image_url": image_url,
+        "video_url": video_url,
+        "keep_original_sound": keep_original_sound,
+        "character_orientation": "image",
+    }
+
+
+def seedance_request_fingerprint(
+    *,
+    prompt: str,
+    duration: float,
+    image_shas: list[str],
+    audio_shas: list[str],
+    resolution: str = "720p",
+    aspect_ratio: str = "9:16",
+) -> str:
+    return video_cache_hash(
+        model="seedance-2.5-reference-to-video",
+        prompt=prompt,
+        negative_prompt="",
+        input_image_sha256s=[],
+        reference_image_sha256s=image_shas,
+        driving_video_sha256="",
+        audio_sha256="|".join(audio_shas),
+        duration_seconds=float(duration),
+        resolution=resolution,
+        aspect_ratio=aspect_ratio,
+        seed=None,
+    )
+
+
+def submit_higgsfield_json(
+    *,
+    url: str,
+    body: dict[str, Any],
+    confirm_paid: bool,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """Live POST. Callers must pass confirm_paid and must not invoke this from plan stages."""
+    require_paid_call_allowed("higgsfield", confirm_paid=confirm_paid, settings=settings)
+    import httpx
+
+    headers = {
+        "Authorization": higgsfield_auth_header(settings),
+        "Content-Type": "application/json",
+    }
+    with httpx.Client(timeout=120.0) as client:
+        response = client.post(url, headers=headers, json=body)
+        response.raise_for_status()
+        payload = response.json() if response.content else {}
+    request_id = ""
+    if isinstance(payload, dict):
+        request_id = str(payload.get("id") or payload.get("request_id") or "")
+    return {"request_id": request_id, "raw": payload}
