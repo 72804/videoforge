@@ -47,6 +47,27 @@ class EnsembleUsageRecord(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     usd: float | None = None
+    request_id: str = ""
+    response_id: str = ""
+    request_fingerprint: str = ""
+    state: str = ""
+
+
+class EnsembleStageRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage_id: str
+    model_id: str
+    state: str = "NOT_STARTED"
+    request_fingerprint: str = ""
+    reserved_usd: float = 0.0
+    request_id: str = ""
+    response_id: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    usd: float | None = None
+    output_hash: str = ""
+    output_length: int = 0
 
 
 class CreativeEnsembleRun(BaseModel):
@@ -64,6 +85,7 @@ class CreativeEnsembleRun(BaseModel):
     scorecard: CreativeScorecard | None = None
     final_script: str = ""
     model_usage: list[EnsembleUsageRecord] = Field(default_factory=list)
+    stages: list[EnsembleStageRecord] = Field(default_factory=list)
     executed: bool = False
     created_at: str = ""
 
@@ -82,7 +104,18 @@ def completed_ensemble_stages(run: CreativeEnsembleRun) -> list[str]:
 
 def remaining_ensemble_stages(run: CreativeEnsembleRun) -> list[str]:
     done = set(completed_ensemble_stages(run))
+    blocked = {"SUCCEEDED", "SUBMITTED", "UNCERTAIN"}
+    for record in run.stages:
+        if record.state in blocked:
+            done.add(record.stage_id)
     return [stage for stage in ENSEMBLE_STAGES if stage not in done]
+
+
+def stage_record_for(run: CreativeEnsembleRun, stage_id: str) -> EnsembleStageRecord | None:
+    for record in run.stages:
+        if record.stage_id == stage_id:
+            return record
+    return None
 
 
 def scorecard_for_staff(card: CreativeScorecard) -> dict[str, float | str | list[str]]:

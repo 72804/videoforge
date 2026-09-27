@@ -3068,7 +3068,7 @@ def friend_group_episode(
     stage: str = typer.Option(
         "story-plan",
         "--stage",
-        help="story-plan, story-check (zero network), or story-generate (gated)",
+        help="story-plan, story-check, story-status (zero network), or story-generate",
     ),
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
@@ -3115,9 +3115,28 @@ def friend_group_episode(
         f"hard_cap_usd={plan.get('hard_cap_usd')} cap_ok={plan.get('cap_ok')}"
     )
     console.print(
-        f"text_model_calls={payload.get('text_model_calls', 0)} "
+        f"planned_text_model_calls={payload.get('planned_text_model_calls', len(calls))} "
+        f"submitted_text_model_calls={payload.get('submitted_text_model_calls', 0)} "
+        f"completed_text_model_calls={payload.get('completed_text_model_calls', 0)}"
+    )
+    console.print(
         f"media_calls={payload.get('media_calls', 0)} stars={payload.get('stars', 0)}"
     )
+    status = payload.get("status") if isinstance(payload.get("status"), dict) else {}
+    stages = status.get("stages") if isinstance(status.get("stages"), list) else []
+    for row in stages:
+        if not isinstance(row, dict):
+            continue
+        console.print(
+            f"{row.get('stage')}: state={row.get('state')} "
+            f"in={row.get('input_tokens')} out={row.get('output_tokens')} "
+            f"usd={row.get('usd')} reuse={row.get('safe_to_reuse')} "
+            f"ids={row.get('request_id') or '-'}|{row.get('response_id') or '-'}"
+        )
+    if status:
+        console.print(
+            f"known_usd={status.get('known_usd')} resume_safety={status.get('resume_safety')}"
+        )
     if payload.get("ready"):
         console.print("READY FOR PAID STORY GENERATION")
         console.print(

@@ -140,10 +140,18 @@ def test_story_plan_cli_path_writes_review_without_models() -> None:
     assert payload["stars"] == 0
     review = payload["artifacts"]["review"]
     text = open(review, encoding="utf-8").read()
-    assert "STORY NOT GENERATED" in text
-    assert "ENGINE-OWNED" in text
     assert "You won't believe" not in text
+    assert "Astra→Opus→Astra" not in text
     assert "claude-opus" not in text.lower()
+    assert "STORY NOT GENERATED" in text or "STORY GENERATED FROM CHECKPOINT" in text
+    if "STORY GENERATED FROM CHECKPOINT" in text:
+        assert "## ALL DIALOGUE" in text
+        assert "## SHOT PLAN" in text
+    else:
+        assert "ENGINE-OWNED" in text
+    assert payload["planned_text_model_calls"] == 5
+    assert payload["completed_text_model_calls"] == 0
+    assert payload["text_model_calls"] == 0
     assert all(
         call["model_id"] == "gpt-6-astra" for call in payload["plan"]["calls"]
     )
@@ -260,3 +268,99 @@ def test_ensemble_resume_skips_completed_treatments() -> None:
     run.treatments[2] = "treatment-c"
     run.critic_output = "critique"
     assert remaining_ensemble_stages(run) == ["finalizer"]
+
+
+def test_plan_count_is_not_a_provider_call_count() -> None:
+    payload = run_friend_group_episode(stage="story-plan")
+    assert payload["planned_text_model_calls"] == 5
+    assert payload["submitted_text_model_calls"] == 0
+    assert payload["completed_text_model_calls"] == 0
+    assert payload["text_model_calls"] == 0
+
+
+def test_authorized_generate_enters_executor_without_http() -> None:
+    plan = build_story_generation_plan(locked_episode_brief())
+    result = execute_story_generation(
+        confirm_paid=True,
+        plan=plan,
+        settings=_story_settings(),
+        execute_calls=False,
+    )
+    assert result["entered_executor"] is True
+    assert result["authorized"] is True
+    assert result["text_model_calls"] == 0
+
+
+def test_resume_after_two_treatments_does_not_repeat_them() -> None:
+    class _Resp:
+        def __init__(self, text: str) -> None:
+            self.output_text = text
+            self.id = ""
+            self.usage = type(
+                "Usage",
+                (),
+                {"model_dump": lambda self=None: {"input_tokens": 8, "output_tokens": 4}},
+            )()
+
+    class _Client:
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        def create(self, **kwargs: object) -> _Resp:
+            self.seen.append(str(kwargs.get("input_text") or "")[:40])
+            return _Resp("later")
+
+    run = CreativeEnsembleRun(
+        project_id="p",
+        primary_model="gpt-6-astra",
+        critic_model="gpt-6-astra",
+        finalizer_model="gpt-6-astra",
+        treatments=["one", "two", ""],
+    )
+    client = _Client()
+    execute_story_generation(
+        confirm_paid=True,
+        plan=build_story_generation_plan(locked_episode_brief()),
+        checkpoint=run,
+        settings=_story_settings(),
+        text_client=client,
+        execute_calls=True,
+        persist=False,
+    )
+    assert run.treatments[0] == "one"
+    assert run.treatments[1] == "two"
+    assert client.seen
+    assert run.treatments[2] == "later"
+
+
+def test_checkpoint_recovery_writes_generated_review() -> None:
+    from docprod.product.story_artifacts import parse_friend_group_story
+    from docprod.product.story_pipeline import load_ensemble_checkpoint, rebuild_story_artifacts
+
+    run = load_ensemble_checkpoint()
+    if run is None or not run.final_script.strip():
+        pytest.skip("durable ensemble checkpoint missing")
+    brief = locked_episode_brief()
+    plan = build_story_generation_plan(brief)
+    spec = parse_friend_group_story(run, brief)
+    assert spec.engine_generated is True
+    assert spec.dialogue_lines
+    assert spec.title
+    paths = rebuild_story_artifacts(brief, plan, inspect_locked_character_refs(), run)
+    text = open(paths["review"], encoding="utf-8").read()
+    assert "STORY GENERATED FROM CHECKPOINT" in text
+    assert "STORY NOT GENERATED" not in text
+    assert "Astra treatments" in text
+    assert "Opus" not in text
+    assert "## SHOT PLAN" in text
+    assert "## ALL DIALOGUE" in text
+    result = execute_story_generation(
+        confirm_paid=True,
+        plan=plan,
+        checkpoint=run,
+        settings=_story_settings(),
+        execute_calls=True,
+        persist=False,
+    )
+    assert result["provider_http_calls"] == 0
+    assert result["remaining_stages"] == []

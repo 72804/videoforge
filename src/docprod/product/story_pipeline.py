@@ -29,6 +29,16 @@ from docprod.product.series import (
     birko_character_refs_dir,
     list_birko_ref_inventory,
 )
+from docprod.product.story_artifacts import (
+    _parse_json_blob,
+    format_generated_review,
+    hydrate_succeeded_stages,
+    location_bible_from_story,
+    output_sha256,
+    parse_friend_group_story,
+    shot_plan_from_finalizer,
+    stage_output_text,
+)
 from docprod.providers.pricing import (
     GPT6_ASTRA_PRICING_SOURCE,
     STORY_TEXT_PRICING_AS_OF,
@@ -37,13 +47,15 @@ from docprod.providers.pricing import (
 from docprod.quality.catalog import get_model
 from docprod.quality.ensemble import (
     CreativeEnsembleRun,
+    EnsembleStageRecord,
     EnsembleUsageRecord,
     remaining_ensemble_stages,
+    stage_record_for,
 )
 from docprod.quality.enums import QualityProfile
 from docprod.quality.policy_select import OPENAI_STOCK_VOICES
 from docprod.quality.story_director import CRITIC_SYSTEM, FINALIZER_SYSTEM, script_ensemble_plan
-from docprod.storage.hashing import file_sha256
+from docprod.storage.hashing import content_hash, file_sha256
 
 STORY_HARD_CAP_USD = 2.50
 AUTHORIZED_STORY_EPISODES = frozenset({("birko", 2)})
@@ -347,7 +359,9 @@ def load_ensemble_checkpoint() -> CreativeEnsembleRun | None:
     path = _checkpoint_path()
     if not path.is_file():
         return None
-    return CreativeEnsembleRun.model_validate_json(path.read_text(encoding="utf-8"))
+    run = CreativeEnsembleRun.model_validate_json(path.read_text(encoding="utf-8"))
+    hydrate_succeeded_stages(run)
+    return run
 
 
 def save_ensemble_checkpoint(run: CreativeEnsembleRun) -> Path:
@@ -362,7 +376,13 @@ def _pad_treatments(run: CreativeEnsembleRun) -> None:
         run.treatments.append("")
 
 
-def _usage_from_response(response: Any, *, call_id: str, model_id: str) -> EnsembleUsageRecord:
+def _usage_from_response(
+    response: Any,
+    *,
+    call_id: str,
+    model_id: str,
+    fingerprint: str = "",
+) -> EnsembleUsageRecord:
     usage = getattr(response, "usage", None)
     payload: dict[str, Any] = {}
     if usage is not None and hasattr(usage, "model_dump"):
@@ -385,6 +405,10 @@ def _usage_from_response(response: Any, *, call_id: str, model_id: str) -> Ensem
             input_usd_per_million=in_rate,
             output_usd_per_million=out_rate,
         ),
+        request_id=str(getattr(response, "request_id", "") or ""),
+        response_id=str(getattr(response, "id", "") or ""),
+        request_fingerprint=fingerprint,
+        state="SUCCEEDED" if (input_tokens or output_tokens) else "UNCERTAIN",
     )
 
 
@@ -423,6 +447,117 @@ class OpenAIStoryClient:
             instructions=instructions,
             input=input_text,
         )
+
+
+def rebuild_story_artifacts(
+    brief: EpisodeBrief,
+    plan: StoryGenerationPlan,
+    refs: list[dict[str, object]],
+    run: CreativeEnsembleRun,
+) -> dict[str, str]:
+    hydrate_succeeded_stages(run)
+    save_ensemble_checkpoint(run)
+    voices = proposed_voice_assignments(language=brief.language)
+    voice_lines = [
+        f"- {item.character_name}: {item.provider}/{item.voice_id} "
+        f"(fallback {item.fallback_provider}/{item.fallback_voice_id}; no cloning; TTS not called)"
+        for item in voices
+    ]
+    ref_lines = [
+        f"- {row['name']}: present={row['present']} path={row['resolved_path']} "
+        f"sha256={row['sha256']} {row['width']}x{row['height']}"
+        for row in refs
+    ]
+    root = _repo_root()
+    review_path = root / REVIEW_RELATIVE
+    spec_path = (
+        root / "projects/birko_kemal_drama_canary/artifacts/review/episode_2_story_spec.json"
+    )
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    if not run.final_script.strip():
+        return {"review": str(review_path), "spec": ""}
+    spec = parse_friend_group_story(run, brief)
+    payload = _parse_json_blob(run.final_script)
+    shots = shot_plan_from_finalizer(payload)
+    location = location_bible_from_story(brief)
+    known = sum(float(item.usd or 0) for item in run.model_usage)
+    review_path.write_text(
+        format_generated_review(
+            brief=brief,
+            spec=spec,
+            shots=shots,
+            location=location,
+            voices=voice_lines,
+            refs=ref_lines,
+            known_usd=known,
+            completed_calls=len(run.model_usage),
+            planned_calls=len(plan.calls),
+        ),
+        encoding="utf-8",
+    )
+    spec_path.write_text(spec.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return {"review": str(review_path), "spec": str(spec_path)}
+
+
+def story_status_report(
+    plan: StoryGenerationPlan,
+    run: CreativeEnsembleRun | None,
+) -> dict[str, object]:
+    if run is None:
+        run = CreativeEnsembleRun(
+            project_id=f"{plan.series_slug}-ep{plan.episode_number}",
+            primary_model="gpt-6-astra",
+            critic_model="gpt-6-astra",
+            finalizer_model="gpt-6-astra",
+        )
+    hydrate_succeeded_stages(run)
+    rows: list[dict[str, object]] = []
+    for stage_id in ("treatment_1", "treatment_2", "treatment_3", "critic", "finalizer"):
+        text = stage_output_text(run, stage_id)
+        record = stage_record_for(run, stage_id)
+        usage = next((item for item in run.model_usage if item.call_id == stage_id), None)
+        state = record.state if record else ("SUCCEEDED" if text.strip() else "NOT_STARTED")
+        rows.append(
+            {
+                "stage": stage_id,
+                "state": state,
+                "model": (record.model_id if record else "gpt-6-astra"),
+                "request_fingerprint": record.request_fingerprint if record else "",
+                "request_id": (record.request_id if record else "")
+                or (usage.request_id if usage else ""),
+                "response_id": (record.response_id if record else "")
+                or (usage.response_id if usage else ""),
+                "input_tokens": (record.input_tokens if record else 0)
+                or (usage.input_tokens if usage else 0),
+                "output_tokens": (record.output_tokens if record else 0)
+                or (usage.output_tokens if usage else 0),
+                "usd": (record.usd if record else None) or (usage.usd if usage else None),
+                "output_present": bool(text.strip()),
+                "output_length": len(text),
+                "output_hash": output_sha256(text) if text else "",
+                "network_id_proven": bool(
+                    (record and (record.request_id or record.response_id))
+                    or (usage and (usage.request_id or usage.response_id))
+                ),
+                "safe_to_reuse": state == "SUCCEEDED" and bool(text.strip()),
+            }
+        )
+    known = sum(float(item.usd or 0) for item in run.model_usage)
+    completed = sum(1 for row in rows if row["state"] == "SUCCEEDED")
+    resume = "SAFE_REUSE_SUCCEEDED" if completed == 5 else "INCOMPLETE_OR_BLOCKED"
+    if any(row["state"] in {"SUBMITTED", "UNCERTAIN"} for row in rows):
+        resume = "STOP_UNCERTAIN"
+    return {
+        "stages": rows,
+        "planned_text_model_calls": len(plan.calls),
+        "submitted_text_model_calls": sum(
+            1 for row in rows if row["state"] in {"SUBMITTED", "SUCCEEDED", "UNCERTAIN"}
+        ),
+        "completed_text_model_calls": completed,
+        "known_usd": round(known, 6),
+        "resume_safety": resume,
+        "media_calls": 0,
+    }
 
 
 def proposed_voice_assignments(*, language: str = "tr") -> list[VoiceAssignment]:
@@ -597,6 +732,16 @@ def write_story_plan_artifacts(
     plan_path = root / PLAN_JSON_RELATIVE
     checkpoint_path = root / CHECKPOINT_RELATIVE
     review_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = load_ensemble_checkpoint()
+    if existing is not None and existing.final_script.strip():
+        plan_path.write_text(plan.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        rebuilt = rebuild_story_artifacts(brief, plan, refs, existing)
+        return {
+            "review": rebuilt.get("review") or str(review_path),
+            "plan": str(plan_path),
+            "checkpoint": str(checkpoint_path),
+            "spec": rebuilt.get("spec") or "",
+        }
     voices = proposed_voice_assignments(language=brief.language)
     location = location_bible_for_brief(brief)
     ref_lines = []
@@ -664,7 +809,8 @@ def write_story_plan_artifacts(
                 "",
                 "## FINAL STORY",
                 "",
-                "Not generated. `FriendGroupStorySpec` will be produced by Astra→Opus→Astra.",
+                "Not generated. `FriendGroupStorySpec` will be produced by Astra treatments, "
+                "a fresh Astra critic, then an Astra finalizer.",
                 "No screenplay is hardcoded in the repository.",
                 "",
                 "## SCENE BREAKDOWN",
@@ -793,6 +939,20 @@ def run_friend_group_episode(
     refs = inspect_locked_character_refs() if series_slug == "birko" else []
     plan = build_story_generation_plan(brief, flagship=True, refs=refs)
     readiness = story_generation_readiness(plan, settings=settings)
+    if token in {"story-status", "status"}:
+        run = load_ensemble_checkpoint()
+        status = story_status_report(plan, run)
+        return {
+            "stage": "story-status",
+            "status": status,
+            "plan": plan.model_dump(),
+            "planned_text_model_calls": status["planned_text_model_calls"],
+            "submitted_text_model_calls": status["submitted_text_model_calls"],
+            "completed_text_model_calls": status["completed_text_model_calls"],
+            "text_model_calls": status["completed_text_model_calls"],
+            "media_calls": 0,
+            "stars": 0,
+        }
     if token in {"story-plan", "plan", "story-check", "check"}:
         paths = write_story_plan_artifacts(brief, plan, refs)
         return {
@@ -808,6 +968,9 @@ def run_friend_group_episode(
             "prompt": episode_2_draft_prompt() if series_slug == "birko" else "",
             "media_calls": 0,
             "stars": 0,
+            "planned_text_model_calls": len(plan.calls),
+            "submitted_text_model_calls": 0,
+            "completed_text_model_calls": 0,
             "text_model_calls": 0,
         }
     if token in {"story-generate", "generate"}:
@@ -818,7 +981,9 @@ def run_friend_group_episode(
             text_client=text_client,
             execute_calls=True if execute_calls is None else execute_calls,
         )
-    raise ValueError(f"unknown stage {stage!r}; use story-plan, story-check, or story-generate")
+    raise ValueError(
+        f"unknown stage {stage!r}; use story-plan, story-check, story-status, or story-generate"
+    )
 
 
 def execute_story_generation(
@@ -862,18 +1027,53 @@ def execute_story_generation(
             executed=False,
         )
     _pad_treatments(run)
+    hydrate_succeeded_stages(run)
     remaining = remaining_ensemble_stages(run)
+    entered_executor = True
     if not execute_calls:
         return {
             "stage": "story-generate",
             "authorized": True,
+            "entered_executor": entered_executor,
             "execute_calls": False,
             "remaining_stages": remaining,
             "usage_records": len(run.model_usage),
             "media_calls": 0,
             "stars": 0,
+            "planned_text_model_calls": len(plan.calls),
+            "submitted_text_model_calls": 0,
+            "completed_text_model_calls": len(run.model_usage),
             "text_model_calls": 0,
             "plan": plan.model_dump(),
+        }
+    if not remaining:
+        artifacts = {}
+        if persist:
+            artifacts = rebuild_story_artifacts(
+                locked_episode_brief(
+                    series_slug=plan.series_slug, episode_number=plan.episode_number
+                ),
+                plan,
+                inspect_locked_character_refs() if plan.series_slug == "birko" else [],
+                run,
+            )
+        return {
+            "stage": "story-generate",
+            "authorized": True,
+            "entered_executor": entered_executor,
+            "execute_calls": True,
+            "provider_http_calls": 0,
+            "remaining_stages": [],
+            "usage_records": len(run.model_usage),
+            "media_calls": 0,
+            "stars": 0,
+            "planned_text_model_calls": len(plan.calls),
+            "submitted_text_model_calls": len(run.model_usage),
+            "completed_text_model_calls": len(run.model_usage),
+            "text_model_calls": len(run.model_usage),
+            "plan": plan.model_dump(),
+            "artifacts": artifacts,
+            "checkpoint": str(_checkpoint_path()),
         }
     client = text_client or OpenAIStoryClient(cfg)
     context = json.dumps(
@@ -887,6 +1087,7 @@ def execute_story_generation(
     )
     spent = sum(float(item.usd or 0) for item in run.model_usage)
     reserved_by_id = {call.call_id: call.reserved_usd for call in plan.calls}
+    http_calls = 0
     for stage_id in remaining:
         reserved = float(reserved_by_id.get(stage_id, 0))
         if spent + reserved - 1e-9 > plan.hard_cap_usd:
@@ -918,16 +1119,40 @@ def execute_story_generation(
                 f"CRITIC:\n{run.critic_output}"
             )
             model_id = finalizer
+        fingerprint = content_hash(
+            {"stage": stage_id, "model": model_id, "input": payload}
+        )
+        stage = stage_record_for(run, stage_id)
+        if stage is None:
+            stage = EnsembleStageRecord(stage_id=stage_id, model_id=model_id)
+            run.stages.append(stage)
+        stage.state = "PREPARED"
+        stage.model_id = model_id
+        stage.request_fingerprint = fingerprint
+        stage.reserved_usd = reserved
+        if persist:
+            save_ensemble_checkpoint(run)
         response = client.create(
             model=model_id,
             instructions=instructions,
             input_text=payload,
             confirm_paid=True,
         )
+        http_calls += 1
         text = _output_text(response)
-        record = _usage_from_response(response, call_id=stage_id, model_id=model_id)
+        record = _usage_from_response(
+            response, call_id=stage_id, model_id=model_id, fingerprint=fingerprint
+        )
         run.model_usage.append(record)
         spent += float(record.usd or 0)
+        stage.request_id = record.request_id
+        stage.response_id = record.response_id
+        stage.input_tokens = record.input_tokens
+        stage.output_tokens = record.output_tokens
+        stage.usd = record.usd
+        stage.output_length = len(text)
+        stage.output_hash = output_sha256(text)
+        stage.state = "SUCCEEDED" if text.strip() else "UNCERTAIN"
         if stage_id.startswith("treatment_"):
             index = int(stage_id.rsplit("_", 1)[-1])
             run.treatments[index - 1] = text
@@ -938,15 +1163,36 @@ def execute_story_generation(
             run.executed = True
         if persist:
             save_ensemble_checkpoint(run)
+    artifacts = {}
+    if persist and run.final_script.strip():
+        try:
+            artifacts = rebuild_story_artifacts(
+                locked_episode_brief(
+                    series_slug=plan.series_slug, episode_number=plan.episode_number
+                ),
+                plan,
+                inspect_locked_character_refs() if plan.series_slug == "birko" else [],
+                run,
+            )
+        except (json.JSONDecodeError, ValueError, TypeError):
+            artifacts = {}
     return {
         "stage": "story-generate",
         "authorized": True,
+        "entered_executor": entered_executor,
         "execute_calls": True,
+        "provider_http_calls": http_calls,
         "remaining_stages": remaining_ensemble_stages(run),
         "usage_records": len(run.model_usage),
         "media_calls": 0,
         "stars": 0,
-        "text_model_calls": len(run.model_usage),
+        "planned_text_model_calls": len(plan.calls),
+        "submitted_text_model_calls": http_calls,
+        "completed_text_model_calls": len(
+            [item for item in run.model_usage if item.input_tokens or item.output_tokens]
+        ),
+        "text_model_calls": http_calls,
         "plan": plan.model_dump(),
+        "artifacts": artifacts,
         "checkpoint": str(_checkpoint_path()),
     }
