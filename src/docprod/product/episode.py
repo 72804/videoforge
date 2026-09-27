@@ -42,12 +42,17 @@ class LocationBible(BaseModel):
 class StoryCallSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    call_id: str
     role: str
     model_id: str
-    count: int
+    count: int = 1
     purpose: str
     estimated_input_tokens: int = 0
+    reserved_input_tokens: int = 0
     estimated_output_tokens: int = 0
+    reserved_output_tokens: int = 0
+    expected_usd: float = 0.0
+    reserved_usd: float = 0.0
 
 
 class StoryGenerationPlan(BaseModel):
@@ -61,11 +66,16 @@ class StoryGenerationPlan(BaseModel):
     calls: list[StoryCallSpec] = Field(default_factory=list)
     estimated_input_tokens: int = 0
     estimated_output_tokens: int = 0
+    reserved_input_tokens: int = 0
+    reserved_output_tokens: int = 0
     estimated_usd: float | None = None
-    cost_confidence: str = "unresolved"
+    reserved_usd: float = 0.0
+    cost_confidence: str = "known"
     hard_cap_usd: float = 2.5
+    cap_ok: bool = True
     execute: bool = False
     media_calls: int = 0
+    send_image_binaries: bool = False
     notes: list[str] = Field(default_factory=list)
 
 

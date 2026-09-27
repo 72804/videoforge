@@ -56,6 +56,36 @@ V2_VIDEO_GEN45_USD = 0.00
 V2_VIDEO_TOTAL_USD = 3.20
 CUSTOM_STILL_MIGRATION_USD = 0.235525
 
+# Official standard API text rates (story ensemble). Date is the day these
+# list prices were registered in-repo; source is the provider standard API.
+GPT6_ASTRA_INPUT_USD_PER_MILLION = 10.00
+GPT6_ASTRA_OUTPUT_USD_PER_MILLION = 50.00
+CLAUDE_OPUS_55_INPUT_USD_PER_MILLION = 4.00
+CLAUDE_OPUS_55_OUTPUT_USD_PER_MILLION = 20.00
+STORY_TEXT_PRICING_AS_OF = "2026-09-27"
+GPT6_ASTRA_PRICING_SOURCE = (
+    "OpenAI standard API list price for GPT-6 Astra: $10.00 / 1M input, "
+    "$50.00 / 1M output"
+)
+CLAUDE_OPUS_55_PRICING_SOURCE = (
+    "Anthropic standard API list price for Claude Opus 5.5: $4.00 / 1M input, "
+    "$20.00 / 1M output"
+)
+
+
+def text_tokens_cost_usd(
+    *,
+    input_tokens: int,
+    output_tokens: int,
+    input_usd_per_million: float,
+    output_usd_per_million: float,
+) -> float:
+    return round(
+        (input_tokens / 1_000_000) * input_usd_per_million
+        + (output_tokens / 1_000_000) * output_usd_per_million,
+        6,
+    )
+
 
 def birko_implied_image_unit_usd() -> float:
     return round(BIRKO_DRAMA_IMAGE_ATTRIBUTABLE_USD / BIRKO_DRAMA_IMAGE_PAID_CALLS, 6)

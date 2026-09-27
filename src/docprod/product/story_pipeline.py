@@ -19,8 +19,16 @@ from docprod.product.episode import (
     StoryGenerationPlan,
     VoiceAssignment,
 )
-from docprod.product.errors import AuthorizationError
+from docprod.product.errors import AuthorizationError, ProductError
 from docprod.product.series import birko_character_refs_dir, list_birko_ref_inventory
+from docprod.providers.pricing import (
+    CLAUDE_OPUS_55_PRICING_SOURCE,
+    GPT6_ASTRA_PRICING_SOURCE,
+    STORY_TEXT_PRICING_AS_OF,
+    text_tokens_cost_usd,
+)
+from docprod.quality.catalog import get_model
+from docprod.quality.ensemble import CreativeEnsembleRun, remaining_ensemble_stages
 from docprod.quality.enums import QualityProfile
 from docprod.quality.policy_select import OPENAI_STOCK_VOICES
 from docprod.quality.story_director import script_ensemble_plan
@@ -34,6 +42,10 @@ REVIEW_RELATIVE = (
 )
 PLAN_JSON_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/review/episode_2_story_plan.json"
+)
+CHECKPOINT_RELATIVE = (
+    "projects/birko_kemal_drama_canary/artifacts/review/"
+    "episode_2_ensemble_checkpoint.json"
 )
 
 _ELEVEN_PROPOSED = {
@@ -137,6 +149,110 @@ def inspect_locked_character_refs() -> list[dict[str, object]]:
     return rows
 
 
+def approx_tokens(text: str) -> int:
+    return max(1, (len(text) + 3) // 4)
+
+
+def _ref_metadata(refs: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in refs:
+        rows.append(
+            {
+                "slug": row.get("slug"),
+                "name": row.get("name"),
+                "resolved_path": row.get("resolved_path"),
+                "sha256": row.get("sha256"),
+                "width": row.get("width"),
+                "height": row.get("height"),
+                "present": row.get("present"),
+            }
+        )
+    return rows
+
+
+def story_model_context(
+    brief: EpisodeBrief,
+    refs: list[dict[str, object]] | None = None,
+) -> dict[str, object]:
+    """Text-only payload for Astra/Opus. No image binaries, no repository code."""
+    characters: list[dict[str, object]] = []
+    for member in BIRKO_CAST:
+        characters.append(
+            {
+                "slug": member.slug,
+                "name": member.name,
+                "role_archetype": member.role_archetype,
+                "description": member.description,
+                "personality_traits": list(member.personality_traits),
+                "behavioral_quirks": list(member.behavioral_quirks),
+                "catchphrases": list(member.catchphrases),
+                "relationships": dict(member.relationships),
+                "voice_notes": member.voice_notes,
+                "never_do": list(member.never_do),
+                "aliases": list(member.aliases),
+            }
+        )
+    return {
+        "episode_brief": brief.model_dump(),
+        "character_bible": characters,
+        "group_dynamic": GROUP_DYNAMIC,
+        "reference_image_metadata": _ref_metadata(refs or []),
+        "send_image_binaries": False,
+        "send_repository_code": False,
+    }
+
+
+def _rates(model_id: str) -> tuple[float, float]:
+    spec = get_model(model_id)
+    if spec is None:
+        raise ProductError(f"unknown story model {model_id}")
+    price = spec.pricing
+    if price.input_usd_per_million is None or price.output_usd_per_million is None:
+        raise ProductError(f"story model {model_id} is missing input/output list prices")
+    return float(price.input_usd_per_million), float(price.output_usd_per_million)
+
+
+def _headroom(tokens: int, *, extra: int, factor: float) -> int:
+    return max(tokens + extra, int(tokens * factor))
+
+
+def _call_cost(
+    *,
+    call_id: str,
+    role: str,
+    model_id: str,
+    purpose: str,
+    estimated_input: int,
+    reserved_input: int,
+    estimated_output: int,
+    reserved_output: int,
+) -> StoryCallSpec:
+    in_rate, out_rate = _rates(model_id)
+    return StoryCallSpec(
+        call_id=call_id,
+        role=role,
+        model_id=model_id,
+        count=1,
+        purpose=purpose,
+        estimated_input_tokens=estimated_input,
+        reserved_input_tokens=reserved_input,
+        estimated_output_tokens=estimated_output,
+        reserved_output_tokens=reserved_output,
+        expected_usd=text_tokens_cost_usd(
+            input_tokens=estimated_input,
+            output_tokens=estimated_output,
+            input_usd_per_million=in_rate,
+            output_usd_per_million=out_rate,
+        ),
+        reserved_usd=text_tokens_cost_usd(
+            input_tokens=reserved_input,
+            output_tokens=reserved_output,
+            input_usd_per_million=in_rate,
+            output_usd_per_million=out_rate,
+        ),
+    )
+
+
 def proposed_voice_assignments(*, language: str = "tr") -> list[VoiceAssignment]:
     assignments: list[VoiceAssignment] = []
     for index, member in enumerate(BIRKO_CAST):
@@ -167,43 +283,68 @@ def build_story_generation_plan(
     brief: EpisodeBrief,
     *,
     flagship: bool = True,
+    refs: list[dict[str, object]] | None = None,
 ) -> StoryGenerationPlan:
     ensemble = script_ensemble_plan(QualityProfile.PREMIUM, flagship=flagship)
-    treatment_in, treatment_out = 3500, 1800
-    critic_in, critic_out = 6500, 2500
-    final_in, final_out = 7000, 3500
+    primary = str(ensemble["primary_model"])
+    critic = str(ensemble["critic_model"])
+    finalizer = str(ensemble["finalizer_model"])
+    context = story_model_context(brief, refs)
+    base_tokens = approx_tokens(str(context))
+    treatment_out_est, treatment_out_res = 1600, 2500
+    critic_out_est, critic_out_res = 2200, 3500
+    final_out_est, final_out_res = 2800, 4000
+    treatment_in_est = base_tokens + 400
+    treatment_in_res = _headroom(treatment_in_est, extra=1500, factor=1.6)
+    critic_in_est = base_tokens + TREATMENT_COUNT * treatment_out_est + 500
+    critic_in_res = _headroom(critic_in_est, extra=2500, factor=1.5)
+    final_in_est = base_tokens + TREATMENT_COUNT * treatment_out_est + critic_out_est + 600
+    final_in_res = _headroom(final_in_est, extra=3000, factor=1.5)
     calls = [
-        StoryCallSpec(
+        _call_cost(
+            call_id=f"treatment_{index}",
             role="primary",
-            model_id=str(ensemble["primary_model"]),
-            count=TREATMENT_COUNT,
-            purpose="creative treatments of the locked premise",
-            estimated_input_tokens=treatment_in,
-            estimated_output_tokens=treatment_out,
-        ),
-        StoryCallSpec(
-            role="critic",
-            model_id=str(ensemble["critic_model"]),
-            count=1,
-            purpose="independent story/dialogue critique",
-            estimated_input_tokens=critic_in,
-            estimated_output_tokens=critic_out,
-        ),
-        StoryCallSpec(
-            role="finalizer",
-            model_id=str(ensemble["finalizer_model"]),
-            count=1,
-            purpose="synthesize final FriendGroupStorySpec",
-            estimated_input_tokens=final_in,
-            estimated_output_tokens=final_out,
-        ),
+            model_id=primary,
+            purpose=f"creative treatment {index} of the locked premise",
+            estimated_input=treatment_in_est,
+            reserved_input=treatment_in_res,
+            estimated_output=treatment_out_est,
+            reserved_output=treatment_out_res,
+        )
+        for index in range(1, TREATMENT_COUNT + 1)
     ]
-    input_tokens = TREATMENT_COUNT * treatment_in + critic_in + final_in
-    output_tokens = TREATMENT_COUNT * treatment_out + critic_out + final_out
-    planning_usd = round(
-        (input_tokens / 1_000_000) * 15.0 + (output_tokens / 1_000_000) * 75.0,
-        2,
+    calls.append(
+        _call_cost(
+            call_id="critic",
+            role="critic",
+            model_id=critic,
+            purpose="independent story/dialogue critique of the three treatments",
+            estimated_input=critic_in_est,
+            reserved_input=critic_in_res,
+            estimated_output=critic_out_est,
+            reserved_output=critic_out_res,
+        )
     )
+    calls.append(
+        _call_cost(
+            call_id="finalizer",
+            role="finalizer",
+            model_id=finalizer,
+            purpose="synthesize final FriendGroupStorySpec from treatments + critique",
+            estimated_input=final_in_est,
+            reserved_input=final_in_res,
+            estimated_output=final_out_est,
+            reserved_output=final_out_res,
+        )
+    )
+    expected = round(sum(call.expected_usd for call in calls), 6)
+    reserved = round(sum(call.reserved_usd for call in calls), 6)
+    cap_ok = reserved - 1e-9 <= STORY_HARD_CAP_USD
+    if not cap_ok:
+        raise ProductError(
+            f"STOP: reserved story total ${reserved:.4f} exceeds hard cap "
+            f"${STORY_HARD_CAP_USD:.2f}. Cap was not increased."
+        )
     return StoryGenerationPlan(
         series_slug=brief.series_slug,
         episode_number=brief.episode_number,
@@ -211,20 +352,29 @@ def build_story_generation_plan(
         flagship=flagship,
         treatment_count=TREATMENT_COUNT,
         calls=calls,
-        estimated_input_tokens=input_tokens,
-        estimated_output_tokens=output_tokens,
-        estimated_usd=planning_usd,
-        cost_confidence="unresolved",
+        estimated_input_tokens=sum(call.estimated_input_tokens for call in calls),
+        estimated_output_tokens=sum(call.estimated_output_tokens for call in calls),
+        reserved_input_tokens=sum(call.reserved_input_tokens for call in calls),
+        reserved_output_tokens=sum(call.reserved_output_tokens for call in calls),
+        estimated_usd=expected,
+        reserved_usd=reserved,
+        cost_confidence="known",
         hard_cap_usd=STORY_HARD_CAP_USD,
+        cap_ok=cap_ok,
         execute=False,
         media_calls=0,
+        send_image_binaries=False,
         notes=[
-            "GPT-6 Astra and Claude Opus 5.5 unit prices are unresolved in the catalog.",
-            "estimated_usd uses conservative analog rates for planning only.",
+            f"Astra pricing as of {STORY_TEXT_PRICING_AS_OF}: {GPT6_ASTRA_PRICING_SOURCE}",
+            f"Opus 5.5 pricing as of {STORY_TEXT_PRICING_AS_OF}: "
+            f"{CLAUDE_OPUS_55_PRICING_SOURCE}",
+            "Story models receive episode brief, character bible, relationships, "
+            "continuity, constraints, and prior treatments/critique when needed.",
+            "Reference images are metadata only (path/hash/dims). No image binaries.",
+            "No repository/code context is sent to story models.",
+            "Partial ensemble outputs persist; completed treatments are not repeated.",
             "Do not execute text models until story-generate is authorized.",
             "Zero image/video/audio calls in this plan.",
-            f"Locked premise for {brief.series_slug} ep {brief.episode_number}.",
-            "Engine owns hook, scenes, dialogue, shots; user owns premise/cast/location/tone.",
         ],
     )
 
@@ -240,6 +390,7 @@ def story_generation_outputs() -> list[str]:
         "VoiceAssignment proposals (no TTS)",
         REVIEW_RELATIVE,
         PLAN_JSON_RELATIVE,
+        CHECKPOINT_RELATIVE,
     ]
 
 
@@ -251,6 +402,7 @@ def write_story_plan_artifacts(
     root = _repo_root()
     review_path = root / REVIEW_RELATIVE
     plan_path = root / PLAN_JSON_RELATIVE
+    checkpoint_path = root / CHECKPOINT_RELATIVE
     review_path.parent.mkdir(parents=True, exist_ok=True)
     voices = proposed_voice_assignments(language=brief.language)
     location = location_bible_for_brief(brief)
@@ -267,8 +419,13 @@ def write_story_plan_artifacts(
         for item in voices
     ]
     call_lines = [
-        f"- {call.role}: {call.model_id} ×{call.count} — {call.purpose} "
-        f"(~{call.estimated_input_tokens} in / {call.estimated_output_tokens} out per call)"
+        (
+            f"- {call.call_id}: model={call.model_id} purpose={call.purpose} | "
+            f"est_in={call.estimated_input_tokens} reserved_in={call.reserved_input_tokens} | "
+            f"est_out={call.estimated_output_tokens} reserved_out="
+            f"{call.reserved_output_tokens} | expected=${call.expected_usd:.4f} "
+            f"reserved=${call.reserved_usd:.4f}"
+        )
         for call in plan.calls
     ]
     review_path.write_text(
@@ -372,8 +529,13 @@ def write_story_plan_artifacts(
                 "",
                 f"estimated_input_tokens={plan.estimated_input_tokens}",
                 f"estimated_output_tokens={plan.estimated_output_tokens}",
-                f"estimated_usd={plan.estimated_usd} (confidence={plan.cost_confidence})",
-                f"hard_cap_usd={plan.hard_cap_usd}",
+                f"reserved_input_tokens={plan.reserved_input_tokens}",
+                f"reserved_output_tokens={plan.reserved_output_tokens}",
+                f"EXPECTED STORY TOTAL=${plan.estimated_usd}",
+                f"RESERVED STORY TOTAL=${plan.reserved_usd}",
+                f"HARD CAP=${plan.hard_cap_usd}",
+                f"cap_ok={plan.cap_ok} confidence={plan.cost_confidence}",
+                "send_image_binaries=false",
                 "execute=false",
                 "image/video/audio calls=0",
                 "Stars=0",
@@ -396,7 +558,20 @@ def write_story_plan_artifacts(
         encoding="utf-8",
     )
     plan_path.write_text(plan.model_dump_json(indent=2) + "\n", encoding="utf-8")
-    return {"review": str(review_path), "plan": str(plan_path)}
+    checkpoint = CreativeEnsembleRun(
+        project_id=f"{brief.series_slug}-ep{brief.episode_number}",
+        primary_model="gpt-6-astra",
+        critic_model="claude-opus-5-5",
+        finalizer_model="gpt-6-astra",
+        treatments=["", "", ""],
+        executed=False,
+    )
+    checkpoint_path.write_text(checkpoint.model_dump_json(indent=2) + "\n", encoding="utf-8")
+    return {
+        "review": str(review_path),
+        "plan": str(plan_path),
+        "checkpoint": str(checkpoint_path),
+    }
 
 
 def run_friend_group_episode(
@@ -409,7 +584,7 @@ def run_friend_group_episode(
     token = stage.strip().lower().replace("_", "-")
     brief = locked_episode_brief(series_slug=series_slug, episode_number=episode_number)
     refs = inspect_locked_character_refs() if series_slug == "birko" else []
-    plan = build_story_generation_plan(brief, flagship=True)
+    plan = build_story_generation_plan(brief, flagship=True, refs=refs)
     if token in {"story-plan", "plan"}:
         paths = write_story_plan_artifacts(brief, plan, refs)
         return {
@@ -434,13 +609,29 @@ def execute_story_generation(
     *,
     confirm_paid: bool,
     plan: StoryGenerationPlan,
+    checkpoint: CreativeEnsembleRun | None = None,
 ) -> dict[str, object]:
     if not confirm_paid:
         raise PaidApiNotConfirmedError(
             "story-generate requires --confirm-paid after explicit authorization"
         )
+    if plan.reserved_usd - 1e-9 > plan.hard_cap_usd:
+        raise ProductError(
+            f"STOP: reserved story total ${plan.reserved_usd:.4f} exceeds hard cap "
+            f"${plan.hard_cap_usd:.2f}. Cap was not increased."
+        )
+    run = checkpoint or CreativeEnsembleRun(
+        project_id=f"{plan.series_slug}-ep{plan.episode_number}",
+        primary_model="gpt-6-astra",
+        critic_model="claude-opus-5-5",
+        finalizer_model="gpt-6-astra",
+        treatments=["", "", ""],
+        executed=False,
+    )
+    remaining = remaining_ensemble_stages(run)
     if not STORY_GENERATE_AUTHORIZED:
         raise AuthorizationError(
-            "text-model story generation is not authorized in this checkpoint"
+            "text-model story generation is not authorized in this checkpoint; "
+            f"remaining_stages={remaining}; usage_records={len(run.model_usage)}"
         )
     raise AuthorizationError("unreachable: story generate must not call providers yet")

@@ -3096,10 +3096,22 @@ def friend_group_episode(
     plan = payload["plan"] if isinstance(payload.get("plan"), dict) else {}
     console.print(f"stage={payload.get('stage')} series={series_slug} episode={episode}")
     calls = plan.get("calls") if isinstance(plan.get("calls"), list) else []
-    primary = calls[0].get("model_id") if calls and isinstance(calls[0], dict) else ""
+    for call in calls:
+        if not isinstance(call, dict):
+            continue
+        console.print(
+            f"call={call.get('call_id')} model={call.get('model_id')} "
+            f"est_in={call.get('estimated_input_tokens')} "
+            f"res_in={call.get('reserved_input_tokens')} "
+            f"est_out={call.get('estimated_output_tokens')} "
+            f"res_out={call.get('reserved_output_tokens')} "
+            f"expected_usd={call.get('expected_usd')} "
+            f"reserved_usd={call.get('reserved_usd')}"
+        )
     console.print(
-        f"treatments={plan.get('treatment_count')} primary={primary} "
-        f"hard_cap_usd={plan.get('hard_cap_usd')} estimated_usd={plan.get('estimated_usd')}"
+        f"expected_total={plan.get('estimated_usd')} "
+        f"reserved_total={plan.get('reserved_usd')} "
+        f"hard_cap_usd={plan.get('hard_cap_usd')} cap_ok={plan.get('cap_ok')}"
     )
     console.print(
         f"text_model_calls={payload.get('text_model_calls', 0)} "

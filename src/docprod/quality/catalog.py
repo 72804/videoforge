@@ -3,13 +3,20 @@ from __future__ import annotations
 from functools import lru_cache
 
 from docprod.providers.pricing import (
+    CLAUDE_OPUS_55_INPUT_USD_PER_MILLION,
+    CLAUDE_OPUS_55_OUTPUT_USD_PER_MILLION,
+    CLAUDE_OPUS_55_PRICING_SOURCE,
     ELEVEN_MUSIC_USD_PER_MINUTE,
     ELEVEN_SFX_USD_PER_MINUTE,
     ELEVEN_V3_USD_PER_1K_CHARS,
+    GPT6_ASTRA_INPUT_USD_PER_MILLION,
+    GPT6_ASTRA_OUTPUT_USD_PER_MILLION,
+    GPT6_ASTRA_PRICING_SOURCE,
     LYRIA_35_USD_PER_SONG,
     PRICING_AS_OF,
     RUNWAY_ACT_TWO_USD_PER_SEC,
     RUNWAY_GEN45_USD_PER_SEC,
+    STORY_TEXT_PRICING_AS_OF,
     VEO_LITE_720P_USD_PER_SEC,
 )
 from docprod.quality.enums import (
@@ -113,6 +120,28 @@ FREE = PricingSpec(
     pricing_as_of=PRICING_AS_OF,
 )
 UNKNOWN = PricingSpec(mode=PriceMode.UNKNOWN, confidence=CostConfidence.UNRESOLVED)
+GPT6_ASTRA_TEXT = PricingSpec(
+    mode=PriceMode.PER_TOKEN,
+    value=GPT6_ASTRA_INPUT_USD_PER_MILLION / 1_000_000,
+    unit="token",
+    notes="$10.00 / 1M input, $50.00 / 1M output (standard API)",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of=STORY_TEXT_PRICING_AS_OF,
+    source_note=GPT6_ASTRA_PRICING_SOURCE,
+    input_usd_per_million=GPT6_ASTRA_INPUT_USD_PER_MILLION,
+    output_usd_per_million=GPT6_ASTRA_OUTPUT_USD_PER_MILLION,
+)
+CLAUDE_OPUS_55_TEXT = PricingSpec(
+    mode=PriceMode.PER_TOKEN,
+    value=CLAUDE_OPUS_55_INPUT_USD_PER_MILLION / 1_000_000,
+    unit="token",
+    notes="$4.00 / 1M input, $20.00 / 1M output (standard API)",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of=STORY_TEXT_PRICING_AS_OF,
+    source_note=CLAUDE_OPUS_55_PRICING_SOURCE,
+    input_usd_per_million=CLAUDE_OPUS_55_INPUT_USD_PER_MILLION,
+    output_usd_per_million=CLAUDE_OPUS_55_OUTPUT_USD_PER_MILLION,
+)
 HF_SEEDANCE_25_GEN = PricingSpec(
     mode=PriceMode.PER_SECOND,
     value=0.144,
@@ -286,6 +315,7 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             input_modalities=("text",),
             output_modalities=("text",),
             required_credentials=("OPENAI_API_KEY",),
+            pricing=GPT6_ASTRA_TEXT,
             notes="GPT-6 flagship for Premium/Max. Same Responses adapter; untested live.",
         ),
         _m(
@@ -345,6 +375,7 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             gateway_model_id="claude-opus-5-5",
             model_family="claude-opus",
             vendor="anthropic",
+            pricing=CLAUDE_OPUS_55_TEXT,
             notes=(
                 "Official Claude API id claude-opus-5-5. Messages API adapter is payload-only; "
                 "no HTTP in this phase. Premium script critic."

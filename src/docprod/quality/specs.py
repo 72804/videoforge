@@ -30,6 +30,8 @@ class PricingSpec(BaseModel):
     confidence: CostConfidence = CostConfidence.UNRESOLVED
     pricing_as_of: str = ""
     source_note: str = ""
+    input_usd_per_million: float | None = None
+    output_usd_per_million: float | None = None
 
 
 class CapabilitySpec(BaseModel):

@@ -6,6 +6,14 @@ from docprod.product.ids import new_id
 from docprod.product.models import ScriptVersion, utcnow
 from docprod.quality.story_director import script_ensemble_plan
 
+ENSEMBLE_STAGES = (
+    "treatment_1",
+    "treatment_2",
+    "treatment_3",
+    "critic",
+    "finalizer",
+)
+
 
 class CreativeScorecard(BaseModel):
     """Heuristic only. Never shown as scientific scores to customers."""
@@ -31,6 +39,16 @@ class CreativeScorecard(BaseModel):
     feasibility_risks: list[str] = Field(default_factory=list)
 
 
+class EnsembleUsageRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    call_id: str
+    model_id: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    usd: float | None = None
+
+
 class CreativeEnsembleRun(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -45,8 +63,26 @@ class CreativeEnsembleRun(BaseModel):
     critic_output: str = ""
     scorecard: CreativeScorecard | None = None
     final_script: str = ""
+    model_usage: list[EnsembleUsageRecord] = Field(default_factory=list)
     executed: bool = False
     created_at: str = ""
+
+
+def completed_ensemble_stages(run: CreativeEnsembleRun) -> list[str]:
+    done: list[str] = []
+    for index, text in enumerate(run.treatments):
+        if str(text).strip():
+            done.append(f"treatment_{index + 1}")
+    if run.critic_output.strip():
+        done.append("critic")
+    if run.final_script.strip():
+        done.append("finalizer")
+    return done
+
+
+def remaining_ensemble_stages(run: CreativeEnsembleRun) -> list[str]:
+    done = set(completed_ensemble_stages(run))
+    return [stage for stage in ENSEMBLE_STAGES if stage not in done]
 
 
 def scorecard_for_staff(card: CreativeScorecard) -> dict[str, float | str | list[str]]:
