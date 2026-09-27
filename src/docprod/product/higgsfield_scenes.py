@@ -208,7 +208,7 @@ HF4_REVISION_2_VIDEO_PROMPT = (
 HF4_MUGE_VOICE = "natural adult Turkish female voice, mildly incredulous"
 HF4_KEMAL_OFFSCREEN_VOICE = "natural young adult Turkish male voice, frustrated disbelief"
 APPROVED_PLAN_FINGERPRINT = (
-    "24089ff09e662a5579a2632b57a61c14794b03f55cad301e2fe7fac13ca1b8fb"
+    "e6facb31c1605730f467d780941abf9bf655b33ee7b9202dfe8fe397de338727"
 )
 INTERIOR_LOCATION_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/stills/"
@@ -217,6 +217,9 @@ INTERIOR_LOCATION_RELATIVE = (
 EXTERIOR_LOCATION_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/stills/"
     "kf_master_exterior_bench.jpg"
+)
+HF4_MUGE_REF_RELATIVE = (
+    "projects/birko_kemal_drama_canary/artifacts/visuals/character_refs/ref_muge_alt.jpg"
 )
 VOICES_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/voices"
@@ -381,6 +384,13 @@ def canonical_ref_report(refs: list[dict[str, object]]) -> dict[str, dict[str, s
             "use": resolved,
         }
     return out
+
+
+def _hf4_muge_alt_path(root: Path) -> Path | None:
+    for candidate in (root / HF4_MUGE_REF_RELATIVE, _repo_root() / HF4_MUGE_REF_RELATIVE):
+        if candidate.is_file() and candidate.name == "ref_muge_alt.jpg":
+            return candidate
+    return None
 
 
 def _norm_text(text: str) -> str:
@@ -681,6 +691,10 @@ def build_higgsfield_scenes(
     base = root or _repo_root()
     report = canonical_ref_report(refs)
     ref_map = {slug: row["use"] for slug, row in report.items() if row["use"]}
+    hf4_ref_map = dict(ref_map)
+    muge_alt = _hf4_muge_alt_path(base)
+    if muge_alt is not None:
+        hf4_ref_map["muge"] = str(muge_alt)
     wavs = _wav_index(root=base)
     interior = base / INTERIOR_LOCATION_RELATIVE
     exterior = base / EXTERIOR_LOCATION_RELATIVE
@@ -690,7 +704,7 @@ def build_higgsfield_scenes(
     if exterior.is_file():
         location_locals["exterior"] = str(exterior)
     public_payload = build_public_asset_map(
-        character_locals=ref_map,
+        character_locals=hf4_ref_map,
         location_locals=location_locals,
         root=base,
         settings=settings,
@@ -801,7 +815,7 @@ def build_higgsfield_scenes(
             ),
             motion=1.2,
             location_path=interior,
-            ref_map=ref_map,
+            ref_map=hf4_ref_map,
             public_lookup=lookup,
             include_location=False,
             prompt_override=HF4_REVISION_3_PROMPT,
