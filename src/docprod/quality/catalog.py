@@ -142,15 +142,25 @@ CLAUDE_OPUS_55_TEXT = PricingSpec(
     input_usd_per_million=CLAUDE_OPUS_55_INPUT_USD_PER_MILLION,
     output_usd_per_million=CLAUDE_OPUS_55_OUTPUT_USD_PER_MILLION,
 )
-HF_SEEDANCE_25_GEN = PricingSpec(
+HF_SEEDANCE_25_I2V = PricingSpec(
     mode=PriceMode.PER_SECOND,
     value=0.144,
     unit="second",
-    notes="Playground range $0.144–$0.3236/s at 480p–720p; using documented low bound.",
-    confidence=CostConfidence.ESTIMATED,
-    pricing_as_of="2026-09-27",
-    source_note="https://open.higgsfield.ai/models/bytedance/seedance-2.5/video-extend/playground",
+    notes="Seedance 2.5 image-to-video $0.144/s.",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of="2026-09-28",
+    source_note="https://open.higgsfield.ai/models/bytedance/seedance-2.5/image-to-video",
 )
+HF_SEEDANCE_25_R2V = PricingSpec(
+    mode=PriceMode.PER_SECOND,
+    value=0.1728,
+    unit="second",
+    notes="Seedance 2.5 reference-to-video $0.1728/s.",
+    confidence=CostConfidence.KNOWN,
+    pricing_as_of="2026-09-28",
+    source_note="https://open.higgsfield.ai/models/bytedance/seedance-2.5/reference-to-video",
+)
+HF_SEEDANCE_25_GEN = HF_SEEDANCE_25_I2V
 HF_SEEDANCE_25_EDIT = PricingSpec(
     mode=PriceMode.PER_SECOND,
     value=0.0864,
@@ -703,7 +713,7 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             vendor="bytedance",
             model_family="seedance-2.5",
             gateway_model_id="bytedance/seedance-2.5/image-to-video",
-            pricing=HF_SEEDANCE_25_GEN,
+            pricing=HF_SEEDANCE_25_I2V,
             min_duration_seconds=4,
             max_duration_seconds=30,
             max_reference_images=2,
@@ -730,7 +740,7 @@ def _build_catalog() -> tuple[ModelSpec, ...]:
             vendor="bytedance",
             model_family="seedance-2.5",
             gateway_model_id="bytedance/seedance-2.5/reference-to-video",
-            pricing=HF_SEEDANCE_25_GEN,
+            pricing=HF_SEEDANCE_25_R2V,
             min_duration_seconds=4,
             max_duration_seconds=30,
             aspect_ratios=("16:9", "9:16"),

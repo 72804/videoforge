@@ -84,6 +84,14 @@ class Settings(BaseSettings):
     telegram_bot_token: SecretStr | None = Field(default=None)
     telegram_bot_username: str = Field(default="")
     telegram_mini_app_url: str = Field(default="")
+    videoforge_public_origin: str = Field(default="")
+    videoforge_public_input_token: SecretStr | None = Field(
+        default=None,
+        validation_alias=AliasChoices(
+            "VIDEOFORGE_PUBLIC_INPUT_TOKEN",
+            "videoforge_public_input_token",
+        ),
+    )
     telegram_webhook_url: str = Field(default="")
     telegram_webhook_secret: SecretStr | None = Field(default=None)
     telegram_init_data_max_age_seconds: int = Field(default=86400)

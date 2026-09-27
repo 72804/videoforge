@@ -112,7 +112,11 @@ def test_visible_cast_and_unique_refs(tmp_path: Path) -> None:
         assert len(scene.character_refs) == len(scene.visible_characters)
         assert "zoompan" not in scene.video_prompt
         assert 5 <= scene.duration <= 10
-        assert scene.model == "seedance-2.5-reference-to-video"
+        assert scene.model == (
+            "seedance-2.5-image-to-video"
+            if len(scene.visible_characters) == 1
+            else "seedance-2.5-reference-to-video"
+        )
 
 
 def test_seedance_native_audio_not_external_tts(tmp_path: Path) -> None:
@@ -155,9 +159,9 @@ def test_seedance_native_audio_not_external_tts(tmp_path: Path) -> None:
 def test_seedance_construction_and_resume(tmp_path: Path) -> None:
     plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
     body = seedance_reference_to_video_body(
-        prompt=plan.scenes[0].video_prompt,
-        duration=plan.scenes[0].duration,
-        image_urls=plan.scenes[0].request_body["image_urls"],
+        prompt=plan.scenes[1].video_prompt,
+        duration=plan.scenes[1].duration,
+        image_urls=plan.scenes[1].request_body["image_urls"],
     )
     assert body["aspect_ratio"] == "9:16"
     assert body["resolution"] == "720p"
@@ -204,8 +208,8 @@ def test_concat_and_zero_http_plan(tmp_path: Path) -> None:
     assert result["provider_http_calls"] == 0
     assert result["execute"] is False
     assert result["scene_count"] == 8
-    assert result["expected_usd"] == 8.64
-    assert result["reserved_usd"] == 10.656
+    assert result["expected_usd"] == 9.6192
+    assert result["reserved_usd"] == 11.8656
     assert result["new_image_usd"] == 0.0
     assert result["new_tts_usd"] == 0.0
     assert result["new_llm_usd"] == 0.0
@@ -340,6 +344,8 @@ def test_generate_reaches_mocked_post(
     from docprod.product.higgsfield_scenes import (
         HIGGSFIELD_CLIPS_RELATIVE,
         HIGGSFIELD_LEDGER_RELATIVE,
+    )
+    from docprod.product.higgsfield_scenes import (
         execute_higgsfield_scene_generate as original_generate,
     )
     from docprod.product.story_pipeline import (
@@ -371,6 +377,12 @@ def test_generate_reaches_mocked_post(
         kwargs.setdefault("sleeper", lambda _delay: None)
         kwargs.setdefault("now_fn", lambda: 0.0)
         kwargs.setdefault("deadline_seconds", 1_000.0)
+        kwargs.setdefault("url_probe", lambda url: {
+            "status_code": 200,
+            "ok": True,
+            "bytes": 64,
+            "content_type": "image/jpeg",
+        })
         kwargs.setdefault("root", tmp_path)
         return original_generate(**kwargs)
 
@@ -407,7 +419,8 @@ def test_generate_reaches_mocked_post(
     body = posted[0]
     assert body["generate_audio"] is True
     assert "audio_urls" not in body
-    assert body["aspect_ratio"] == "9:16"
+    if "aspect_ratio" in body:
+        assert body["aspect_ratio"] == "9:16"
     assert body["resolution"] == "720p"
 
     with pytest.raises(PaidApiNotConfirmedError):
@@ -463,10 +476,17 @@ def test_preflight_zero_http() -> None:
     payload = execute_higgsfield_scene_preflight(
         refs=inspect_locked_character_refs(),
         settings=keys,
+        url_probe=lambda url: {
+            "status_code": 200,
+            "ok": True,
+            "bytes": 64,
+            "content_type": "image/jpeg",
+        },
     )
     assert payload["provider_http_calls"] == 0
+    assert payload["generation_posts"] == 0
     assert payload["live_post_authorized"] is True
-    assert payload["expected_usd"] == 8.64
-    assert payload["reserved_usd"] == 10.656
+    assert payload["expected_usd"] == 9.6192
+    assert payload["reserved_usd"] == 11.8656
     assert payload["hard_cap_usd"] == 12.0
     assert payload["ready_for_live"] is True

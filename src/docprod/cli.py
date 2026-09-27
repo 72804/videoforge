@@ -3077,6 +3077,7 @@ def friend_group_episode(
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
     confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+    retry_failed: bool = typer.Option(False, "--retry-failed"),
 ) -> None:
     """Generic series/episode story pipeline. Birko is one record, not a special engine."""
     from docprod.exceptions import PaidApiNotConfirmedError
@@ -3090,6 +3091,7 @@ def friend_group_episode(
             series_slug=series_slug.strip(),
             episode_number=episode,
             confirm_paid=confirm_paid,
+            retry_failed=retry_failed,
         )
     except PaidApiNotConfirmedError as exc:
         console.print(str(exc))
@@ -3274,6 +3276,7 @@ def friend_group_episode(
 def birko_episode2(
     stage: str = typer.Option("story-plan", "--stage"),
     confirm_paid: bool = typer.Option(False, "--confirm-paid"),
+    retry_failed: bool = typer.Option(False, "--retry-failed"),
 ) -> None:
     """Convenience alias for friend-group-episode --series-slug birko --episode 2."""
     friend_group_episode(
@@ -3281,6 +3284,7 @@ def birko_episode2(
         series_slug="birko",
         episode=2,
         confirm_paid=confirm_paid,
+        retry_failed=retry_failed,
     )
 
 

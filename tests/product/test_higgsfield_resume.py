@@ -336,7 +336,60 @@ def test_generate_resumes_submitted_jobs(tmp_path: Path) -> None:
         now_fn=lambda: 0.0,
         deadline_seconds=0.0,
         root=tmp_path,
+        url_probe=lambda url: {
+            "status_code": 200,
+            "ok": True,
+            "bytes": 64,
+            "content_type": "image/jpeg",
+        },
     )
     assert posts == []
     assert result["generation_posts"] == 0
     assert result["states"]["HF1_hook_bill"] == "SUBMITTED"
+
+
+def test_failed_requires_explicit_retry_and_preserves_old_ids(tmp_path: Path) -> None:
+    plan = build_higgsfield_scenes(_spec(), _refs(tmp_path), root=tmp_path)
+    ledger_path = tmp_path / HIGGSFIELD_LEDGER_RELATIVE
+    ledger_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _submitted_ledger()
+    ops = payload["operations"]
+    assert isinstance(ops, dict)
+    ops["HF1_hook_bill"] = {
+        "state": "FAILED",
+        "request_id": "old-failed-1",
+        "error": "public URL required",
+    }
+    ledger_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    posts: list[str] = []
+    recover_higgsfield_jobs(
+        plan,
+        allow_submit=True,
+        retry_failed=False,
+        confirm_paid=True,
+        submit=lambda **kwargs: posts.append("post") or {"request_id": "new"},
+        status_fn=lambda request_id, settings=None: {"status": "queued"},
+        sleeper=lambda _delay: None,
+        now_fn=lambda: 0.0,
+        deadline_seconds=0.0,
+        root=tmp_path,
+    )
+    assert posts == []
+    saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert saved["operations"]["HF1_hook_bill"]["request_id"] == "old-failed-1"
+    recovered = recover_higgsfield_jobs(
+        plan,
+        allow_submit=True,
+        retry_failed=True,
+        confirm_paid=True,
+        submit=lambda **kwargs: {"request_id": "brand-new"},
+        status_fn=lambda request_id, settings=None: {"status": "queued"},
+        sleeper=lambda _delay: None,
+        now_fn=lambda: 0.0,
+        deadline_seconds=0.0,
+        root=tmp_path,
+    )
+    saved = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert recovered["generation_posts"] >= 1
+    assert saved["operations"]["HF1_hook_bill"]["request_id"] == "brand-new"
+    assert "old-failed-1" in saved["operations"]["HF1_hook_bill"]["failed_request_ids"]

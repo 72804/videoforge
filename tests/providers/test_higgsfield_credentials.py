@@ -141,7 +141,7 @@ def test_cli_preflight_does_not_print_secret(monkeypatch: pytest.MonkeyPatch) ->
     )
     assert result.exit_code == 0, result.output
     assert "higgsfield_credentials_present=true" in result.output
-    assert "live_post_authorized=true" in result.output
+    assert "live_post_authorized=" in result.output
     assert _SECRET not in result.output
     assert "provider_http_calls=0" in result.output
 

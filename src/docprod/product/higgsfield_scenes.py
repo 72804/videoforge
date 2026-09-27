@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -16,6 +17,15 @@ from docprod.product.birko_bible import member_by_slug
 from docprod.product.canary_cost import usd_round
 from docprod.product.errors import ProductError
 from docprod.product.friend_group import FriendGroupStorySpec
+from docprod.product.higgsfield_inputs import (
+    PublicAsset,
+    assert_https_input_url,
+    assert_https_request_body,
+    asset_lookup,
+    build_public_asset_map,
+    collect_request_input_urls,
+    preflight_input_urls,
+)
 from docprod.product.simple_video import (
     MAX_VISIBLE_CAST,
     SIMPLE_PRIMARY_MODEL,
@@ -31,6 +41,7 @@ from docprod.providers.higgsfield import (
     higgsfield_credentials_present,
     higgsfield_request_result,
     higgsfield_request_status,
+    seedance_image_to_video_body,
     seedance_reference_to_video_body,
     seedance_request_fingerprint,
     submit_higgsfield_json,
@@ -66,8 +77,8 @@ HIGGSFIELD_FINAL_RELATIVE = (
 RESUME_DEADLINE_SECONDS = 720.0
 POLL_INTERVAL_SECONDS = 5.0
 POLL_MAX_INTERVAL_SECONDS = 15.0
-APPROVED_EXPECTED_USD = 8.64
-APPROVED_RESERVED_USD = 10.656
+APPROVED_EXPECTED_USD = 9.6192
+APPROVED_RESERVED_USD = 11.8656
 APPROVED_HARD_CAP_USD = 12.0
 APPROVED_SCENE_IDS = (
     "HF1_hook_bill",
@@ -79,9 +90,12 @@ APPROVED_SCENE_IDS = (
     "HF7_kemal_pays",
     "HF8_payoff",
 )
-APPROVED_DURATIONS = (6, 7, 6, 8, 9, 9, 8, 7)
+APPROVED_DURATIONS = (6, 7, 6, 8, 9, 9, 8, 6)
+LOCKED_DURATION = dict(zip(APPROVED_SCENE_IDS, APPROVED_DURATIONS, strict=True))
+I2V_SCENE_IDS = {"HF1_hook_bill", "HF7_kemal_pays", "HF8_payoff"}
+SIMPLE_I2V_MODEL = "seedance-2.5-image-to-video"
 APPROVED_PLAN_FINGERPRINT = (
-    "fa84ed9a50cd9ed384444ec17069bb458c2fbf55d098fee5c4bcc86ad15bd0d6"
+    "6e6d65f1cb1e3689072035132c5c4d5c17a5daab15d9aeb91199eac721bbd3c9"
 )
 INTERIOR_LOCATION_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/stills/"
@@ -136,6 +150,7 @@ class HiggsfieldScene(BaseModel):
     visible_characters: list[str] = Field(default_factory=list)
     offscreen_speakers: list[str] = Field(default_factory=list)
     character_refs: list[str] = Field(default_factory=list)
+    input_assets: list[dict[str, str]] = Field(default_factory=list)
     location_ref: str = ""
     props: list[str] = Field(default_factory=list)
     action: str = ""
@@ -353,24 +368,34 @@ def _fill_scene(
     motion: float,
     location_path: Path,
     ref_map: dict[str, str],
+    public_lookup: dict[str, PublicAsset],
     exterior: bool = False,
 ) -> HiggsfieldScene:
-    duration = _scene_duration(lines, motion=motion)
+    duration = float(LOCKED_DURATION[scene_id])
     char_paths = []
     seen: set[str] = set()
+    assets: list[dict[str, str]] = []
+    remote_chars: list[str] = []
     for slug in visible:
         path = ref_map.get(slug)
         if not path or slug in seen:
             continue
         seen.add(slug)
         char_paths.append(path)
-    image_urls = [f"file://{path}" for path in char_paths]
+        pub = public_lookup.get(slug)
+        if pub is None or not pub.remote_https_url:
+            raise ProductError(
+                f"STOP BEFORE PAID HTTP: missing remote HTTPS ref for {slug}"
+            )
+        assets.append(pub.model_dump())
+        remote_chars.append(assert_https_input_url(pub.remote_https_url))
     loc = str(location_path) if location_path.is_file() else ""
-    if loc and len(char_paths) <= 2:
-        image_urls.append(f"file://{loc}")
-    fallback_tts = [item.audio_path for item in lines if item.audio_path]
+    loc_key = "exterior" if exterior else "interior"
+    loc_pub = public_lookup.get(loc_key)
+    if loc_pub is not None:
+        assets.append(loc_pub.model_dump())
     loc_label = (
-        "Krispy Kreme exterior bench, same café window wall"
+        "matching Krispy Kreme exterior bench and café window wall, same evening storefront"
         if exterior
         else "same Krispy Kreme café interior, six-top table, window, door, counter, evening"
     )
@@ -387,25 +412,46 @@ def _fill_scene(
         exterior=exterior,
         scene_id=scene_id,
     )
-    body = seedance_reference_to_video_body(
-        prompt=prompt,
-        duration=duration,
-        image_urls=image_urls,
-        audio_urls=None,
-        generate_audio=True,
-    )
+    use_i2v = scene_id in I2V_SCENE_IDS or len(visible) == 1
+    if use_i2v:
+        model = SIMPLE_I2V_MODEL
+        if not remote_chars:
+            raise ProductError(f"STOP BEFORE PAID HTTP: {scene_id} has no character HTTPS input")
+        body = seedance_image_to_video_body(
+            prompt=prompt,
+            duration=duration,
+            image_url=remote_chars[0],
+            generate_audio=True,
+        )
+    else:
+        model = SIMPLE_PRIMARY_MODEL
+        image_urls = list(remote_chars)
+        if loc_pub is not None and loc_pub.remote_https_url:
+            image_urls.append(assert_https_input_url(loc_pub.remote_https_url))
+        body = seedance_reference_to_video_body(
+            prompt=prompt,
+            duration=duration,
+            image_urls=image_urls,
+            audio_urls=None,
+            generate_audio=True,
+        )
+    assert_https_request_body(body)
+    if "audio_urls" in body:
+        raise ProductError("STOP BEFORE HTTP: audio_urls must not enter Seedance requests")
     shas = [file_sha256(Path(path)) for path in char_paths if Path(path).is_file()]
     if loc and Path(loc).is_file():
         shas.append(file_sha256(Path(loc)))
     billed = float(body["duration"])
-    expected, _conf = estimate_model_cost(SIMPLE_PRIMARY_MODEL, seconds=billed)
-    reserved, _rconf = estimate_model_cost(SIMPLE_PRIMARY_MODEL, seconds=min(10.0, billed * 1.2))
+    expected, _conf = estimate_model_cost(model, seconds=billed)
+    reserved, _rconf = estimate_model_cost(model, seconds=min(10.0, billed * 1.2))
+    fallback_tts = [item.audio_path for item in lines if item.audio_path]
     return HiggsfieldScene(
         scene_id=scene_id,
         duration=float(body["duration"]),
         visible_characters=visible,
         offscreen_speakers=offscreen,
         character_refs=char_paths,
+        input_assets=assets,
         location_ref=loc,
         props=props,
         action=action,
@@ -417,11 +463,13 @@ def _fill_scene(
         native_audio=True,
         external_tts=False,
         fallback_tts_paths=fallback_tts,
+        model=model,
         request_fingerprint=seedance_request_fingerprint(
             prompt=str(body["prompt"]),
             duration=float(body["duration"]),
             image_shas=shas,
             audio_shas=[],
+            model=model,
         ),
         request_body=body,
         expected_usd=float(expected or 0.0),
@@ -434,6 +482,7 @@ def build_higgsfield_scenes(
     refs: list[dict[str, object]],
     *,
     root: Path | None = None,
+    settings: Settings | None = None,
 ) -> HiggsfieldScenePlan:
     base = root or _repo_root()
     report = canonical_ref_report(refs)
@@ -441,6 +490,19 @@ def build_higgsfield_scenes(
     wavs = _wav_index(root=base)
     interior = base / INTERIOR_LOCATION_RELATIVE
     exterior = base / EXTERIOR_LOCATION_RELATIVE
+    location_locals = {}
+    if interior.is_file():
+        location_locals["interior"] = str(interior)
+    if exterior.is_file():
+        location_locals["exterior"] = str(exterior)
+    public_payload = build_public_asset_map(
+        character_locals=ref_map,
+        location_locals=location_locals,
+        root=base,
+        settings=settings,
+        packaged_dir=None if base == _repo_root() else base / "packaged_hf_inputs",
+    )
+    lookup = asset_lookup(public_payload)
 
     def attach(texts: list[str]) -> list[HiggsfieldDialogue]:
         return _attach_dialogue(spec, texts, wavs)
@@ -460,6 +522,7 @@ def build_higgsfield_scenes(
             motion=3.5,
             location_path=interior,
             ref_map=ref_map,
+            public_lookup=lookup,
         ),
         _fill_scene(
             scene_id="HF2_order_setup",
@@ -475,6 +538,7 @@ def build_higgsfield_scenes(
             motion=2.0,
             location_path=interior,
             ref_map=ref_map,
+            public_lookup=lookup,
         ),
         _fill_scene(
             scene_id="HF3_birko_slips",
@@ -490,6 +554,7 @@ def build_higgsfield_scenes(
             motion=6.0,
             location_path=interior,
             ref_map=ref_map,
+            public_lookup=lookup,
         ),
         _fill_scene(
             scene_id="HF4_muge_kemal",
@@ -510,6 +575,7 @@ def build_higgsfield_scenes(
             motion=1.2,
             location_path=interior,
             ref_map=ref_map,
+            public_lookup=lookup,
         ),
         _fill_scene(
             scene_id="HF5_erni",
@@ -531,6 +597,7 @@ def build_higgsfield_scenes(
             motion=1.2,
             location_path=interior,
             ref_map=ref_map,
+            public_lookup=lookup,
         ),
         _fill_scene(
             scene_id="HF6_musti",
@@ -549,6 +616,7 @@ def build_higgsfield_scenes(
             motion=1.0,
             location_path=interior,
             ref_map=ref_map,
+            public_lookup=lookup,
         ),
         _fill_scene(
             scene_id="HF7_kemal_pays",
@@ -564,6 +632,7 @@ def build_higgsfield_scenes(
             motion=4.0,
             location_path=interior,
             ref_map=ref_map,
+            public_lookup=lookup,
         ),
         _fill_scene(
             scene_id="HF8_payoff",
@@ -579,6 +648,7 @@ def build_higgsfield_scenes(
             motion=2.5,
             location_path=exterior,
             ref_map=ref_map,
+            public_lookup=lookup,
             exterior=True,
         ),
     ]
@@ -727,8 +797,8 @@ def higgsfield_plan_fingerprint(plan: HiggsfieldScenePlan) -> str:
                 "resolution": scene.request_body.get("resolution"),
                 "has_audio_urls": "audio_urls" in scene.request_body,
                 "image_names": [
-                    Path(str(url).replace("file://", "")).name
-                    for url in (scene.request_body.get("image_urls") or [])
+                    Path(urlparse(url).path).name
+                    for url in collect_request_input_urls(scene.request_body)
                 ],
             }
             for scene in plan.scenes
@@ -763,9 +833,9 @@ def higgsfield_live_stop_reasons(
     if tuple(int(scene.duration) for scene in plan.scenes) != APPROVED_DURATIONS:
         reasons.append("durations do not match the approved 8-scene plan")
     if abs(float(plan.expected_usd) - APPROVED_EXPECTED_USD) > 1e-9:
-        reasons.append("expected_total is not 8.64")
+        reasons.append(f"expected_total is not {APPROVED_EXPECTED_USD}")
     if abs(float(plan.reserved_usd) - APPROVED_RESERVED_USD) > 1e-9:
-        reasons.append("reserved_total is not 10.656")
+        reasons.append(f"reserved_total is not {APPROVED_RESERVED_USD}")
     if abs(float(plan.hard_cap_usd) - APPROVED_HARD_CAP_USD) > 1e-9:
         reasons.append("hard_cap_usd is not 12.0")
     if plan.cap_ok is not True:
@@ -1070,11 +1140,31 @@ def poll_higgsfield_request_once(
     return "UNCERTAIN"
 
 
+def _archive_failed_operation(ledger: dict[str, Any], scene_id: str) -> None:
+    ops = ledger.setdefault("operations", {})
+    row = ops.get(scene_id) if isinstance(ops.get(scene_id), dict) else {}
+    history = list(row.get("history") or [])
+    snapshot = {key: value for key, value in row.items() if key != "history"}
+    if snapshot:
+        history.append(snapshot)
+    failed_ids = list(row.get("failed_request_ids") or [])
+    request_id = str(row.get("request_id") or "").strip()
+    if request_id and request_id not in failed_ids:
+        failed_ids.append(request_id)
+    ops[scene_id] = {
+        "state": "NOT_STARTED",
+        "history": history,
+        "failed_request_ids": failed_ids,
+        "model": row.get("model"),
+    }
+
+
 def recover_higgsfield_jobs(
     plan: HiggsfieldScenePlan,
     *,
     settings: Settings | None = None,
     allow_submit: bool = False,
+    retry_failed: bool = False,
     confirm_paid: bool = False,
     submit: Callable[..., dict[str, Any]] | None = None,
     status_fn: Callable[..., dict[str, Any]] | None = None,
@@ -1108,8 +1198,24 @@ def recover_higgsfield_jobs(
         result_calls += 1
         return result(request_id, settings=settings)
 
-    pending: list[tuple[str, str]] = []
-    to_submit: list[HiggsfieldScene] = []
+    def poll_one(scene_id: str, request_id: str) -> str:
+        return poll_existing_higgsfield_request(
+            scene_id=scene_id,
+            request_id=request_id,
+            ledger=ledger,
+            ledger_path=ledger_path,
+            settings=settings,
+            root=base,
+            status_fn=counted_status,
+            result_fn=counted_result,
+            download_fn=downloader,
+            sleeper=sleep,
+            now_fn=now,
+            deadline=deadline,
+            interval=POLL_INTERVAL_SECONDS,
+        )
+
+    poster = submit or submit_higgsfield_json
     for scene in plan.scenes:
         row = ledger["operations"].get(scene.scene_id)
         row = row if isinstance(row, dict) else {}
@@ -1118,62 +1224,55 @@ def recover_higgsfield_jobs(
         clip = _clip_path(scene.scene_id, root=base)
         if state == "SUCCEEDED" and _playable_clip(clip):
             continue
-        if state in {"UNCERTAIN", "FAILED", "CANCELLED"}:
+        if state in {"UNCERTAIN", "CANCELLED"}:
             continue
-        if request_id and state in {"", "SUBMITTED", "PROCESSING", "SUCCEEDED"}:
-            pending.append((scene.scene_id, request_id))
+        if state == "FAILED" and not retry_failed:
             continue
-        to_submit.append(scene)
-
-    def _drain_pending() -> None:
-        nonlocal pending
-        wait = POLL_INTERVAL_SECONDS
-        while pending and now() < deadline:
-            still: list[tuple[str, str]] = []
-            for scene_id, request_id in pending:
-                state = poll_higgsfield_request_once(
-                    scene_id=scene_id,
-                    request_id=request_id,
-                    ledger=ledger,
-                    ledger_path=ledger_path,
-                    settings=settings,
-                    root=base,
-                    status_fn=counted_status,
-                    result_fn=counted_result,
-                    download_fn=downloader,
-                )
-                if state in {"SUBMITTED", "PROCESSING"}:
-                    still.append((scene_id, request_id))
-            pending = still
-            if pending and now() < deadline:
-                sleep(wait)
-                wait = min(POLL_MAX_INTERVAL_SECONDS, wait * 1.3)
-
-    _drain_pending()
-    if allow_submit:
-        poster = submit or submit_higgsfield_json
-        for scene in to_submit:
-            if now() >= deadline:
-                break
-            posted = poster(
-                url=str(SEEDANCE_CONTRACTS[SIMPLE_PRIMARY_MODEL]["url"]),
-                body=scene.request_body,
-                confirm_paid=confirm_paid,
-                settings=settings,
-            )
-            generation_posts += 1
-            request_id = str(posted.get("request_id") or "")
-            _update_op(
-                ledger,
-                scene.scene_id,
-                state="SUBMITTED",
-                request_id=request_id,
-                model=scene.model,
-            )
+        if state == "FAILED" and retry_failed:
+            _archive_failed_operation(ledger, scene.scene_id)
             _save_ledger(ledger_path, ledger)
-            if request_id:
-                pending.append((scene.scene_id, request_id))
-        _drain_pending()
+            state = "NOT_STARTED"
+            request_id = ""
+        if request_id and state in {"", "SUBMITTED", "PROCESSING", "SUCCEEDED", "NOT_STARTED"}:
+            poll_one(scene.scene_id, request_id)
+            row = ledger["operations"].get(scene.scene_id) or {}
+            if str(row.get("state")) == "SUCCEEDED" and _playable_clip(clip):
+                continue
+            if str(row.get("state")) in {"FAILED", "CANCELLED", "UNCERTAIN"}:
+                continue
+            if now() > deadline:
+                break
+            continue
+        if not allow_submit:
+            continue
+        if now() > deadline:
+            break
+        assert_https_request_body(scene.request_body)
+        posted = poster(
+            url=str(SEEDANCE_CONTRACTS[scene.model]["url"]),
+            body=scene.request_body,
+            confirm_paid=confirm_paid,
+            settings=settings,
+        )
+        generation_posts += 1
+        request_id = str(posted.get("request_id") or "")
+        preserved = ledger["operations"].get(scene.scene_id) if isinstance(
+            ledger["operations"].get(scene.scene_id), dict
+        ) else {}
+        _update_op(
+            ledger,
+            scene.scene_id,
+            state="SUBMITTED",
+            request_id=request_id,
+            model=scene.model,
+            history=list(preserved.get("history") or []),
+            failed_request_ids=list(preserved.get("failed_request_ids") or []),
+        )
+        _save_ledger(ledger_path, ledger)
+        if request_id:
+            poll_one(scene.scene_id, request_id)
+        if now() > deadline:
+            break
 
     ops = ledger.get("operations") if isinstance(ledger.get("operations"), dict) else {}
     succeeded = [
@@ -1204,7 +1303,7 @@ def execute_higgsfield_scene_plan(
     settings: Settings | None = None,
 ) -> dict[str, object]:
     spec = load_existing_story()
-    plan = build_higgsfield_scenes(spec, refs)
+    plan = build_higgsfield_scenes(spec, refs, settings=settings)
     report = canonical_ref_report(refs)
     root = _repo_root()
     plan_path = root / HIGGSFIELD_PLAN_RELATIVE
@@ -1250,9 +1349,10 @@ def execute_higgsfield_scene_preflight(
     settings: Settings | None = None,
     series_slug: str = "birko",
     episode_number: int = 2,
+    url_probe: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, object]:
     planned = execute_higgsfield_scene_plan(refs=refs, settings=settings)
-    plan = build_higgsfield_scenes(load_existing_story(), refs)
+    plan = build_higgsfield_scenes(load_existing_story(), refs, settings=settings)
     reasons = higgsfield_live_stop_reasons(
         series_slug=series_slug,
         episode_number=episode_number,
@@ -1262,7 +1362,22 @@ def execute_higgsfield_scene_preflight(
         settings=settings,
         require_confirm_paid=False,
     )
-    authorized = not reasons
+    unique_urls = list(
+        dict.fromkeys(
+            url
+            for scene in plan.scenes
+            for url in collect_request_input_urls(scene.request_body)
+        )
+    )
+    for url in unique_urls:
+        assert_https_input_url(url)
+    remote_ok = False
+    try:
+        preflight_input_urls(unique_urls, probe=url_probe)
+        remote_ok = True
+    except ProductError as exc:
+        reasons = [*reasons, str(exc)]
+    authorized = not reasons and remote_ok
     return {
         **planned,
         "stage": "higgsfield-scene-preflight",
@@ -1272,10 +1387,16 @@ def execute_higgsfield_scene_preflight(
         "native_audio": True,
         "external_tts": False,
         "model": SIMPLE_PRIMARY_MODEL,
+        "i2v_model": SIMPLE_I2V_MODEL,
+        "i2v_usd_per_second": 0.144,
+        "r2v_usd_per_second": 0.1728,
         "series": series_slug,
         "episode": episode_number,
         "stop_reasons": reasons,
+        "input_url_count": len(unique_urls),
+        "remote_urls_reachable": remote_ok,
         "provider_http_calls": 0,
+        "generation_posts": 0,
         "execute": False,
     }
 
@@ -1297,13 +1418,15 @@ def execute_higgsfield_scene_generate(
     now_fn: Callable[[], float] | None = None,
     deadline_seconds: float = RESUME_DEADLINE_SECONDS,
     root: Path | None = None,
+    retry_failed: bool = False,
+    url_probe: Callable[[str], dict[str, Any]] | None = None,
 ) -> dict[str, object]:
     if not confirm_paid:
         raise PaidApiNotConfirmedError(
             "higgsfield-scene-generate requires --confirm-paid after higgsfield-scene-plan"
         )
     planned = execute_higgsfield_scene_plan(refs=refs, settings=settings)
-    plan = build_higgsfield_scenes(load_existing_story(), refs)
+    plan = build_higgsfield_scenes(load_existing_story(), refs, settings=settings)
     assert_higgsfield_live_authorized(
         series_slug=series_slug,
         episode_number=episode_number,
@@ -1313,6 +1436,17 @@ def execute_higgsfield_scene_generate(
         settings=settings,
         approved_fingerprint=approved_fingerprint,
     )
+    unique_urls = list(
+        dict.fromkeys(
+            url
+            for scene in plan.scenes
+            for url in collect_request_input_urls(scene.request_body)
+        )
+    )
+    for url in unique_urls:
+        assert_https_input_url(url)
+    if execute_calls:
+        preflight_input_urls(unique_urls, probe=url_probe)
     if not execute_calls:
         return {
             **planned,
@@ -1324,6 +1458,7 @@ def execute_higgsfield_scene_generate(
         plan,
         settings=settings,
         allow_submit=True,
+        retry_failed=retry_failed,
         confirm_paid=confirm_paid,
         submit=submit,
         status_fn=status_fn,
@@ -1372,7 +1507,7 @@ def execute_higgsfield_scene_resume(
     deadline_seconds: float = RESUME_DEADLINE_SECONDS,
     root: Path | None = None,
 ) -> dict[str, object]:
-    plan = build_higgsfield_scenes(load_existing_story(), refs)
+    plan = build_higgsfield_scenes(load_existing_story(), refs, settings=settings)
     recovered = recover_higgsfield_jobs(
         plan,
         settings=settings,

@@ -277,6 +277,26 @@ def higgsfield_credentials_present(settings: Settings | None = None) -> bool:
     return bool(resolve_higgsfield_api_key(settings))
 
 
+def seedance_image_to_video_body(
+    *,
+    prompt: str,
+    duration: float,
+    image_url: str,
+    resolution: str = "720p",
+    generate_audio: bool = True,
+) -> dict[str, Any]:
+    if resolution != "720p":
+        raise ValueError("Friend Group Seedance requests must use 720p")
+    seconds = max(4, min(30, int(round(duration))))
+    return {
+        "prompt": prompt,
+        "duration": seconds,
+        "image_url": image_url,
+        "resolution": resolution,
+        "generate_audio": generate_audio,
+    }
+
+
 def seedance_reference_to_video_body(
     *,
     prompt: str,
@@ -352,9 +372,10 @@ def seedance_request_fingerprint(
     audio_shas: list[str],
     resolution: str = "720p",
     aspect_ratio: str = "9:16",
+    model: str = "seedance-2.5-reference-to-video",
 ) -> str:
     return video_cache_hash(
-        model="seedance-2.5-reference-to-video",
+        model=model,
         prompt=prompt,
         negative_prompt="",
         input_image_sha256s=[],
