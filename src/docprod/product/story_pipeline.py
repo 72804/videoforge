@@ -1402,6 +1402,10 @@ def run_friend_group_episode(
             series_slug=series_slug,
             episode_number=episode_number,
         )
+    if token in {"higgsfield-scene-resume"}:
+        from docprod.product.higgsfield_scenes import execute_higgsfield_scene_resume
+
+        return execute_higgsfield_scene_resume(refs=refs, settings=settings)
     if token in {"higgsfield-scene-generate"}:
         from docprod.product.higgsfield_scenes import execute_higgsfield_scene_generate
 
@@ -1418,7 +1422,7 @@ def run_friend_group_episode(
         "story-generate, production-plan, animatic-plan, animatic-generate, "
         "animatic-rerender, simple-script-plan, simple-script-generate, "
         "simple-video-plan, simple-video-generate, higgsfield-scene-plan, "
-        "higgsfield-scene-preflight, or higgsfield-scene-generate"
+        "higgsfield-scene-preflight, higgsfield-scene-resume, or higgsfield-scene-generate"
     )
 
 

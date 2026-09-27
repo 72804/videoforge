@@ -368,6 +368,104 @@ def seedance_request_fingerprint(
     )
 
 
+HIGGSFIELD_API_BASE = "https://api.higgsfield.ai"
+
+
+def higgsfield_request_status(
+    request_id: str,
+    *,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """GET existing request status. Never creates a generation."""
+    import httpx
+
+    rid = request_id.strip()
+    url = f"{HIGGSFIELD_API_BASE}/requests/{rid}/status"
+    headers = {"Authorization": higgsfield_auth_header(settings)}
+    with httpx.Client(timeout=60.0) as client:
+        response = client.get(url, headers=headers)
+        response.raise_for_status()
+        payload = response.json() if response.content else {}
+    return payload if isinstance(payload, dict) else {"raw": payload}
+
+
+def higgsfield_request_result(
+    request_id: str,
+    *,
+    settings: Settings | None = None,
+) -> dict[str, Any]:
+    """GET existing request result. Never creates a generation."""
+    import httpx
+
+    rid = request_id.strip()
+    url = f"{HIGGSFIELD_API_BASE}/requests/{rid}"
+    headers = {"Authorization": higgsfield_auth_header(settings)}
+    with httpx.Client(timeout=60.0) as client:
+        response = client.get(url, headers=headers)
+        if response.status_code == 404:
+            return {}
+        response.raise_for_status()
+        payload = response.json() if response.content else {}
+    return payload if isinstance(payload, dict) else {"raw": payload}
+
+
+def extract_higgsfield_video_url(payload: dict[str, Any]) -> str:
+    video = payload.get("video")
+    if isinstance(video, dict):
+        url = str(video.get("url") or "").strip()
+        if url:
+            return url
+    for key in ("images", "audios", "outputs"):
+        rows = payload.get(key)
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                url = str(row.get("url") or "").strip()
+                if url:
+                    return url
+    direct = str(payload.get("url") or "").strip()
+    if direct.startswith("http"):
+        return direct
+    for nested_key in ("data", "result", "output", "request"):
+        nested = payload.get(nested_key)
+        if isinstance(nested, dict):
+            found = extract_higgsfield_video_url(nested)
+            if found:
+                return found
+    return ""
+
+
+def classify_higgsfield_status(raw: str) -> str:
+    token = raw.strip().lower().replace(" ", "_")
+    if token in {"queued", "pending", "waiting"}:
+        return "queued"
+    if token in {"in_progress", "processing", "running"}:
+        return "in_progress"
+    if token in {"completed", "succeeded", "success", "done"}:
+        return "completed"
+    if token in {"failed", "nsfw", "error"}:
+        return "failed"
+    if token in {"canceled", "cancelled"}:
+        return "canceled"
+    return "unknown"
+
+
+def download_higgsfield_media(url: str, dest: Path) -> Path:
+    import httpx
+
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    with httpx.Client(timeout=180.0, follow_redirects=True) as client:
+        with client.stream("GET", url) as response:
+            response.raise_for_status()
+            with tmp.open("wb") as handle:
+                for chunk in response.iter_bytes():
+                    handle.write(chunk)
+    tmp.replace(dest)
+    return dest
+
+
 def submit_higgsfield_json(
     *,
     url: str,

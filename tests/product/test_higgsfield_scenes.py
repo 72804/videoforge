@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
@@ -304,12 +303,45 @@ def test_live_auth_negative_cases(tmp_path: Path) -> None:
         )
 
 
+def _write_vertical_mp4(path: Path, seconds: float = 0.5) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        path.unlink()
+    run_ffmpeg(
+        [
+            "-y",
+            "-f",
+            "lavfi",
+            "-i",
+            f"color=c=black:s=720x1280:d={seconds}",
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=frequency=440:duration={seconds}",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            str(path),
+        ],
+        timeout=30,
+    )
+    return path
+
+
 def test_generate_reaches_mocked_post(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     spec_path = Path(STORY_SPEC_RELATIVE)
     if not spec_path.is_file():
         pytest.skip("checked-in story spec not available")
+    from docprod.product.higgsfield_scenes import (
+        HIGGSFIELD_CLIPS_RELATIVE,
+        HIGGSFIELD_LEDGER_RELATIVE,
+        execute_higgsfield_scene_generate as original_generate,
+    )
     from docprod.product.story_pipeline import (
         inspect_locked_character_refs,
         run_friend_group_episode,
@@ -322,32 +354,55 @@ def test_generate_reaches_mocked_post(
         assert "api.higgsfield.ai" in url
         return {"request_id": f"mock-{len(posted)}"}
 
-    ledger = tmp_path / "ledger.json"
+    def fake_status(request_id: str, *, settings=None):
+        return {"status": "completed"}
 
-    def load_l(path):
+    def fake_result(request_id: str, *, settings=None):
+        return {"video": {"url": f"https://example.test/{request_id}.mp4"}}
+
+    def fake_download(url: str, dest: Path):
+        return _write_vertical_mp4(Path(dest))
+
+    def bound_generate(**kwargs):
+        kwargs.setdefault("submit", fake_submit)
+        kwargs.setdefault("status_fn", fake_status)
+        kwargs.setdefault("result_fn", fake_result)
+        kwargs.setdefault("download_fn", fake_download)
+        kwargs.setdefault("sleeper", lambda _delay: None)
+        kwargs.setdefault("now_fn", lambda: 0.0)
+        kwargs.setdefault("deadline_seconds", 1_000.0)
+        kwargs.setdefault("root", tmp_path)
+        return original_generate(**kwargs)
+
+    def _reset_tmp_outputs() -> None:
+        ledger = tmp_path / HIGGSFIELD_LEDGER_RELATIVE
         if ledger.is_file():
-            return json.loads(ledger.read_text(encoding="utf-8"))
-        return {"operations": {}}
+            ledger.unlink()
+        clips = tmp_path / HIGGSFIELD_CLIPS_RELATIVE
+        if clips.is_dir():
+            for path in clips.glob("*.mp4"):
+                path.unlink()
 
-    def save_l(path, payload):
-        ledger.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-
-    monkeypatch.setattr("docprod.product.higgsfield_scenes.submit_higgsfield_json", fake_submit)
-    monkeypatch.setattr("docprod.product.higgsfield_scenes._load_ledger", load_l)
-    monkeypatch.setattr("docprod.product.higgsfield_scenes._save_ledger", save_l)
+    monkeypatch.setattr(
+        "docprod.product.higgsfield_scenes.submit_higgsfield_json", fake_submit
+    )
+    monkeypatch.setattr(
+        "docprod.product.higgsfield_scenes.execute_higgsfield_scene_generate",
+        bound_generate,
+    )
 
     refs = inspect_locked_character_refs()
     keys = _key_settings()
-    result = execute_higgsfield_scene_generate(
+    result = bound_generate(
         confirm_paid=True,
         refs=refs,
         execute_calls=True,
         settings=keys,
         series_slug="birko",
         episode_number=2,
-        submit=fake_submit,
     )
     assert result["live_post_authorized"] is True
+    assert result["generation_posts"] == 8
     assert len(posted) == 8
     body = posted[0]
     assert body["generate_audio"] is True
@@ -365,8 +420,7 @@ def test_generate_reaches_mocked_post(
             execute_calls=True,
         )
     posted.clear()
-    if ledger.is_file():
-        ledger.unlink()
+    _reset_tmp_outputs()
     dispatched = run_friend_group_episode(
         stage="higgsfield-scene-generate",
         series_slug="birko",
@@ -383,8 +437,7 @@ def test_generate_reaches_mocked_post(
     from docprod.cli import app
 
     posted.clear()
-    if ledger.is_file():
-        ledger.unlink()
+    _reset_tmp_outputs()
     monkeypatch.setattr(
         "docprod.product.higgsfield_scenes.higgsfield_credentials_present",
         lambda settings=None: True,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from docprod.config import Settings
 from docprod.exceptions import PaidApiNotConfirmedError
+from docprod.product.animatic_render import DialogueCue, write_timed_subtitles
 from docprod.product.birko_bible import member_by_slug
 from docprod.product.canary_cost import usd_round
 from docprod.product.errors import ProductError
@@ -19,16 +21,23 @@ from docprod.product.simple_video import (
     SIMPLE_PRIMARY_MODEL,
     SIMPLE_SECONDARY_MODEL,
     SIMPLE_VIDEO_HARD_CAP_USD,
+    concat_simple_scenes,
 )
 from docprod.providers.higgsfield import (
     SEEDANCE_CONTRACTS,
+    classify_higgsfield_status,
+    download_higgsfield_media,
+    extract_higgsfield_video_url,
     higgsfield_credentials_present,
+    higgsfield_request_result,
+    higgsfield_request_status,
     seedance_reference_to_video_body,
     seedance_request_fingerprint,
     submit_higgsfield_json,
 )
 from docprod.quality.router import estimate_model_cost
-from docprod.render.ffmpeg import probe_media
+from docprod.render.ffmpeg import probe_media, run_ffmpeg
+from docprod.render.subtitles import ffmpeg_subtitle_filter
 from docprod.storage.hashing import file_sha256
 
 STORY_SPEC_RELATIVE = (
@@ -47,6 +56,16 @@ HIGGSFIELD_LEDGER_RELATIVE = (
     "projects/birko_kemal_drama_canary/artifacts/render/episode_2/"
     "higgsfield_ledger.json"
 )
+HIGGSFIELD_CLIPS_RELATIVE = (
+    "projects/birko_kemal_drama_canary/artifacts/render/episode_2/higgsfield"
+)
+HIGGSFIELD_FINAL_RELATIVE = (
+    "projects/birko_kemal_drama_canary/artifacts/render/episode_2/"
+    "birko_episode_2_higgsfield.mp4"
+)
+RESUME_DEADLINE_SECONDS = 720.0
+POLL_INTERVAL_SECONDS = 5.0
+POLL_MAX_INTERVAL_SECONDS = 15.0
 APPROVED_EXPECTED_USD = 8.64
 APPROVED_RESERVED_USD = 10.656
 APPROVED_HARD_CAP_USD = 12.0
@@ -800,6 +819,385 @@ def _save_ledger(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def _clip_path(scene_id: str, *, root: Path | None = None) -> Path:
+    return (root or _repo_root()) / HIGGSFIELD_CLIPS_RELATIVE / f"{scene_id}.mp4"
+
+
+def _update_op(ledger: dict[str, Any], scene_id: str, **fields: Any) -> None:
+    ops = ledger.setdefault("operations", {})
+    row = ops.get(scene_id) if isinstance(ops.get(scene_id), dict) else {}
+    merged = {**row, **fields}
+    ops[scene_id] = merged
+
+
+def _persist_probe(row: dict[str, Any], path: Path) -> dict[str, Any]:
+    info = probe_media(path)
+    row["duration"] = info.duration
+    row["width"] = info.width
+    row["height"] = info.height
+    row["video_codec"] = info.video_codec
+    row["audio_codec"] = info.audio_codec
+    row["audio_present"] = bool(info.has_audio)
+    row["has_video"] = bool(info.has_video)
+    return row
+
+
+def _playable_clip(path: Path) -> bool:
+    if not path.is_file() or path.stat().st_size < 64:
+        return False
+    try:
+        info = probe_media(path)
+    except Exception:
+        return False
+    return bool(info.has_video and info.duration > 0.2)
+
+
+def _subtitle_cues(plan: HiggsfieldScenePlan, clips: list[Path]) -> list[DialogueCue]:
+    cues: list[DialogueCue] = []
+    offset = 0.0
+    for scene, clip in zip(plan.scenes, clips, strict=True):
+        duration = probe_media(clip).duration if clip.is_file() else float(scene.duration)
+        lines = scene.dialogue_lines
+        if lines:
+            slice_len = duration / len(lines)
+            for index, line in enumerate(lines):
+                start = offset + index * slice_len
+                end = offset + (index + 1) * slice_len
+                cues.append(
+                    DialogueCue(
+                        speaker=line.speaker,
+                        source=clip,
+                        start=start,
+                        duration=slice_len,
+                        end=end,
+                        text=line.text,
+                        shot_id=scene.scene_id,
+                        line_id=f"{scene.scene_id}-{index}",
+                    )
+                )
+        offset += duration
+    return cues
+
+
+def concat_higgsfield_episode(
+    plan: HiggsfieldScenePlan,
+    *,
+    root: Path | None = None,
+) -> Path:
+    base = root or _repo_root()
+    clips = [_clip_path(scene.scene_id, root=base) for scene in plan.scenes]
+    missing = [str(path) for path in clips if not _playable_clip(path)]
+    if missing:
+        raise ProductError(f"cannot concat; missing or unplayable clips: {missing}")
+    dest = base / HIGGSFIELD_FINAL_RELATIVE
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    concat = dest.with_name(dest.stem + "_concat.mp4")
+    concat_simple_scenes(clips, concat)
+    cues = _subtitle_cues(plan, clips)
+    ass_path = dest.with_name("higgsfield_episode.ass")
+    write_timed_subtitles(cues, ass_path)
+    probed = probe_media(concat)
+    staged = dest.with_name(dest.stem + "_burn.mp4")
+    cmd = [
+        "-i",
+        str(concat),
+        "-vf",
+        ffmpeg_subtitle_filter(ass_path),
+        "-c:a",
+        "copy",
+        str(staged),
+    ]
+    if "-shortest" in cmd:
+        raise ProductError("higgsfield subtitle burn must not use -shortest")
+    run_ffmpeg(cmd, timeout=180)
+    staged.replace(dest)
+    if probe_media(dest).duration + 0.75 < probed.duration:
+        raise ProductError("higgsfield concat collapsed duration")
+    return dest
+
+
+def _raw_provider_status(payload: dict[str, Any]) -> str:
+    raw = payload.get("status")
+    if isinstance(raw, dict):
+        raw = raw.get("status") or raw.get("state")
+    if not raw:
+        raw = payload.get("state")
+    if not raw and isinstance(payload.get("request"), dict):
+        return _raw_provider_status(payload["request"])
+    return str(raw or "")
+
+
+def _download_completed_clip(
+    *,
+    scene_id: str,
+    request_id: str,
+    payload: dict[str, Any],
+    result_fn: Callable[..., dict[str, Any]],
+    download_fn: Callable[..., Path],
+    settings: Settings | None,
+    root: Path,
+) -> tuple[Path | None, str, dict[str, Any]]:
+    merged = dict(payload)
+    extra = result_fn(request_id, settings=settings)
+    if extra:
+        merged = {**merged, **extra}
+    url = extract_higgsfield_video_url(merged)
+    if not url:
+        return None, "", merged
+    dest = _clip_path(scene_id, root=root)
+    download_fn(url, dest)
+    return dest, url, merged
+
+
+def poll_existing_higgsfield_request(
+    *,
+    scene_id: str,
+    request_id: str,
+    ledger: dict[str, Any],
+    ledger_path: Path,
+    settings: Settings | None,
+    root: Path,
+    status_fn: Callable[..., dict[str, Any]],
+    result_fn: Callable[..., dict[str, Any]],
+    download_fn: Callable[..., Path],
+    sleeper: Callable[[float], None],
+    now_fn: Callable[[], float],
+    deadline: float,
+    interval: float,
+) -> str:
+    wait = interval
+    while now_fn() < deadline:
+        state = poll_higgsfield_request_once(
+            scene_id=scene_id,
+            request_id=request_id,
+            ledger=ledger,
+            ledger_path=ledger_path,
+            settings=settings,
+            root=root,
+            status_fn=status_fn,
+            result_fn=result_fn,
+            download_fn=download_fn,
+        )
+        if state not in {"SUBMITTED", "PROCESSING"}:
+            return state
+        sleeper(wait)
+        wait = min(POLL_MAX_INTERVAL_SECONDS, wait * 1.3)
+    _save_ledger(ledger_path, ledger)
+    return str(ledger["operations"][scene_id].get("state") or "SUBMITTED")
+
+
+def poll_higgsfield_request_once(
+    *,
+    scene_id: str,
+    request_id: str,
+    ledger: dict[str, Any],
+    ledger_path: Path,
+    settings: Settings | None,
+    root: Path,
+    status_fn: Callable[..., dict[str, Any]],
+    result_fn: Callable[..., dict[str, Any]],
+    download_fn: Callable[..., Path],
+) -> str:
+    payload = status_fn(request_id, settings=settings)
+    raw_status = _raw_provider_status(payload)
+    if not raw_status:
+        extra = result_fn(request_id, settings=settings)
+        if extra:
+            payload = {**payload, **extra}
+            raw_status = _raw_provider_status(payload)
+    kind = classify_higgsfield_status(raw_status)
+    _update_op(
+        ledger,
+        scene_id,
+        request_id=request_id,
+        provider_status=raw_status or kind,
+    )
+    if kind in {"queued"}:
+        _update_op(ledger, scene_id, state="SUBMITTED")
+        _save_ledger(ledger_path, ledger)
+        return "SUBMITTED"
+    if kind == "in_progress":
+        _update_op(ledger, scene_id, state="PROCESSING")
+        _save_ledger(ledger_path, ledger)
+        return "PROCESSING"
+    if kind == "completed":
+        dest, url, merged = _download_completed_clip(
+            scene_id=scene_id,
+            request_id=request_id,
+            payload=payload,
+            result_fn=result_fn,
+            download_fn=download_fn,
+            settings=settings,
+            root=root,
+        )
+        if dest is None or not _playable_clip(dest):
+            _update_op(
+                ledger,
+                scene_id,
+                state="UNCERTAIN",
+                error="completed without playable video",
+                video_url=url,
+            )
+            _save_ledger(ledger_path, ledger)
+            return "UNCERTAIN"
+        row = {
+            "state": "SUCCEEDED",
+            "request_id": request_id,
+            "provider_status": raw_status or "completed",
+            "artifact_path": str(dest),
+            "video_url": url,
+            "downloaded": True,
+        }
+        row.update(_persist_probe(row, dest))
+        _update_op(ledger, scene_id, **row)
+        _save_ledger(ledger_path, ledger)
+        return "SUCCEEDED"
+    if kind == "failed":
+        _update_op(
+            ledger,
+            scene_id,
+            state="FAILED",
+            error=str(payload.get("error") or raw_status or "failed"),
+        )
+        _save_ledger(ledger_path, ledger)
+        return "FAILED"
+    if kind == "canceled":
+        _update_op(ledger, scene_id, state="CANCELLED")
+        _save_ledger(ledger_path, ledger)
+        return "CANCELLED"
+    _update_op(ledger, scene_id, state="UNCERTAIN", error=f"ambiguous status {raw_status!r}")
+    _save_ledger(ledger_path, ledger)
+    return "UNCERTAIN"
+
+
+def recover_higgsfield_jobs(
+    plan: HiggsfieldScenePlan,
+    *,
+    settings: Settings | None = None,
+    allow_submit: bool = False,
+    confirm_paid: bool = False,
+    submit: Callable[..., dict[str, Any]] | None = None,
+    status_fn: Callable[..., dict[str, Any]] | None = None,
+    result_fn: Callable[..., dict[str, Any]] | None = None,
+    download_fn: Callable[..., Path] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+    now_fn: Callable[[], float] | None = None,
+    deadline_seconds: float = RESUME_DEADLINE_SECONDS,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    base = root or _repo_root()
+    ledger_path = base / HIGGSFIELD_LEDGER_RELATIVE
+    ledger = _load_ledger(ledger_path)
+    status = status_fn or higgsfield_request_status
+    result = result_fn or higgsfield_request_result
+    downloader = download_fn or download_higgsfield_media
+    sleep = sleeper or time.sleep
+    now = now_fn or time.time
+    deadline = now() + deadline_seconds
+    generation_posts = 0
+    status_calls = 0
+    result_calls = 0
+
+    def counted_status(request_id: str, *, settings: Settings | None = None) -> dict[str, Any]:
+        nonlocal status_calls
+        status_calls += 1
+        return status(request_id, settings=settings)
+
+    def counted_result(request_id: str, *, settings: Settings | None = None) -> dict[str, Any]:
+        nonlocal result_calls
+        result_calls += 1
+        return result(request_id, settings=settings)
+
+    pending: list[tuple[str, str]] = []
+    to_submit: list[HiggsfieldScene] = []
+    for scene in plan.scenes:
+        row = ledger["operations"].get(scene.scene_id)
+        row = row if isinstance(row, dict) else {}
+        state = str(row.get("state") or "")
+        request_id = str(row.get("request_id") or "").strip()
+        clip = _clip_path(scene.scene_id, root=base)
+        if state == "SUCCEEDED" and _playable_clip(clip):
+            continue
+        if state in {"UNCERTAIN", "FAILED", "CANCELLED"}:
+            continue
+        if request_id and state in {"", "SUBMITTED", "PROCESSING", "SUCCEEDED"}:
+            pending.append((scene.scene_id, request_id))
+            continue
+        to_submit.append(scene)
+
+    def _drain_pending() -> None:
+        nonlocal pending
+        wait = POLL_INTERVAL_SECONDS
+        while pending and now() < deadline:
+            still: list[tuple[str, str]] = []
+            for scene_id, request_id in pending:
+                state = poll_higgsfield_request_once(
+                    scene_id=scene_id,
+                    request_id=request_id,
+                    ledger=ledger,
+                    ledger_path=ledger_path,
+                    settings=settings,
+                    root=base,
+                    status_fn=counted_status,
+                    result_fn=counted_result,
+                    download_fn=downloader,
+                )
+                if state in {"SUBMITTED", "PROCESSING"}:
+                    still.append((scene_id, request_id))
+            pending = still
+            if pending and now() < deadline:
+                sleep(wait)
+                wait = min(POLL_MAX_INTERVAL_SECONDS, wait * 1.3)
+
+    _drain_pending()
+    if allow_submit:
+        poster = submit or submit_higgsfield_json
+        for scene in to_submit:
+            if now() >= deadline:
+                break
+            posted = poster(
+                url=str(SEEDANCE_CONTRACTS[SIMPLE_PRIMARY_MODEL]["url"]),
+                body=scene.request_body,
+                confirm_paid=confirm_paid,
+                settings=settings,
+            )
+            generation_posts += 1
+            request_id = str(posted.get("request_id") or "")
+            _update_op(
+                ledger,
+                scene.scene_id,
+                state="SUBMITTED",
+                request_id=request_id,
+                model=scene.model,
+            )
+            _save_ledger(ledger_path, ledger)
+            if request_id:
+                pending.append((scene.scene_id, request_id))
+        _drain_pending()
+
+    ops = ledger.get("operations") if isinstance(ledger.get("operations"), dict) else {}
+    succeeded = [
+        scene.scene_id
+        for scene in plan.scenes
+        if isinstance(ops.get(scene.scene_id), dict)
+        and ops[scene.scene_id].get("state") == "SUCCEEDED"
+        and _playable_clip(_clip_path(scene.scene_id, root=base))
+    ]
+    final = None
+    if len(succeeded) == len(plan.scenes):
+        final = str(concat_higgsfield_episode(plan, root=base))
+    return {
+        "ledger": ledger,
+        "ledger_path": str(ledger_path),
+        "generation_posts": generation_posts,
+        "status_http_calls": status_calls,
+        "result_http_calls": result_calls,
+        "provider_http_calls": status_calls + result_calls,
+        "succeeded": succeeded,
+        "final": final,
+    }
+
+
 def execute_higgsfield_scene_plan(
     *,
     refs: list[dict[str, object]],
@@ -892,6 +1290,13 @@ def execute_higgsfield_scene_generate(
     episode_number: int = 2,
     submit: Callable[..., dict[str, Any]] | None = None,
     approved_fingerprint: str | None = None,
+    status_fn: Callable[..., dict[str, Any]] | None = None,
+    result_fn: Callable[..., dict[str, Any]] | None = None,
+    download_fn: Callable[..., Path] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+    now_fn: Callable[[], float] | None = None,
+    deadline_seconds: float = RESUME_DEADLINE_SECONDS,
+    root: Path | None = None,
 ) -> dict[str, object]:
     if not confirm_paid:
         raise PaidApiNotConfirmedError(
@@ -915,41 +1320,98 @@ def execute_higgsfield_scene_generate(
             "execute": False,
             "live_post_authorized": True,
         }
-    poster = submit or submit_higgsfield_json
-    url = str(SEEDANCE_CONTRACTS[SIMPLE_PRIMARY_MODEL]["url"])
-    ledger_path = _repo_root() / HIGGSFIELD_LEDGER_RELATIVE
-    ledger = _load_ledger(ledger_path)
-    ops = ledger["operations"]
-    posted = 0
-    for scene in plan.scenes:
-        row = ops.get(scene.scene_id) if isinstance(ops.get(scene.scene_id), dict) else None
-        if isinstance(row, dict) and row.get("state") in {"SUCCEEDED", "SUBMITTED"}:
-            continue
-        body = scene.request_body
-        result = poster(
-            url=url,
-            body=body,
-            confirm_paid=confirm_paid,
-            settings=settings,
-        )
-        posted += 1
-        ops[scene.scene_id] = {
-            "state": "SUBMITTED",
-            "request_id": result.get("request_id") if isinstance(result, dict) else "",
-            "model": scene.model,
-        }
-        _save_ledger(ledger_path, ledger)
+    recovered = recover_higgsfield_jobs(
+        plan,
+        settings=settings,
+        allow_submit=True,
+        confirm_paid=confirm_paid,
+        submit=submit,
+        status_fn=status_fn,
+        result_fn=result_fn,
+        download_fn=download_fn,
+        sleeper=sleeper,
+        now_fn=now_fn,
+        deadline_seconds=deadline_seconds,
+        root=root,
+    )
+    ops = recovered["ledger"].get("operations") if isinstance(recovered["ledger"], dict) else {}
+    states = {
+        scene.scene_id: (ops.get(scene.scene_id) or {}).get("state")
+        for scene in plan.scenes
+    }
     return {
         **planned,
         "stage": "higgsfield-scene-generate",
         "execute": True,
         "live_post_authorized": True,
-        "provider_http_calls": posted,
-        "media_calls": posted,
+        "provider_http_calls": recovered["provider_http_calls"],
+        "status_http_calls": recovered["status_http_calls"],
+        "result_http_calls": recovered["result_http_calls"],
+        "generation_posts": recovered["generation_posts"],
+        "media_calls": recovered["generation_posts"],
+        "states": states,
+        "final": recovered["final"],
         "artifacts": {
             **(planned.get("artifacts") if isinstance(planned.get("artifacts"), dict) else {}),
-            "ledger": str(ledger_path),
+            "ledger": recovered["ledger_path"],
+            "clips": str((root or _repo_root()) / HIGGSFIELD_CLIPS_RELATIVE),
+            "final": recovered["final"],
         },
+    }
+
+
+def execute_higgsfield_scene_resume(
+    *,
+    refs: list[dict[str, object]],
+    settings: Settings | None = None,
+    status_fn: Callable[..., dict[str, Any]] | None = None,
+    result_fn: Callable[..., dict[str, Any]] | None = None,
+    download_fn: Callable[..., Path] | None = None,
+    sleeper: Callable[[float], None] | None = None,
+    now_fn: Callable[[], float] | None = None,
+    deadline_seconds: float = RESUME_DEADLINE_SECONDS,
+    root: Path | None = None,
+) -> dict[str, object]:
+    plan = build_higgsfield_scenes(load_existing_story(), refs)
+    recovered = recover_higgsfield_jobs(
+        plan,
+        settings=settings,
+        allow_submit=False,
+        status_fn=status_fn,
+        result_fn=result_fn,
+        download_fn=download_fn,
+        sleeper=sleeper,
+        now_fn=now_fn,
+        deadline_seconds=deadline_seconds,
+        root=root,
+    )
+    ops = recovered["ledger"].get("operations") if isinstance(recovered["ledger"], dict) else {}
+    states = {
+        scene.scene_id: (ops.get(scene.scene_id) or {}).get("state")
+        for scene in plan.scenes
+    }
+    return {
+        "stage": "higgsfield-scene-resume",
+        "plan": plan.model_dump(),
+        "scene_count": len(plan.scenes),
+        "expected_usd": plan.expected_usd,
+        "reserved_usd": plan.reserved_usd,
+        "hard_cap_usd": plan.hard_cap_usd,
+        "cap_ok": plan.cap_ok,
+        "generation_posts": 0,
+        "provider_http_calls": recovered["provider_http_calls"],
+        "status_http_calls": recovered["status_http_calls"],
+        "result_http_calls": recovered["result_http_calls"],
+        "higgsfield_credentials_present": higgsfield_credentials_present(settings),
+        "states": states,
+        "succeeded": recovered["succeeded"],
+        "final": recovered["final"],
+        "artifacts": {
+            "ledger": recovered["ledger_path"],
+            "clips": str((root or _repo_root()) / HIGGSFIELD_CLIPS_RELATIVE),
+            "final": recovered["final"],
+        },
+        "execute": True,
     }
 
 

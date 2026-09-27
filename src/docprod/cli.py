@@ -3072,7 +3072,7 @@ def friend_group_episode(
         "production-plan, animatic-plan, animatic-generate, animatic-rerender, "
         "simple-script-plan, simple-script-generate, simple-video-plan, "
         "simple-video-generate, higgsfield-scene-plan, higgsfield-scene-preflight, "
-        "or higgsfield-scene-generate",
+        "higgsfield-scene-resume, or higgsfield-scene-generate",
     ),
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
@@ -3118,6 +3118,7 @@ def friend_group_episode(
     higgsfield_stage = payload.get("stage") in {
         "higgsfield-scene-plan",
         "higgsfield-scene-preflight",
+        "higgsfield-scene-resume",
         "higgsfield-scene-generate",
     }
     if higgsfield_stage:
@@ -3223,6 +3224,7 @@ def friend_group_episode(
     if payload.get("stage") in {
         "higgsfield-scene-plan",
         "higgsfield-scene-preflight",
+        "higgsfield-scene-resume",
         "higgsfield-scene-generate",
     }:
         _totals, creds = format_higgsfield_cli_cost_lines(payload)
@@ -3256,6 +3258,16 @@ def friend_group_episode(
                 "live_post_authorized="
                 f"{str(bool(payload.get('live_post_authorized'))).lower()}"
             )
+        if payload.get("stage") in {"higgsfield-scene-resume", "higgsfield-scene-generate"}:
+            console.print(f"generation_posts={payload.get('generation_posts', 0)}")
+            console.print(f"status_http_calls={payload.get('status_http_calls', 0)}")
+            console.print(f"result_http_calls={payload.get('result_http_calls', 0)}")
+            states = payload.get("states")
+            if isinstance(states, dict):
+                for scene_id, state in states.items():
+                    console.print(f"{scene_id}={state}")
+            if payload.get("final"):
+                console.print(f"final={payload.get('final')}")
 
 
 @app.command("birko-episode2")
