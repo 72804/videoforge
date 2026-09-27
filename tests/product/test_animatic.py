@@ -427,3 +427,240 @@ def test_voice_backend_falls_back_without_eleven() -> None:
     assert select_animatic_voice_backend(settings, QualityProfile.PREMIUM) == (
         "gpt-4o-mini-tts"
     )
+
+
+def _jpeg(path: Path) -> None:
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (1080, 1920), (40, 80, 120)).save(path, "JPEG")
+
+
+def _wav(path: Path, seconds: float) -> None:
+    from docprod.render.ffmpeg import run_ffmpeg
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    run_ffmpeg(
+        [
+            "-f",
+            "lavfi",
+            "-i",
+            f"sine=f=440:d={seconds}",
+            "-ar",
+            "24000",
+            "-ac",
+            "1",
+            str(path),
+        ],
+        timeout=30,
+    )
+
+
+def _mini_plan(tmp_path: Path) -> AnimaticPlan:
+    from docprod.product.episode import AnimaticKeyframeSpec, AnimaticShotEdit, AnimaticVoiceLine
+
+    shots = []
+    lines = []
+    keys = []
+    for index in range(3):
+        kid = f"kf_{index}"
+        sid = f"S{index + 1}_01"
+        keys.append(
+            AnimaticKeyframeSpec(
+                keyframe_id=kid,
+                role="coverage",
+                prompt="still",
+                model="gpt-image-1.5",
+                generate=True,
+            )
+        )
+        shots.append(
+            AnimaticShotEdit(
+                shot_id=sid,
+                keyframe_id=kid,
+                motion="slow_push_in",
+                planned_duration_seconds=2.0,
+                edit_duration_seconds=2.0,
+            )
+        )
+        lid = f"{sid}_line_1"
+        lines.append(
+            AnimaticVoiceLine(
+                line_id=lid,
+                shot_id=sid,
+                speaker="birko",
+                text=f"line {index}",
+            )
+        )
+        _jpeg(tmp_path / "stills" / f"{kid}.jpg")
+        _wav(tmp_path / "voices" / f"{lid}.wav", 0.4 if index == 0 else 0.8)
+    return AnimaticPlan(
+        series_slug="friends",
+        episode_number=2,
+        shot_count=3,
+        keyframes=keys,
+        shots=shots,
+        voice_lines=lines,
+        unique_image_count=3,
+        total_edit_seconds=6.0,
+    )
+
+
+def test_mux_never_uses_shortest() -> None:
+    from docprod.product.animatic_render import mux_animatic_args
+
+    args = mux_animatic_args(
+        video=Path("picture.mp4"),
+        audio=Path("short.wav"),
+        duration=60.1,
+        dest=Path("out.mp4"),
+    )
+    assert "-shortest" not in args
+    assert "-t" in args
+    assert "60.100" in args
+
+
+def test_short_audio_cannot_truncate_video(tmp_path: Path) -> None:
+    from docprod.product.animatic_render import DialogueCue, mux_animatic, write_timed_subtitles
+    from docprod.render.ffmpeg import probe_media, run_ffmpeg
+
+    video = tmp_path / "picture.mp4"
+    audio = tmp_path / "short.wav"
+    dest = tmp_path / "out.mp4"
+    run_ffmpeg(
+        [
+            "-f",
+            "lavfi",
+            "-i",
+            "color=c=red:s=1080x1920:d=6:r=24",
+            "-pix_fmt",
+            "yuv420p",
+            "-an",
+            "-c:v",
+            "libx264",
+            str(video),
+        ],
+        timeout=40,
+    )
+    _wav(audio, 0.4)
+    ass = write_timed_subtitles(
+        [
+            DialogueCue(
+                speaker="a",
+                source=audio,
+                start=0.0,
+                duration=0.4,
+                end=0.4,
+                text="hi",
+                shot_id="S1",
+                line_id="l1",
+            )
+        ],
+        tmp_path / "animatic.ass",
+    )
+    mux_animatic(video=video, audio=audio, subtitles=ass, dest=dest, duration=6.0)
+    probed = probe_media(dest)
+    assert probed.duration >= 5.5
+    assert probed.width == 1080
+    assert probed.height == 1920
+
+
+def test_concat_writes_duration_entries(tmp_path: Path) -> None:
+    from docprod.product.animatic_render import concat_segments
+    from docprod.render.ffmpeg import probe_media, run_ffmpeg
+
+    clips = []
+    for index in range(3):
+        path = tmp_path / f"seg_{index}.mp4"
+        run_ffmpeg(
+            [
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=blue:s=1080x1920:d=1:r=24",
+                "-pix_fmt",
+                "yuv420p",
+                "-an",
+                "-c:v",
+                "libx264",
+                str(path),
+            ],
+            timeout=40,
+        )
+        clips.append(path)
+    dest = tmp_path / "picture.mp4"
+    concat_segments(clips, dest)
+    manifest = dest.with_suffix(".txt").read_text(encoding="utf-8")
+    assert manifest.count("duration ") == 3
+    assert probe_media(dest).duration >= 2.7
+
+
+def test_master_dialogue_spans_timeline(tmp_path: Path) -> None:
+    from docprod.product.animatic_render import (
+        DialogueCue,
+        mix_master_dialogue,
+    )
+    from docprod.render.ffmpeg import probe_media
+
+    early = tmp_path / "a.wav"
+    late = tmp_path / "b.wav"
+    _wav(early, 0.4)
+    _wav(late, 0.4)
+    dest = tmp_path / "master.wav"
+    mix_master_dialogue(
+        [
+            DialogueCue("a", early, 0.0, 0.4, 0.4, "a", "S1", "l1"),
+            DialogueCue("b", late, 5.0, 0.4, 5.4, "b", "S3", "l2"),
+        ],
+        total=6.0,
+        dest=dest,
+    )
+    assert probe_media(dest).duration >= 5.8
+
+
+def test_timeline_follows_tts_not_first_clip(tmp_path: Path) -> None:
+    from docprod.product.animatic_render import build_visual_and_dialogue_timelines
+
+    plan = _mini_plan(tmp_path)
+    visuals, dialogue, total = build_visual_and_dialogue_timelines(
+        plan, still_dir=tmp_path / "stills", voice_dir=tmp_path / "voices"
+    )
+    assert len(visuals) == 3
+    assert len(dialogue) == 3
+    assert total >= 6.0
+    assert dialogue[0].duration < 1.0
+    assert visuals[-1].end == total or abs(visuals[-1].end - total) < 0.01
+    assert dialogue[-1].end <= total + 0.05
+
+
+def test_render_existing_animatic_zero_http(tmp_path: Path) -> None:
+    from docprod.product.animatic_render import render_existing_animatic
+    from docprod.render.ffmpeg import probe_media
+
+    plan = _mini_plan(tmp_path)
+    dest = tmp_path / "friends_episode_2_animatic.mp4"
+    result = render_existing_animatic(plan, work_dir=tmp_path, dest=dest)
+    assert result["provider_http_calls"] == 0
+    assert result["shot_count"] == 3
+    assert result["stills_reused"] == 3
+    assert result["voices_reused"] == 3
+    probed = probe_media(dest)
+    assert probed.duration >= result["visual_end"] - 0.5
+    assert probed.video_codec == "h264"
+    assert probed.audio_codec == "aac"
+    assert probed.width == 1080
+    assert probed.height == 1920
+    ass = (tmp_path / "animatic.ass").read_text(encoding="utf-8")
+    assert "0:00:00." in ass
+    assert ass.count("Dialogue:") == 3
+
+
+def test_local_renderer_does_not_import_canary_shortest() -> None:
+    import inspect
+
+    from docprod.product import animatic as animatic_mod
+    from docprod.product.animatic_render import mux_animatic_args
+
+    source = inspect.getsource(animatic_mod.LocalStillAnimaticRenderer)
+    assert "render_canary_preview" not in source
+    assert "-shortest" not in inspect.getsource(mux_animatic_args)

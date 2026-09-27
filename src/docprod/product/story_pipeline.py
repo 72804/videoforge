@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -783,6 +784,69 @@ def execute_animatic_generation(
     return result
 
 
+def execute_animatic_rerender(
+    *,
+    plan: StoryGenerationPlan,
+    refs: list[dict[str, object]],
+    settings: Settings | None = None,
+    work_dir: Path | None = None,
+) -> dict[str, object]:
+    from docprod.product.animatic_render import render_existing_animatic
+    from docprod.product.episode import AnimaticPlan
+
+    root = _repo_root()
+    json_path = root / ANIMATIC_PLAN_JSON_RELATIVE
+    if json_path.is_file():
+        animatic = AnimaticPlan.model_validate_json(json_path.read_text(encoding="utf-8"))
+    else:
+        directed, brief, location, _run = reconstruct_directed_episode(plan, refs)
+        voices = proposed_voice_assignments(language=brief.language)
+        animatic = build_animatic_plan(
+            brief=brief,
+            spec=directed.spec,
+            shot_plan=directed.shot_plan,
+            location=location,
+            locked_refs=refs,
+            voices=voices,
+            settings=settings,
+            profile=QualityProfile.PREMIUM,
+        )
+    dest_dir = work_dir or animatic_render_dir(
+        animatic.series_slug, animatic.episode_number, root=root
+    )
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    output = dest_dir / "birko_episode_2_animatic.mp4"
+    if animatic.series_slug != "birko":
+        output = dest_dir / f"{animatic.series_slug}_episode_{animatic.episode_number}_animatic.mp4"
+    truncated = dest_dir / f"{output.stem}_truncated.mp4"
+    if output.is_file() and not truncated.is_file():
+        from docprod.render.ffmpeg import probe_media
+
+        try:
+            if probe_media(output).duration < 10:
+                output.replace(truncated)
+        except Exception:
+            shutil.copy2(output, truncated)
+    fixed = dest_dir / f"{output.stem}_fixed.mp4"
+    rendered = render_existing_animatic(animatic, work_dir=dest_dir, dest=fixed)
+    shutil.copy2(Path(str(rendered["output"])), output)
+    rendered["output"] = str(output)
+    rendered["fixed_output"] = str(fixed)
+    rendered["truncated_backup"] = str(truncated) if truncated.is_file() else ""
+    rendered["stage"] = "animatic-rerender"
+    rendered["execute"] = True
+    rendered["provider_http_calls"] = 0
+    rendered["media_calls"] = 0
+    rendered["video_provider_calls"] = 0
+    rendered["plan"] = plan.model_dump()
+    rendered["stars"] = 0
+    rendered["planned_text_model_calls"] = len(plan.calls)
+    rendered["submitted_text_model_calls"] = 0
+    rendered["completed_text_model_calls"] = 0
+    rendered["text_model_calls"] = 0
+    return rendered
+
+
 def story_status_report(
     plan: StoryGenerationPlan,
     run: CreativeEnsembleRun | None,
@@ -1283,9 +1347,16 @@ def run_friend_group_episode(
             settings=settings,
             execute_calls=True if execute_calls is None else execute_calls,
         )
+    if token in {"animatic-rerender", "animatic-repair"}:
+        return execute_animatic_rerender(
+            plan=plan,
+            refs=refs,
+            settings=settings,
+        )
     raise ValueError(
         f"unknown stage {stage!r}; use story-plan, story-check, story-status, "
-        "story-generate, production-plan, animatic-plan, or animatic-generate"
+        "story-generate, production-plan, animatic-plan, animatic-generate, "
+        "or animatic-rerender"
     )
 
 

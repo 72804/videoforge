@@ -3069,7 +3069,7 @@ def friend_group_episode(
         "story-plan",
         "--stage",
         help="story-plan, story-check, story-status, story-generate, "
-        "production-plan, animatic-plan, or animatic-generate",
+        "production-plan, animatic-plan, animatic-generate, or animatic-rerender",
     ),
     series_slug: str = typer.Option("birko", "--series-slug"),
     episode: int = typer.Option(2, "--episode"),
@@ -3184,6 +3184,12 @@ def friend_group_episode(
             console.print(f"animatic_plan={artifacts.get('animatic_plan')}")
         if payload.get("ready_for_animatic_generation"):
             console.print("READY FOR ANIMATIC GENERATION")
+    if payload.get("duration") is not None:
+        console.print(
+            f"output={payload.get('output')} duration={payload.get('duration')} "
+            f"size={payload.get('width')}x{payload.get('height')} "
+            f"vcodec={payload.get('video_codec')} acodec={payload.get('audio_codec')}"
+        )
 
 
 @app.command("birko-episode2")

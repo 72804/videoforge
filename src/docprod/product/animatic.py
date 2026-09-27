@@ -30,7 +30,7 @@ from docprod.quality.catalog import get_model
 from docprod.quality.enums import QualityProfile, SceneProductionClass
 from docprod.quality.policy_select import OPENAI_STOCK_VOICES, image_model_for, tts_model_for
 from docprod.quality.router import estimate_model_cost
-from docprod.render.subtitles import burn_in_required, ffmpeg_subtitle_filter
+from docprod.render.subtitles import ass_timestamp, burn_in_required, ffmpeg_subtitle_filter
 
 ANIMATIC_PROVIDER_HARD_CAP_USD = 2.00
 TURKISH_CHARS_PER_SEC = 13.0
@@ -792,7 +792,7 @@ def write_animatic_subtitles(plan: AnimaticPlan, dest_dir: Path) -> Path:
         end = cursor + shot.edit_duration_seconds
         for line in by_shot.get(shot.shot_id, []):
             events.append(
-                f"Dialogue: 0,0:{start:05.2f},0:{end:05.2f},Default,,0,0,0,,"
+                f"Dialogue: 0,{ass_timestamp(start)},{ass_timestamp(end)},Default,,0,0,0,,"
                 f"{line.text.replace(chr(10), ' ')}"
             )
         cursor = end
@@ -950,42 +950,7 @@ class DefaultAnimaticVoiceClient:
 
 class LocalStillAnimaticRenderer:
     def render(self, plan: AnimaticPlan, dest: Path, *, work_dir: Path) -> Path:
-        from docprod.product.canary_render import render_canary_preview
+        from docprod.product.animatic_render import render_existing_animatic
 
-        still_dir = work_dir / "stills"
-        segments: list[tuple[str, Path, float]] = []
-        for shot in plan.shots:
-            still = still_dir / f"{shot.keyframe_id}.jpg"
-            if not still.is_file():
-                raise ProductError(f"missing animatic still {still}")
-            segments.append(("still", still, shot.edit_duration_seconds))
-        narration = " ".join(line.text for line in plan.voice_lines)
-        voices = sorted((work_dir / "voices").glob("*.wav"))
-        tts = voices[0] if voices else None
-        render_canary_preview(
-            segments=segments,
-            tts_wav=tts,
-            narration=narration,
-            dest=dest,
-            work=work_dir / "ffmpeg",
-        )
-        ass_path = work_dir / "animatic.ass"
-        if ass_path.is_file() and dest.is_file():
-            burned = dest.with_name(dest.stem + "_sub.mp4")
-            from docprod.render.ffmpeg import run_ffmpeg
-
-            run_ffmpeg(
-                [
-                    "-y",
-                    "-i",
-                    str(dest),
-                    "-vf",
-                    ffmpeg_subtitle_filter(ass_path),
-                    "-c:a",
-                    "copy",
-                    str(burned),
-                ],
-                timeout=180,
-            )
-            dest.write_bytes(burned.read_bytes())
+        render_existing_animatic(plan, work_dir=work_dir, dest=dest)
         return dest
